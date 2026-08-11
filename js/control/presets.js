@@ -1,0 +1,217 @@
+/**
+ * Starter effect sets.
+ *
+ * These exist because the gap between "I have traced my house" and "it looks
+ * like something" is otherwise a lot of fiddling. Each preset builds a complete,
+ * coherent look out of the built-in effects, targeted by tag — so it lands on
+ * whatever you have actually tagged, and adding another window later picks up
+ * the same treatment automatically.
+ *
+ * Nothing here is special-cased in the engine. Every layer these produce is one
+ * you could have built by hand in the inspector, and all of it is editable
+ * afterwards.
+ */
+
+import { createLayer, createScene } from '../core/state.js';
+import { defaultParams } from '../effects/registry.js';
+import { captureScene } from '../core/scenes.js';
+import { GRADE_PRESETS } from '../render/postfx.js';
+
+/** Build a layer with sensible defaults filled in for anything unspecified. */
+function layer(effect, { name, targets = [], tags = [], params = {}, bindings = {}, ...rest }) {
+  return createLayer(effect, {
+    name,
+    targets,
+    targetTags: tags,
+    params: { ...defaultParams(effect), ...params },
+    bindings,
+    ...rest,
+  });
+}
+
+const HALLOWEEN = () => [
+  layer('wash', {
+    name: 'Night wash',
+    params: { color: '#12061f', color2: '#000814', blend: 0.4, level: 0.35, vignette: 0.4 },
+  }),
+  layer('fog', {
+    name: 'Ground fog',
+    softness: 6,
+    params: { color: '#7a8ba0', density: 0.22, scale: 2.4, speed: 0.04, layers: 3, height: 0.45 },
+  }),
+  layer('embers', {
+    name: 'Drifting embers',
+    opacity: 0.7,
+    params: { color: '#ffb257', color2: '#ff3a1f', count: 70, rise: 30, drift: 18, turbulence: 24, size: 3, twinkle: 0.6, opacity: 0.7 },
+  }),
+  layer('candle', {
+    name: 'Candlelit windows',
+    tags: ['window'],
+    // A little stagger stops every window flickering on the same beat, which is
+    // the single biggest giveaway that it is a projection.
+    stagger: 0.7,
+    params: { color: '#ff9d3c', shadow: '#25060a', level: 0.8, jitter: 0.45, rate: 3.2, gust: 0.35, hotspot: 0.65 },
+  }),
+  layer('eyes', {
+    name: 'Something watching',
+    tags: ['window'],
+    opacity: 0.85,
+    stagger: 1.3,
+    params: { color: '#ffe74c', pupil: '#12000a', pairs: 1, size: 0.09, blink: 0.4, wander: 0.35, glow: 1.4 },
+  }),
+  layer('blood-drip', {
+    name: 'Blood down the door',
+    tags: ['door'],
+    params: { color: '#7a0008', highlight: '#d61c22', count: 7, speed: 0.13, width: 18, variation: 0.65, pool: 0.06 },
+  }),
+  layer('chase', {
+    name: 'Doorway chase',
+    tags: ['door'],
+    params: { color: '#ff7a18', trail: '#8b00ff', count: 8, size: 12, speed: 0.18, tail: 0.05, glow: 1.2 },
+  }),
+  layer('pulse', {
+    name: 'Window pulse',
+    tags: ['window'],
+    blend: 'lighter',
+    opacity: 0.5,
+    stagger: 0.35,
+    params: { color: '#8b00ff', mode: 'outline', rate: 0.5, wave: 'heartbeat', min: 0, max: 0.9, width: 8 },
+  }),
+  layer('web', {
+    name: 'Cobwebs',
+    tags: ['window'],
+    opacity: 0.35,
+    params: { color: '#dfe8f5', corner: 'top-left', rings: 6, spokes: 10, width: 1.6, scale: 0.8, spider: true },
+  }),
+  layer('bats', {
+    name: 'Bats',
+    params: { color: '#12040f', silhouette: false, count: 12, size: 0.07, speed: 0.16, flap: 7, spread: 0.6, wander: 0.4, direction: 'right', interval: 70, crossing: 9 },
+  }),
+  layer('lightning', {
+    name: 'Storm',
+    params: { color: '#dbe9ff', rate: 5, flash: 0.5, bolt: true, thickness: 5, branches: 4, flickers: 3, duration: 0.5 },
+  }),
+];
+
+const CHRISTMAS = () => [
+  layer('plasma', {
+    name: 'Cold night',
+    params: { colorA: '#041a3a', colorB: '#0b2f52', colorC: '#1a0b3a', scale: 1.3, speed: 0.05, level: 0.42, resolution: 26, contrast: 1.2 },
+  }),
+  layer('stars', {
+    name: 'Stars',
+    opacity: 0.7,
+    params: { color: '#ffffff', count: 120, size: 3.5, twinkle: 0.9, spikes: true, shooting: 3 },
+  }),
+  // Icicles go on before the lights: they are the solid thing hanging off the
+  // gutter, and the bulbs need to read as sitting in front of them.
+  layer('icicles', {
+    name: 'Icicles',
+    tags: ['roof', 'trim'],
+    opacity: 0.8,
+    params: { color: '#bfe9ff', tip: '#ffffff', count: 26, length: 0.1, variation: 0.65, width: 0.8, grow: 0, glint: 0.45 },
+  }),
+  layer('fairy-lights', {
+    name: 'Roofline lights',
+    tags: ['roof', 'trim'],
+    // 'cycle' keeps every bulb lit and rotates the colours. A chase looks
+    // livelier close up but leaves most of the roofline dark from the street.
+    params: { pattern: 'cycle', palette: 'multi', spacing: 44, size: 11, glow: 2.6, speed: 0.35, level: 1, wire: 0.12 },
+  }),
+  layer('fairy-lights', {
+    name: 'Window lights',
+    tags: ['window'],
+    stagger: 0.4,
+    params: { pattern: 'twinkle', palette: 'warm', spacing: 42, size: 8, glow: 2.2, speed: 0.5, level: 0.9, wire: 0.1 },
+  }),
+  layer('candy-stripe', {
+    name: 'Candy cane door',
+    tags: ['door'],
+    params: { color: '#e01b24', color2: '#ffffff', stripes: 16, angle: 35, speed: 0.18, mode: 'outline', width: 20 },
+  }),
+  layer('fill', {
+    name: 'Warm rooms',
+    tags: ['window'],
+    blend: 'lighter',
+    opacity: 0.45,
+    stagger: 0.9,
+    params: { color: '#ffcf8a', color2: '#5a2a00', gradient: 'radial', level: 0.8, softness: 0.4 },
+    // A slow, gentle breath so the rooms feel occupied rather than lit by a lamp.
+    bindings: { level: { type: 'lfo', wave: 'sine', rate: 0.08, depth: 0.15, spread: 0.2 } },
+  }),
+  layer('snow', {
+    name: 'Snowfall',
+    params: { color: '#ffffff', count: 420, speed: 80, wind: 24, gust: 0.6, size: 5, depth: 0.75, sparkle: 0.25, settle: 0 },
+  }),
+  layer('santa', {
+    name: 'Santa fly-past',
+    params: { color: '#ffe9b0', reindeer: 4, size: 0.16, interval: 90, crossing: 11, direction: 'right', height: 0.18, bob: 0.03, trail: 0.7 },
+  }),
+];
+
+export const PRESETS = [
+  {
+    id: 'halloween',
+    name: 'Halloween starter',
+    description:
+      'Candlelit windows with something looking out, blood down the door, ground fog and a storm overhead.',
+    tagsUsed: ['window', 'door'],
+    grade: 'haunted',
+    build: HALLOWEEN,
+  },
+  {
+    id: 'christmas',
+    name: 'Christmas starter',
+    description:
+      'Chasing lights along the roofline, warm windows, icicles, a candy-cane door, snow and a Santa fly-past.',
+    tagsUsed: ['roof', 'window', 'door'],
+    grade: 'frost',
+    build: CHRISTMAS,
+  },
+];
+
+/**
+ * Append a preset's layers to the project and save the result as a scene.
+ *
+ * Returns a summary so the caller can tell the user which tags were missing —
+ * a preset aimed at `#roof` on a house with no roofline traced is not broken,
+ * it just has nothing to draw on yet.
+ */
+export function applyPreset(project, presetId) {
+  const preset = PRESETS.find((p) => p.id === presetId);
+  if (!preset) return null;
+
+  const maxOrder = project.layers.reduce((max, l) => Math.max(max, l.order || 0), -1);
+  const layers = preset.build();
+  layers.forEach((l, i) => {
+    l.order = maxOrder + 1 + i;
+  });
+  project.layers.push(...layers);
+
+  // Each preset carries a grade, because half of what makes these looks work is
+  // the bloom and colour treatment rather than the effects themselves.
+  const look = GRADE_PRESETS.find((g) => g.id === preset.grade);
+  if (look) {
+    project.settings = project.settings || {};
+    project.settings.grade = { ...project.settings.grade, ...look.values };
+  }
+
+  const present = new Set(project.shapes.flatMap((s) => s.tags || []));
+  const missing = preset.tagsUsed.filter((t) => !present.has(t));
+
+  const scene = createScene({
+    name: preset.name.replace(' starter', ''),
+    hotkey: nextFreeHotkey(project),
+    fade: 1.2,
+    state: captureScene(project),
+  });
+  project.scenes.push(scene);
+
+  return { preset, added: layers.length, missing, scene, look: look?.name ?? null };
+}
+
+function nextFreeHotkey(project) {
+  const used = new Set(project.scenes.map((s) => String(s.hotkey)));
+  for (let i = 1; i <= 9; i++) if (!used.has(String(i))) return String(i);
+  return null;
+}

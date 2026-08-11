@@ -1,0 +1,346 @@
+/**
+ * Small DOM helpers and the parameter-control factory.
+ *
+ * The inspector is generated entirely from each effect's `params` schema, so a
+ * custom effect written in the Code panel gets the same controls, the same
+ * modulation bindings and the same undo behaviour as a built-in. That's the
+ * whole reason the schema exists rather than hand-written markup per effect.
+ */
+
+import { describeBinding, BINDING_TYPES, WAVES } from '../core/modulators.js';
+
+export function el(tag, attrs = {}, children = []) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key === 'class') node.className = value;
+    else if (key === 'text') node.textContent = value;
+    else if (key === 'html') node.innerHTML = value;
+    else if (key.startsWith('on') && typeof value === 'function') {
+      node.addEventListener(key.slice(2).toLowerCase(), value);
+    } else if (key === 'dataset') Object.assign(node.dataset, value);
+    else if (value === true) node.setAttribute(key, '');
+    else node.setAttribute(key, value);
+  }
+  for (const child of [].concat(children)) {
+    if (child === null || child === undefined || child === false) continue;
+    node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+  }
+  return node;
+}
+
+export function clear(node) {
+  while (node.firstChild) node.removeChild(node.firstChild);
+  return node;
+}
+
+export function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
+  );
+}
+
+let toastTimer = null;
+export function toast(message, kind = '') {
+  const node = document.getElementById('toast');
+  if (!node) return;
+  node.textContent = message;
+  node.className = `toast ${kind}`;
+  node.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    node.hidden = true;
+  }, kind === 'bad' ? 7000 : 3200);
+}
+
+/** Format a number compactly for the value readout beside a slider. */
+export function fmt(value) {
+  if (typeof value !== 'number' || !isFinite(value)) return String(value ?? '');
+  if (Number.isInteger(value)) return String(value);
+  const abs = Math.abs(value);
+  if (abs >= 100) return value.toFixed(0);
+  if (abs >= 10) return value.toFixed(1);
+  if (abs >= 1) return value.toFixed(2);
+  return value.toFixed(3);
+}
+
+/* ------------------------------------------------------------------ *
+ * Parameter controls
+ * ------------------------------------------------------------------ */
+
+/**
+ * Build one inspector row for a parameter definition.
+ *
+ * @param {object} def      { key, type, label, default, min, max, step, options }
+ * @param {*} value         current static value
+ * @param {object|null} binding current modulation binding
+ * @param {object} handlers { onChange(value), onBindingChange(binding|null), mediaList }
+ */
+export function paramRow(def, value, binding, handlers) {
+  const row = el('div', { class: 'param-row' });
+  row.appendChild(el('label', { text: def.label || def.key, title: def.key }));
+
+  const control = el('div', { class: 'param-control' });
+  const commit = (v) => handlers.onChange(v);
+  const bound = binding && binding.type && binding.type !== 'const';
+
+  switch (def.type) {
+    case 'range':
+    case 'number': {
+      const input = el('input', {
+        type: 'range',
+        min: def.min ?? 0,
+        max: def.max ?? 1,
+        step: def.step ?? 0.01,
+        value: Number(value ?? def.default ?? 0),
+      });
+      const readout = el('span', { class: 'param-value', text: fmt(Number(value ?? def.default ?? 0)) });
+      input.addEventListener('input', () => {
+        readout.textContent = fmt(Number(input.value));
+        commit(Number(input.value));
+      });
+      // Double-click the readout to type an exact value; sliders are hopeless
+      // for "exactly 0.5" and this is faster than adding a second field.
+      readout.addEventListener('dblclick', () => {
+        const entered = prompt(`${def.label || def.key}:`, String(value));
+        if (entered === null) return;
+        const num = Number(entered);
+        if (!isFinite(num)) return;
+        input.value = String(num);
+        readout.textContent = fmt(num);
+        commit(num);
+      });
+      control.append(input, readout);
+      break;
+    }
+
+    case 'color': {
+      const input = el('input', { type: 'color', value: String(value ?? def.default ?? '#ffffff') });
+      const hex = el('input', { type: 'text', value: String(value ?? def.default ?? '#ffffff') });
+      hex.style.fontFamily = 'var(--mono)';
+      hex.style.fontSize = '11px';
+      input.addEventListener('input', () => {
+        hex.value = input.value;
+        commit(input.value);
+      });
+      hex.addEventListener('change', () => {
+        if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(hex.value)) {
+          input.value = hex.value;
+          commit(hex.value);
+        } else {
+          hex.value = input.value;
+        }
+      });
+      control.append(input, hex);
+      break;
+    }
+
+    case 'bool': {
+      const input = el('input', { type: 'checkbox' });
+      input.checked = !!value;
+      input.addEventListener('change', () => commit(input.checked));
+      control.appendChild(input);
+      break;
+    }
+
+    case 'select': {
+      const select = el('select');
+      for (const option of def.options || []) {
+        select.appendChild(el('option', { value: option, text: option, selected: option === value }));
+      }
+      select.addEventListener('change', () => commit(select.value));
+      control.appendChild(select);
+      break;
+    }
+
+    case 'media': {
+      const select = el('select');
+      select.appendChild(el('option', { value: '', text: '— none —' }));
+      for (const item of handlers.mediaList || []) {
+        select.appendChild(
+          el('option', { value: item.id, text: `${item.name}`, selected: item.id === value })
+        );
+      }
+      select.addEventListener('change', () => commit(select.value));
+      control.appendChild(select);
+      break;
+    }
+
+    case 'text':
+    default: {
+      const input = el('input', { type: 'text', value: String(value ?? def.default ?? '') });
+      input.addEventListener('input', () => commit(input.value));
+      control.appendChild(input);
+      break;
+    }
+  }
+
+  row.appendChild(control);
+
+  // Modulation needs somewhere to store the binding, and only numeric values
+  // interpolate usefully — binding a colour to an LFO would just produce noise.
+  const modulatable =
+    typeof handlers.onBindingChange === 'function' &&
+    (def.type === 'range' || def.type === 'number' || def.type === 'bool');
+
+  if (modulatable) {
+    const bindBtn = el('button', {
+      type: 'button',
+      class: `bind-btn${bound ? ' bound' : ''}`,
+      title: bound ? `Modulated: ${describeBinding(binding)}` : 'Add modulation',
+      text: bound ? '~' : '+',
+    });
+    // Keep the button's own appearance in sync without re-rendering the whole
+    // inspector, which would collapse the editor mid-edit.
+    const onBindingChange = (next) => {
+      bindBtn.classList.toggle('bound', !!next);
+      bindBtn.textContent = next ? '~' : '+';
+      bindBtn.title = next ? `Modulated: ${describeBinding(next)}` : 'Add modulation';
+      handlers.onBindingChange(next);
+    };
+
+    bindBtn.addEventListener('click', () => {
+      const editor = row.nextElementSibling;
+      if (editor?.classList.contains('binding-editor')) {
+        editor.remove();
+        return;
+      }
+      row.after(bindingEditor(def, binding, { ...handlers, onBindingChange }));
+    });
+    row.appendChild(bindBtn);
+  } else {
+    row.appendChild(el('span'));
+  }
+
+  return row;
+}
+
+/** The expandable modulation panel that appears under a bound parameter. */
+function bindingEditor(def, binding, handlers) {
+  const current = binding && binding.type ? { ...binding } : { type: 'const' };
+  const wrap = el('div', { class: 'binding-editor' });
+
+  const update = (patch) => {
+    Object.assign(current, patch);
+    handlers.onBindingChange(current.type === 'const' ? null : { ...current });
+    rebuild();
+  };
+
+  const typeRow = el('div', { class: 'field' }, [el('span', { text: 'Modulate' })]);
+  const typeSelect = el('select');
+  for (const type of BINDING_TYPES) {
+    typeSelect.appendChild(
+      el('option', {
+        value: type,
+        text: { const: 'off', lfo: 'LFO', audio: 'audio', random: 'random', env: 'envelope', expr: 'expression' }[type],
+        selected: type === current.type,
+      })
+    );
+  }
+  typeSelect.addEventListener('change', () => update({ type: typeSelect.value }));
+  typeRow.appendChild(typeSelect);
+
+  const body = el('div');
+
+  function numberField(label, key, { min, max, step, fallback }) {
+    const input = el('input', {
+      type: 'number',
+      min,
+      max,
+      step,
+      value: current[key] ?? fallback,
+    });
+    input.addEventListener('change', () => update({ [key]: Number(input.value) }));
+    return el('div', { class: 'field' }, [el('span', { text: label }), input]);
+  }
+
+  function checkField(label, key, fallback = false) {
+    const input = el('input', { type: 'checkbox' });
+    input.checked = current[key] ?? fallback;
+    input.addEventListener('change', () => update({ [key]: input.checked }));
+    return el('label', { class: 'inline-check' }, [input, label]);
+  }
+
+  function rebuild() {
+    clear(body);
+    const span = (def.max ?? 1) - (def.min ?? 0);
+
+    switch (current.type) {
+      case 'lfo': {
+        const waveSelect = el('select');
+        for (const wave of WAVES) {
+          waveSelect.appendChild(el('option', { value: wave, text: wave, selected: wave === (current.wave || 'sine') }));
+        }
+        waveSelect.addEventListener('change', () => update({ wave: waveSelect.value }));
+        body.append(
+          el('div', { class: 'field' }, [el('span', { text: 'Wave' }), waveSelect]),
+          checkField('Lock to beat', 'sync'),
+          numberField(current.sync ? 'Beats/cycle' : 'Rate (Hz)', 'rate', {
+            min: 0.01, max: 64, step: 0.01, fallback: current.sync ? 1 : 0.5,
+          }),
+          numberField('Depth', 'depth', { min: -span * 2, max: span * 2, step: span / 100, fallback: span / 4 }),
+          numberField('Phase', 'phase', { min: 0, max: 1, step: 0.01, fallback: 0 }),
+          numberField('Spread per shape', 'spread', { min: -1, max: 1, step: 0.01, fallback: 0 }),
+          checkField('Positive only', 'unipolar')
+        );
+        break;
+      }
+      case 'audio': {
+        const bandSelect = el('select');
+        for (const band of ['level', 'low', 'mid', 'high']) {
+          bandSelect.appendChild(el('option', { value: band, text: band, selected: band === (current.band || 'level') }));
+        }
+        bandSelect.addEventListener('change', () => update({ band: bandSelect.value }));
+        body.append(
+          el('div', { class: 'field' }, [el('span', { text: 'Band' }), bandSelect]),
+          numberField('Depth', 'depth', { min: -span * 2, max: span * 2, step: span / 100, fallback: span / 2 }),
+          el('p', { class: 'panel-note', text: 'Enable the microphone in Setup for this to do anything.' })
+        );
+        break;
+      }
+      case 'random':
+        body.append(
+          numberField('Changes / s', 'rate', { min: 0.05, max: 30, step: 0.05, fallback: 2 }),
+          numberField('Depth', 'depth', { min: -span * 2, max: span * 2, step: span / 100, fallback: span / 4 }),
+          numberField('Smoothing', 'smooth', { min: 0, max: 0.99, step: 0.01, fallback: 0 }),
+          checkField('Positive only', 'unipolar')
+        );
+        break;
+      case 'env':
+        body.append(
+          numberField('Beats per hit', 'division', { min: 0.0625, max: 16, step: 0.0625, fallback: 1 }),
+          numberField('Decay (s)', 'decay', { min: 0.01, max: 8, step: 0.01, fallback: 0.4 }),
+          numberField('Attack shape', 'attack', { min: 0, max: 1, step: 0.01, fallback: 0 }),
+          numberField('Depth', 'depth', { min: -span * 2, max: span * 2, step: span / 100, fallback: span })
+        );
+        break;
+      case 'expr': {
+        const area = el('textarea', {
+          class: 'binding-expr',
+          spellcheck: 'false',
+          placeholder: 'base + 0.4 * sin(t * TAU * 0.5 + i)',
+        });
+        area.value = current.code ?? 'base';
+        area.addEventListener('change', () => update({ code: area.value }));
+        body.append(
+          area,
+          el('p', {
+            class: 'panel-note',
+            html:
+              'Available: <code>t</code> <code>beat</code> <code>i</code> <code>n</code> <code>base</code> ' +
+              '<code>level</code> <code>low</code> <code>mid</code> <code>high</code> <code>shape</code>, ' +
+              'plus <code>sin cos noise fbm clamp lerp smoothstep rand saw tri square TAU</code>.',
+          })
+        );
+        if (current.__error) body.append(el('p', { class: 'code-status bad', text: current.__error }));
+        break;
+      }
+      default:
+        body.append(el('p', { class: 'panel-note', text: 'This parameter holds a fixed value.' }));
+    }
+  }
+
+  rebuild();
+  wrap.append(typeRow, body);
+  return wrap;
+}

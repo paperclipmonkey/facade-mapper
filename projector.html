@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Projector — Facade Mapper</title>
+    <meta name="robots" content="noindex" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📽️</text></svg>" />
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/projector.css" />
+  </head>
+  <body class="projector-body">
+    <!-- The warped show output. -->
+    <canvas id="output"></canvas>
+
+    <!-- Everything drawn in raw projector pixels: calibration markers, test
+         patterns, identify flashes. Kept separate so it bypasses the warp. -->
+    <canvas id="overlay"></canvas>
+
+    <div id="status" class="status-panel" hidden>
+      <div class="status-title" id="statusName">Projector</div>
+      <dl class="status-grid">
+        <dt>Output</dt><dd id="statusRes">—</dd>
+        <dt>Alignment</dt><dd id="statusCalib">—</dd>
+        <dt>Render</dt><dd id="statusBuffer">—</dd>
+        <dt>Rate</dt><dd id="statusFps">—</dd>
+        <dt>Show</dt><dd id="statusShow">—</dd>
+      </dl>
+      <p class="status-hint">
+        <kbd>F</kbd> fullscreen · <kbd>I</kbd> hide this · <kbd>T</kbd> test pattern · <kbd>Esc</kbd> leave fullscreen
+      </p>
+    </div>
+
+    <div id="notice" class="notice" hidden></div>
+
+    <div id="picker" class="picker" hidden>
+      <h1>Which projector is this?</h1>
+      <p class="picker-note">
+        Open one tab per projector, then drag each tab to its own display and press
+        <kbd>F</kbd> for fullscreen.
+      </p>
+      <div id="pickerList" class="picker-list"></div>
+      <p class="picker-note" id="pickerEmpty" hidden>
+        No project found in this browser yet. Open the control window first.
+      </p>
+    </div>
+
+    <script type="module" src="js/projector/app.js"></script>
+  </body>
+</html>
