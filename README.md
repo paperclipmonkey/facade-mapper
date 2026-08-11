@@ -235,6 +235,17 @@ python3 -m http.server 8000
 # then open http://localhost:8000
 ```
 
+## Tests
+
+The geometry that matters — the homography solve, the marker detection feeding
+it, and the region and mesh maths — is covered by dependency-free tests,
+including an end-to-end calibration run against a simulated projector and
+camera:
+
+```bash
+node test/geometry.test.mjs
+```
+
 ## Layout
 
 ```
@@ -245,6 +256,7 @@ js/effects/         effect registry and the built-in library
 js/render/          world renderer (2D) and the projective warp (WebGL)
 js/control/         camera, calibration, stage editing, panels, inspector
 js/projector/       the output tab
+test/               geometry and calibration tests (plain Node, no dependencies)
 ```
 
 The two interesting files are `js/render/warp.js`, which explains how the

@@ -1,0 +1,38 @@
+# Geometry and calibration tests, plus a parse check over every module.
+#
+# The app has no build step and no dependencies, so this needs nothing but Node.
+# The tests that matter are the ones covering the homography solve and marker
+# detection — the parts where a subtle error produces a projection that looks
+# plausible and lands in the wrong place.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check every module parses
+        run: |
+          status=0
+          for file in $(find js -name '*.js' | sort); do
+            cp "$file" /tmp/check.mjs
+            if ! node --check /tmp/check.mjs; then
+              echo "::error file=$file::failed to parse"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Geometry and calibration tests
+        run: node test/geometry.test.mjs
