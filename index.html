@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Facade Mapper — projection mapping in the browser</title>
+    <meta
+      name="description"
+      content="Browser-based projection mapping for buildings. Multiple projectors via tabs, camera auto-alignment, programmable effects and path animations."
+    />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎃</text></svg>" />
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/control.css" />
+  </head>
+  <body class="control-body">
+    <header class="app-bar">
+      <div class="app-bar-left">
+        <span class="logo" aria-hidden="true">◲</span>
+        <input
+          id="projectName"
+          class="project-name"
+          type="text"
+          value="My house"
+          aria-label="Show name"
+          spellcheck="false"
+        />
+        <span id="saveState" class="save-state" title="Saved to this browser's local storage">saved</span>
+      </div>
+
+      <div class="app-bar-right">
+        <button type="button" id="btnOpenProjector" class="btn primary">Open projector tab</button>
+        <button type="button" id="btnShows" class="btn">Shows</button>
+        <button type="button" id="btnExport" class="btn">Export</button>
+        <button type="button" id="btnImport" class="btn">Import</button>
+        <button type="button" id="btnHelp" class="btn">Help</button>
+        <input type="file" id="importFile" accept=".json,application/json" hidden />
+      </div>
+    </header>
+
+    <main class="workspace">
+      <!-- ---------------------------------------------------------- -->
+      <aside class="panel panel-left" id="leftPanel">
+        <nav class="panel-tabs" role="tablist" aria-label="Editor sections">
+          <button type="button" class="panel-tab active" data-panel="projectors" role="tab">Projectors</button>
+          <button type="button" class="panel-tab" data-panel="shapes" role="tab">Shapes</button>
+          <button type="button" class="panel-tab" data-panel="layers" role="tab">Effects</button>
+          <button type="button" class="panel-tab" data-panel="scenes" role="tab">Scenes</button>
+          <button type="button" class="panel-tab" data-panel="media" role="tab">Media</button>
+          <button type="button" class="panel-tab" data-panel="code" role="tab">Code</button>
+          <button type="button" class="panel-tab" data-panel="settings" role="tab">Setup</button>
+        </nav>
+
+        <div class="panel-body">
+          <section class="panel-page active" data-page="projectors">
+            <div class="panel-actions">
+              <button type="button" class="btn small" id="btnAddProjector">Add projector</button>
+              <button type="button" class="btn small" id="btnRollCall">Refresh tabs</button>
+            </div>
+            <div id="projectorList" class="list"></div>
+            <div class="panel-note" id="calibrationNote"></div>
+          </section>
+
+          <section class="panel-page" data-page="shapes">
+            <div class="panel-actions">
+              <button type="button" class="btn small" id="btnAddRect">Rectangle</button>
+              <button type="button" class="btn small" id="btnDuplicateShape">Duplicate</button>
+              <button type="button" class="btn small danger" id="btnDeleteShape">Delete</button>
+            </div>
+            <div class="filter-row">
+              <input type="search" id="shapeFilter" placeholder="Filter shapes or tags…" aria-label="Filter shapes" />
+            </div>
+            <div id="shapeList" class="list"></div>
+          </section>
+
+          <section class="panel-page" data-page="layers">
+            <div class="panel-actions">
+              <button type="button" class="btn small primary" id="btnAddLayer">Add effect</button>
+              <button type="button" class="btn small" id="btnDuplicateLayer">Duplicate</button>
+              <button type="button" class="btn small danger" id="btnDeleteLayer">Delete</button>
+            </div>
+            <div class="panel-actions" id="presetActions"></div>
+            <div id="layerList" class="list"></div>
+          </section>
+
+          <section class="panel-page" data-page="scenes">
+            <div class="panel-actions">
+              <button type="button" class="btn small primary" id="btnCaptureScene">Save current as scene</button>
+            </div>
+            <div id="sceneList" class="list"></div>
+            <h3 class="panel-heading">Unattended playlist</h3>
+            <div id="playlist" class="list compact"></div>
+            <div class="panel-actions">
+              <button type="button" class="btn small" id="btnPlaylistAdd">Add scene to playlist</button>
+              <label class="inline-check"><input type="checkbox" id="playlistLoop" checked /> Loop</label>
+              <label class="inline-check"><input type="checkbox" id="playlistShuffle" /> Shuffle</label>
+            </div>
+            <button type="button" class="btn" id="btnRunShow">Run show</button>
+          </section>
+
+          <section class="panel-page" data-page="media">
+            <div class="panel-actions">
+              <button type="button" class="btn small primary" id="btnAddMedia">Add video or image…</button>
+              <input type="file" id="mediaFile" accept="video/*,image/*" multiple hidden />
+            </div>
+            <p class="panel-note">
+              Files stay on this machine, stored in the browser. Every projector tab reads them from
+              the same local store, so nothing is uploaded and nothing is re-encoded.
+            </p>
+            <div id="mediaList" class="list"></div>
+            <div id="storageInfo" class="panel-note"></div>
+          </section>
+
+          <section class="panel-page" data-page="code">
+            <div class="panel-actions">
+              <button type="button" class="btn small primary" id="btnNewEffect">New effect</button>
+              <button type="button" class="btn small" id="btnDeleteEffect">Delete</button>
+              <button type="button" class="btn small" id="btnEffectDocs">API reference</button>
+            </div>
+            <select id="effectPicker" class="select-full" aria-label="Custom effect"></select>
+            <div class="code-wrap">
+              <div class="code-gutter" id="codeGutter" aria-hidden="true"></div>
+              <textarea
+                id="codeEditor"
+                class="code-editor"
+                spellcheck="false"
+                autocomplete="off"
+                autocapitalize="off"
+                aria-label="Effect source code"
+              ></textarea>
+            </div>
+            <div class="code-status" id="codeStatus"></div>
+            <div class="panel-actions">
+              <button type="button" class="btn small primary" id="btnApplyCode">Apply (Ctrl+Enter)</button>
+              <span class="panel-note inline" id="codeHint">Changes go live in every projector tab.</span>
+            </div>
+          </section>
+
+          <section class="panel-page" data-page="settings">
+            <h3 class="panel-heading">Camera</h3>
+            <select id="cameraSelect" class="select-full" aria-label="Camera"></select>
+            <div class="panel-actions">
+              <button type="button" class="btn small primary" id="btnStartCamera">Start camera</button>
+              <button type="button" class="btn small" id="btnStopCamera">Stop</button>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="btn small" id="btnFreeze">Capture still to trace</button>
+              <button type="button" class="btn small" id="btnClearStill">Clear still</button>
+            </div>
+            <div id="cameraInfo" class="panel-note"></div>
+
+            <h3 class="panel-heading">Audio reactivity</h3>
+            <label class="inline-check"><input type="checkbox" id="audioEnabled" /> Use microphone</label>
+            <label class="field"><span>Gain</span><input type="range" id="audioGain" min="0.1" max="8" step="0.1" value="1" /></label>
+            <div id="audioMeter" class="meter"><span></span></div>
+
+            <h3 class="panel-heading">Display</h3>
+            <label class="inline-check"><input type="checkbox" id="showSafeArea" checked /> Show projector coverage outlines</label>
+            <label class="inline-check"><input type="checkbox" id="showShapeNames" checked /> Show shape names</label>
+            <label class="inline-check"><input type="checkbox" id="showPreviewRender" checked /> Show effects in preview</label>
+
+            <h3 class="panel-heading">Storage</h3>
+            <div id="storageDetail" class="panel-note"></div>
+            <div class="panel-actions">
+              <button type="button" class="btn small danger" id="btnResetProject">Start a new show</button>
+            </div>
+          </section>
+        </div>
+      </aside>
+
+      <!-- ---------------------------------------------------------- -->
+      <section class="stage">
+        <div class="stage-toolbar">
+          <div class="tool-group" role="group" aria-label="Tools">
+            <button type="button" class="tool active" data-tool="select" title="Select and edit (V)">Select</button>
+            <button type="button" class="tool" data-tool="polygon" title="Draw a closed area (P)">Area</button>
+            <button type="button" class="tool" data-tool="path" title="Draw an open path (L)">Path</button>
+            <button type="button" class="tool" data-tool="rect" title="Drag a rectangle (R)">Rect</button>
+            <button type="button" class="tool" data-tool="corners" title="Set projector corners by hand (C)">Corners</button>
+          </div>
+          <div class="tool-group">
+            <label class="inline-check"><input type="checkbox" id="toggleCamera" checked /> Camera</label>
+            <label class="field inline"><span>Dim</span><input type="range" id="cameraDim" min="0" max="1" step="0.01" value="0.45" /></label>
+          </div>
+          <div class="tool-group right">
+            <span id="stageHint" class="stage-hint"></span>
+          </div>
+        </div>
+
+        <div class="stage-canvas-wrap" id="stageWrap">
+          <canvas id="stage"></canvas>
+          <div id="stageEmpty" class="stage-empty">
+            <h2>Point a camera at the house</h2>
+            <p>
+              Open <strong>Setup</strong> and start a camera. Trace the windows, door and roofline on
+              the picture, then let each projector find itself.
+            </p>
+            <p class="muted">
+              No camera to hand? You can still draw shapes and align projectors by dragging their four
+              corners with the <strong>Corners</strong> tool.
+            </p>
+          </div>
+        </div>
+
+        <div class="stage-status">
+          <span id="stageCoords">—</span>
+          <span id="stageSelection">Nothing selected</span>
+          <span id="stagePeers">0 projector tabs</span>
+        </div>
+      </section>
+
+      <!-- ---------------------------------------------------------- -->
+      <aside class="panel panel-right">
+        <div class="panel-body" id="inspector">
+          <p class="panel-note">Select a shape, effect or projector to edit it.</p>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="transport">
+      <button type="button" class="btn transport-btn" id="btnPlay" title="Play / pause (Space)">▶</button>
+      <button type="button" class="btn transport-btn" id="btnStop" title="Stop and rewind">■</button>
+      <span class="time" id="showTime">00:00.0</span>
+      <label class="field inline"><span>BPM</span><input type="number" id="bpm" min="20" max="300" step="1" value="120" /></label>
+      <label class="field inline grow"><span>Master</span><input type="range" id="master" min="0" max="1" step="0.01" value="1" /></label>
+      <button type="button" class="btn danger" id="btnBlackout" title="Blackout everything (B)">Blackout</button>
+      <div class="scene-buttons" id="sceneButtons"></div>
+    </footer>
+
+    <dialog id="helpDialog" class="dialog">
+      <div class="dialog-body" id="helpBody"></div>
+      <form method="dialog"><button class="btn">Close</button></form>
+    </dialog>
+
+    <dialog id="showsDialog" class="dialog">
+      <h2>Saved shows</h2>
+      <div id="showsList" class="list"></div>
+      <form method="dialog" class="dialog-actions">
+        <button class="btn" value="new" id="btnNewShow" type="button">New show</button>
+        <button class="btn">Close</button>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script type="module" src="js/control/app.js"></script>
+  </body>
+</html>
