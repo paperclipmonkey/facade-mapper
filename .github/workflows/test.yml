@@ -42,3 +42,6 @@ jobs:
 
       - name: Surface collision tests
         run: node test/collide.test.mjs
+
+      - name: Figure orientation tests
+        run: node test/figures.test.mjs
