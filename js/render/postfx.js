@@ -24,6 +24,26 @@
  * projectors matching.
  */
 
+/**
+ * sRGB <-> linear conversion, shared by every pass.
+ *
+ * This matters more than it sounds. Canvas hands us gamma-encoded sRGB, but
+ * light adds linearly: two lamps of brightness 0.5 make 1.0, not 0.5^(1/2.2) * 2.
+ * Blurring and adding bloom on gamma-encoded values makes halos far too bright
+ * in the mid-tones and shifts their hue, which is exactly the "glowing sticker"
+ * look. Doing the whole post chain in linear and encoding once at the end is
+ * what makes a halo look like light spilling rather than paint sprayed around
+ * the edge.
+ */
+export const COLOR_SPACE_GLSL = `
+vec3 srgbToLinear(vec3 c) {
+  return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+}
+vec3 linearToSrgb(vec3 c) {
+  c = max(c, 0.0);
+  return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
+}`;
+
 /** Fullscreen triangle. Cheaper than a quad and avoids the diagonal seam. */
 export const FULLSCREEN_VERT = `
 attribute vec2 aPos;
@@ -47,8 +67,12 @@ uniform sampler2D uTex;
 uniform float uThreshold;
 uniform float uKnee;
 
+${COLOR_SPACE_GLSL}
+
 void main() {
-  vec3 c = texture2D(uTex, vUV).rgb;
+  // Everything downstream of here — blur, accumulate, add — happens in linear
+  // light. The main pass linearises the scene to match before adding it.
+  vec3 c = srgbToLinear(texture2D(uTex, vUV).rgb);
   float brightness = max(c.r, max(c.g, c.b));
 
   // Soft knee curve, as used in most modern engines.
@@ -57,7 +81,9 @@ void main() {
   soft = soft * soft / (4.0 * knee);
   float contribution = max(soft, brightness - uThreshold) / max(brightness, 0.0001);
 
-  gl_FragColor = vec4(c * contribution, 1.0);
+  // Stored back through the sRGB curve. An 8-bit target holding linear values
+  // has almost no precision in the darks, and bloom lives in the darks.
+  gl_FragColor = vec4(linearToSrgb(c * contribution), 1.0);
 }`;
 
 /**
@@ -73,17 +99,21 @@ varying vec2 vUV;
 uniform sampler2D uTex;
 uniform vec2 uDirection;   // texel step, one axis at a time
 
+${COLOR_SPACE_GLSL}
+
 void main() {
-  vec3 sum = texture2D(uTex, vUV).rgb * 0.227027;
+  // Decode, filter in linear, re-encode. Blurring gamma-encoded values makes a
+  // bright core bleed too far and a dim one barely bleed at all.
+  vec3 sum = srgbToLinear(texture2D(uTex, vUV).rgb) * 0.227027;
   vec2 off1 = uDirection * 1.3846153846;
   vec2 off2 = uDirection * 3.2307692308;
 
-  sum += texture2D(uTex, vUV + off1).rgb * 0.3162162162;
-  sum += texture2D(uTex, vUV - off1).rgb * 0.3162162162;
-  sum += texture2D(uTex, vUV + off2).rgb * 0.0702702703;
-  sum += texture2D(uTex, vUV - off2).rgb * 0.0702702703;
+  sum += srgbToLinear(texture2D(uTex, vUV + off1).rgb) * 0.3162162162;
+  sum += srgbToLinear(texture2D(uTex, vUV - off1).rgb) * 0.3162162162;
+  sum += srgbToLinear(texture2D(uTex, vUV + off2).rgb) * 0.0702702703;
+  sum += srgbToLinear(texture2D(uTex, vUV - off2).rgb) * 0.0702702703;
 
-  gl_FragColor = vec4(sum, 1.0);
+  gl_FragColor = vec4(linearToSrgb(sum), 1.0);
 }`;
 
 /** Combines two bloom levels so the halo has both a tight core and a wide spill. */
@@ -94,8 +124,12 @@ uniform sampler2D uNear;
 uniform sampler2D uFar;
 uniform float uFarWeight;
 
+${COLOR_SPACE_GLSL}
+
 void main() {
-  gl_FragColor = vec4(texture2D(uNear, vUV).rgb + texture2D(uFar, vUV).rgb * uFarWeight, 1.0);
+  vec3 sum = srgbToLinear(texture2D(uNear, vUV).rgb)
+           + srgbToLinear(texture2D(uFar, vUV).rgb) * uFarWeight;
+  gl_FragColor = vec4(linearToSrgb(sum), 1.0);
 }`;
 
 /**
@@ -103,6 +137,8 @@ void main() {
  * next to the explanation rather than buried in the warp module.
  */
 export const GRADE_GLSL = `
+${COLOR_SPACE_GLSL}
+
 uniform vec3 uTint;          // colour temperature, precomputed on the CPU
 uniform float uExposure;
 uniform float uContrast;
@@ -116,20 +152,28 @@ vec3 acesFilmic(vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
 }
 
-vec3 applyGrade(vec3 c) {
-  c *= uTint * uExposure;
+/**
+ * Grade a *linear* colour and return a *linear* colour.
+ *
+ * Exposure and tonemapping belong in linear — that is what they model. Contrast
+ * and saturation are perceptual, so they pivot in the encoded domain around mid
+ * grey; doing contrast in linear crushes shadows far harder than expected.
+ */
+vec3 applyGrade(vec3 linearColour) {
+  vec3 c = linearColour * uTint * uExposure;
 
-  // Contrast pivots around mid grey so it doesn't also shift overall brightness.
-  c = (c - 0.5) * uContrast + 0.5;
-
-  float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  c = mix(vec3(luma), c, uSaturation);
-
+  // Filmic roll-off, in linear, where the curve is defined.
   c = max(c, 0.0);
-  c = mix(c, acesFilmic(c), uTonemap);
-  c = pow(c, vec3(1.0 / max(uGradeGamma, 0.01)));
+  c = mix(min(c, vec3(1.0)), acesFilmic(c), uTonemap);
 
-  return clamp(c, 0.0, 1.0);
+  // Perceptual adjustments in encoded space.
+  vec3 enc = linearToSrgb(c);
+  enc = (enc - 0.5) * uContrast + 0.5;
+  float luma = dot(enc, vec3(0.2126, 0.7152, 0.0722));
+  enc = mix(vec3(luma), enc, uSaturation);
+  enc = pow(max(enc, 0.0), vec3(1.0 / max(uGradeGamma, 0.01)));
+
+  return srgbToLinear(clamp(enc, 0.0, 1.0));
 }`;
 
 /**
@@ -150,7 +194,7 @@ export function temperatureTint(temperature = 0, strength = 1) {
 
 /** Defaults that read as a neutral, slightly filmic starting point. */
 export const DEFAULT_GRADE = Object.freeze({
-  bloom: 0.55,
+  bloom: 0.35,
   bloomThreshold: 0.62,
   bloomKnee: 0.28,
   bloomRadius: 1,
@@ -175,7 +219,7 @@ export const GRADE_PRESETS = [
     name: 'Haunted',
     description: 'Cold, high-contrast and blown-out. Suits candles, fog and lightning.',
     values: {
-      bloom: 0.85, bloomThreshold: 0.5, bloomKnee: 0.35, bloomRadius: 1.4,
+      bloom: 0.5, bloomThreshold: 0.5, bloomKnee: 0.35, bloomRadius: 1.4,
       exposure: 1.05, contrast: 1.18, saturation: 0.92, temperature: -0.35,
       gamma: 0.95, tonemap: true,
     },
@@ -185,7 +229,7 @@ export const GRADE_PRESETS = [
     name: 'Ember',
     description: 'Warm and heavy. Fire, pumpkins, blood.',
     values: {
-      bloom: 0.75, bloomThreshold: 0.55, bloomKnee: 0.3, bloomRadius: 1.2,
+      bloom: 0.45, bloomThreshold: 0.55, bloomKnee: 0.3, bloomRadius: 1.2,
       exposure: 1.1, contrast: 1.12, saturation: 1.25, temperature: 0.45,
       gamma: 1.05, tonemap: true,
     },
@@ -195,7 +239,7 @@ export const GRADE_PRESETS = [
     name: 'Frost',
     description: 'Clean, cold and bright. Snow, icicles, stars.',
     values: {
-      bloom: 0.7, bloomThreshold: 0.6, bloomKnee: 0.25, bloomRadius: 1.6,
+      bloom: 0.42, bloomThreshold: 0.6, bloomKnee: 0.25, bloomRadius: 1.6,
       exposure: 1.05, contrast: 1.02, saturation: 0.95, temperature: -0.2,
       gamma: 1.05, tonemap: true,
     },
@@ -205,7 +249,7 @@ export const GRADE_PRESETS = [
     name: 'Saturated',
     description: 'Punchy colour with a big halo. Fairy lights and chases.',
     values: {
-      bloom: 1, bloomThreshold: 0.45, bloomKnee: 0.4, bloomRadius: 1.3,
+      bloom: 0.62, bloomThreshold: 0.45, bloomKnee: 0.4, bloomRadius: 1.3,
       exposure: 1.08, contrast: 1.1, saturation: 1.45, temperature: 0.1,
       gamma: 1, tonemap: true,
     },

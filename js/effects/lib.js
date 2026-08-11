@@ -30,6 +30,25 @@ export {
 
 export { createNoise, defaultNoise } from '../core/noise.js';
 
+/**
+ * Physically-motivated colour, for effects that model light rather than paint.
+ *
+ * `blackbodyCss(kelvin)` is the one to reach for whenever something is hot —
+ * flame, embers, sparks, filament bulbs, lightning. Driving colour from a
+ * temperature means it reddens correctly as it cools, which a fade between two
+ * chosen hexes never quite does.
+ */
+export { blackbody, blackbodyCss, blackbodyBytes, mixLinear, rampAt, luminance, srgbToLinear, linearToSrgb } from './color.js';
+
+/**
+ * Low-resolution density fields, for anything volumetric.
+ *
+ * Fire, smoke and fog are volumes. Drawing them as hundreds of additive circles
+ * reads as a bag of marbles; evaluating a field on a coarse grid and letting the
+ * browser interpolate it reads as a volume — and it is faster.
+ */
+export { createField, ensureField, curlNoise } from './field.js';
+
 /** Trace a point list onto a context. Handy when you want your own path. */
 export function tracePoints(g, points, closed = true) {
   if (!points.length) return;

@@ -12,6 +12,7 @@
  */
 
 import { rgba, clamp, lerp, TAU, frac } from '../../core/math.js';
+import { blackbodyCss } from '../color.js';
 
 /** Position along a path, wrapping for closed shapes and clamping for open ones. */
 function sampleAt(shape, u) {
@@ -398,8 +399,8 @@ const sparks = {
   scope: 'shape',
   description: 'Particles thrown off the path — embers, fireflies, magic dust.',
   params: [
-    { key: 'color', type: 'color', label: 'Colour', default: '#ffb347' },
-    { key: 'color2', type: 'color', label: 'Fade to', default: '#ff2200' },
+    { key: 'hotTemp', type: 'range', label: 'Hot temperature (K)', default: 2300, min: 900, max: 4000, step: 25 },
+    { key: 'coolTemp', type: 'range', label: 'Cooled temperature (K)', default: 1000, min: 800, max: 2500, step: 25 },
     { key: 'count', type: 'range', label: 'Particles', default: 120, min: 4, max: 800, step: 1 },
     { key: 'life', type: 'range', label: 'Lifetime (s)', default: 2.2, min: 0.2, max: 12, step: 0.05 },
     { key: 'rise', type: 'range', label: 'Rise speed', default: -60, min: -400, max: 400, step: 1 },
@@ -448,7 +449,8 @@ const sparks = {
 
       const f = part.age / part.life;
       const alpha = Math.sin(f * Math.PI); // fade in and out
-      g.fillStyle = f < 0.5 ? p.color : p.color2;
+      // Sparks cool as they fly, so colour comes from temperature.
+      g.fillStyle = blackbodyCss(p.coolTemp + (p.hotTemp - p.coolTemp) * Math.exp(-3.5 * f));
       g.globalAlpha = clamp(p.level, 0, 4) * alpha * 0.9;
       g.beginPath();
       g.arc(part.x, part.y, part.size * (1 - f * 0.6), 0, TAU);

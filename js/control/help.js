@@ -205,6 +205,46 @@ export const HELP_HTML = `
   their own copy of your code, and unseeded randomness makes them disagree. Use <code>rng()</code>.
 </p>
 
+<h3>Making it look like light</h3>
+<p>
+  Three helpers do most of the work of separating "light falling on brick" from "a shape stuck to it",
+  and the built-in effects lean on all three.
+</p>
+<table>
+  <tr>
+    <th><code>fx.blackbodyCss(k)</code></th>
+    <td>
+      The colour of something at <code>k</code> kelvin. Anything hot — flame, embers, sparks, a
+      filament, a lightning channel — has a colour that follows its temperature, so drive it from one
+      and let it cool. That is what makes a dying ember go deep red rather than just dim.
+      1000&nbsp;K dull embers, 1850&nbsp;K candle, 2400&nbsp;K bright flame, 9000&nbsp;K lightning.
+    </td>
+  </tr>
+  <tr>
+    <th><code>fx.mixLinear(a, b, t)</code></th>
+    <td>
+      Blend two colours through linear light instead of through sRGB. An sRGB lerp from yellow to red
+      dips through a muddy brown; this one does not. <code>fx.rampAt(stops, t)</code> is the
+      multi-stop version.
+    </td>
+  </tr>
+  <tr>
+    <th><code>fx.ensureField(state, key, w, h)</code></th>
+    <td>
+      A low-resolution density grid, for anything volumetric. Write a density per cell, then
+      <code>blit()</code> it into the shape — the browser's bilinear upscale turns the grid into a
+      continuous volume. Fire, smoke and fog all work this way; it looks far better than a few hundred
+      additive circles, and it is faster too. <code>fx.curlNoise</code> gives you a divergence-free
+      velocity to advect it with, which is where the billowing comes from.
+    </td>
+  </tr>
+</table>
+<p class="muted">
+  One performance trap worth knowing: never set <code>g.filter</code> per particle. Every filtered draw
+  becomes its own composited layer, so a few hundred of them cost tens of milliseconds a frame. Bake a
+  handful of pre-softened sprites once and stamp them with <code>drawImage</code> instead.
+</p>
+
 <h2>Keyboard</h2>
 <table>
   <tr><th><kbd>V</kbd> <kbd>P</kbd> <kbd>L</kbd> <kbd>R</kbd> <kbd>C</kbd></th><td>Select, Area, Path, Rectangle, Corners</td></tr>

@@ -14,9 +14,13 @@
  *
  * Passes per frame:
  *   1. upload the world canvas
- *   2. bright-pass into a quarter-size target
- *   3. blur it (horizontal, vertical), twice at two scales
+ *   2. bright-pass into a half-size target
+ *   3. halve and blur down a five-level chain, then accumulate back up
  *   4. warp the mesh, adding bloom and applying the grade (see render/postfx.js)
+ *
+ * Every one of those steps happens in linear light — light adds linearly, and
+ * blooming or blending gamma-encoded values is what makes halos read as sprayed
+ * paint rather than as spill.
  *
  * Bloom is computed on the *unwarped* source, so it warps along with the image
  * and two projectors covering the same wall produce identical halos.
@@ -70,15 +74,18 @@ void main() {
     return;
   }
 
-  vec3 c = texture2D(uTex, vUV).rgb;
+  // Work in linear light: the scene, the bloom and the edge blend all describe
+  // quantities of light, and light adds linearly. Encoding happens once, last.
+  vec3 c = srgbToLinear(texture2D(uTex, vUV).rgb);
   if (uBloomAmount > 0.0) {
-    c += texture2D(uBloom, vUV).rgb * uBloomAmount;
+    c += srgbToLinear(texture2D(uBloom, vUV).rgb) * uBloomAmount;
   }
   c = applyGrade(c);
 
   // Soft-edge blending is computed in real output pixels, which is what matters
-  // when two projectors overlap on the same wall. It happens after grading so
-  // the fade goes to true black rather than to the graded black point.
+  // when two projectors overlap on the same wall. Attenuating in linear is what
+  // makes two feathered edges sum back to the same brightness as one unfeathered
+  // one — do it in gamma space and the overlap band reads as a bright seam.
   vec2 p = gl_FragCoord.xy / uResolution;
   float f = ramp(1.0 - p.y, uFeather.x)
           * ramp(1.0 - p.x, uFeather.y)
@@ -86,7 +93,7 @@ void main() {
           * ramp(p.x, uFeather.w);
   f = pow(f, uGamma);
 
-  gl_FragColor = vec4(c * f * uBrightness, 1.0);
+  gl_FragColor = vec4(linearToSrgb(c * f * uBrightness), 1.0);
 }`;
 
 function compile(gl, type, source) {

@@ -10,7 +10,9 @@
  * weather and depth that flat colour never will.
  */
 
-import { rgba, clamp, TAU, frac, mixHex } from '../../core/math.js';
+import { rgba, clamp, TAU, frac } from '../../core/math.js';
+import { blackbodyCss, mixLinear } from '../color.js';
+import { ensureField } from '../field.js';
 
 const rain = {
   id: 'rain',
@@ -214,27 +216,33 @@ const caustics = {
     { key: 'speed', type: 'range', label: 'Speed', default: 0.35, min: 0, max: 3, step: 0.01 },
     { key: 'sharpness', type: 'range', label: 'Sharpness', default: 3.5, min: 1, max: 10, step: 0.1 },
     { key: 'level', type: 'range', label: 'Brightness', default: 0.8, min: 0, max: 2, step: 0.01 },
-    { key: 'resolution', type: 'range', label: 'Detail', default: 44, min: 12, max: 110, step: 1 },
+    { key: 'resolution', type: 'range', label: 'Detail', default: 56, min: 12, max: 130, step: 2 },
   ],
-  draw({ g, p, shape, t, noise }) {
+  draw({ g, p, shape, t, state, noise }) {
     const { bbox } = shape;
-    if (bbox.w <= 0 || bbox.h <= 0) return;
+    if (bbox.w <= 2 || bbox.h <= 2) return;
 
-    // Drawn as a coarse grid of cells rather than per-pixel: at projector
-    // distance the difference is invisible and this stays well inside frame budget.
-    const cols = Math.round(p.resolution);
-    const rows = Math.max(4, Math.round((cols * bbox.h) / Math.max(1, bbox.w)));
-    const cw = bbox.w / cols;
-    const ch = bbox.h / rows;
+    // A field rather than thousands of fillRects: one draw call, and the
+    // browser's bilinear filtering turns the cells into continuous ripples.
+    const cols = Math.max(8, Math.round(p.resolution));
+    const rows = Math.max(8, Math.round((cols * bbox.h) / bbox.w));
+    const field = ensureField(state, 'field', cols, rows);
+    field.clear();
 
-    g.save();
-    g.clip(shape.path);
-    g.globalCompositeOperation = 'lighter';
+    // Precompute the colour ramp once per frame instead of per cell — building
+    // a CSS string 5000 times a frame is what made the old version expensive.
+    const RAMP_STEPS = 24;
+    const ramp = [];
+    for (let i = 0; i < RAMP_STEPS; i++) {
+      const hex = mixLinear(p.color2, p.color, i / (RAMP_STEPS - 1)).replace('#', '');
+      const n = parseInt(hex, 16) || 0;
+      ramp.push([(n >> 16) & 255, (n >> 8) & 255, n & 255]);
+    }
 
     for (let y = 0; y < rows; y++) {
+      const v = (y + 0.5) / rows;
       for (let x = 0; x < cols; x++) {
-        const u = x / cols;
-        const v = y / rows;
+        const u = (x + 0.5) / cols;
         // Two counter-drifting noise fields; ridged so the bright veins are
         // thin and the dark areas broad, which is what caustics actually do.
         const a = noise.noise3(u * p.scale, v * p.scale, t * p.speed);
@@ -243,13 +251,23 @@ const caustics = {
         const value = Math.pow(clamp(ridge, 0, 1), p.sharpness);
         if (value < 0.02) continue;
 
-        g.fillStyle = rgba(mixHex(p.color2, p.color, value), clamp(value * p.level, 0, 1));
-        g.fillRect(bbox.x + x * cw, bbox.y + y * ch, cw + 1, ch + 1);
+        const [r, gg, bb] = ramp[Math.min(RAMP_STEPS - 1, (value * RAMP_STEPS) | 0)];
+        field.set(x, y, r, gg, bb, clamp(value * p.level, 0, 1));
       }
     }
+
+    g.save();
+    g.clip(shape.path);
+    g.globalCompositeOperation = 'lighter';
+    field.blit(g, bbox.x, bbox.y, bbox.w, bbox.h);
     g.restore();
   },
 };
+
+/** Temperature falls fast at first, then levels off — Newtonian cooling. */
+function lerpTemp(hot, cool, f) {
+  return cool + (hot - cool) * Math.exp(-3.2 * f);
+}
 
 const embers = {
   id: 'embers',
@@ -259,8 +277,8 @@ const embers = {
   description:
     'Slow motes rising through the frame with turbulence. Costs almost nothing and adds enormous depth behind other effects.',
   params: [
-    { key: 'color', type: 'color', label: 'Colour', default: '#ffb257' },
-    { key: 'color2', type: 'color', label: 'Cool colour', default: '#ff3a1f' },
+    { key: 'hotTemp', type: 'range', label: 'Hot temperature (K)', default: 2000, min: 900, max: 3500, step: 25 },
+    { key: 'coolTemp', type: 'range', label: 'Cooled temperature (K)', default: 1050, min: 800, max: 2500, step: 25 },
     { key: 'count', type: 'range', label: 'Motes', default: 90, min: 5, max: 600, step: 5 },
     { key: 'rise', type: 'range', label: 'Rise speed', default: 34, min: -200, max: 200, step: 1 },
     { key: 'drift', type: 'range', label: 'Drift', default: 22, min: -200, max: 200, step: 1 },
@@ -312,7 +330,10 @@ const embers = {
       if (alpha <= 0.01) continue;
 
       const r = p.size * mote.scale;
-      const colour = mixHex(p.color, p.color2, clamp(f, 0, 1));
+      // An ember cools as it travels, so its colour is a temperature rather
+      // than a fade between two chosen hexes. That is what makes a dying one go
+      // deep red instead of merely dim.
+      const colour = blackbodyCss(lerpTemp(p.hotTemp, p.coolTemp, clamp(f, 0, 1)));
       const grad = g.createRadialGradient(mote.x, mote.y, 0, mote.x, mote.y, r * 3);
       grad.addColorStop(0, rgba(colour, alpha));
       grad.addColorStop(1, rgba(colour, 0));
@@ -433,38 +454,61 @@ const plasma = {
     { key: 'scale', type: 'range', label: 'Scale', default: 1.6, min: 0.2, max: 8, step: 0.05 },
     { key: 'speed', type: 'range', label: 'Speed', default: 0.09, min: 0, max: 1.5, step: 0.005 },
     { key: 'level', type: 'range', label: 'Brightness', default: 0.75, min: 0, max: 2, step: 0.01 },
-    { key: 'resolution', type: 'range', label: 'Detail', default: 30, min: 8, max: 90, step: 1 },
+    { key: 'resolution', type: 'range', label: 'Detail', default: 40, min: 8, max: 100, step: 2 },
     { key: 'contrast', type: 'range', label: 'Contrast', default: 1.3, min: 0.2, max: 4, step: 0.05 },
   ],
-  draw({ g, p, shape, t, noise }) {
+  draw({ g, p, shape, t, state, noise }) {
     const { bbox } = shape;
-    if (bbox.w <= 0 || bbox.h <= 0) return;
+    if (bbox.w <= 2 || bbox.h <= 2) return;
 
-    const cols = Math.round(p.resolution);
-    const rows = Math.max(4, Math.round((cols * bbox.h) / Math.max(1, bbox.w)));
-    const cw = bbox.w / cols;
-    const ch = bbox.h / rows;
+    const cols = Math.max(6, Math.round(p.resolution));
+    const rows = Math.max(6, Math.round((cols * bbox.h) / bbox.w));
+    const field = ensureField(state, 'field', cols, rows);
+    field.clear();
 
-    g.save();
-    g.clip(shape.path);
+    // Two precomputed ramps, blended per cell. Mixing in linear light is what
+    // keeps the transitions from passing through a muddy grey.
+    const STEPS = 20;
+    const rampAB = [];
+    const rampC = [];
+    for (let i = 0; i < STEPS; i++) {
+      const f = i / (STEPS - 1);
+      for (const [target, from, to] of [[rampAB, p.colorA, p.colorB], [rampC, p.colorA, p.colorC]]) {
+        const hex = mixLinear(from, to, f).replace('#', '');
+        const n = parseInt(hex, 16) || 0;
+        target.push([(n >> 16) & 255, (n >> 8) & 255, n & 255]);
+      }
+    }
 
     for (let y = 0; y < rows; y++) {
+      const v = (y + 0.5) / rows;
       for (let x = 0; x < cols; x++) {
-        const u = x / cols;
-        const v = y / rows;
-        // Three offset noise samples act as weights for three colours, which
+        const u = (x + 0.5) / cols;
+        // Two offset noise samples act as weights for three colours, which
         // gives smooth blends without ever computing a hue.
         const a = noise.noise3(u * p.scale, v * p.scale, t * p.speed) * 0.5 + 0.5;
         const b = noise.noise3(u * p.scale + 9.1, v * p.scale - 3.7, t * p.speed * 1.3) * 0.5 + 0.5;
 
         const shaped = clamp((a - 0.5) * p.contrast + 0.5, 0, 1);
         const shapedB = clamp((b - 0.5) * p.contrast + 0.5, 0, 1);
-        const mixed = mixHex(mixHex(p.colorA, p.colorB, shaped), p.colorC, shapedB * 0.6);
 
-        g.fillStyle = rgba(mixed, clamp(p.level * (0.35 + 0.65 * shaped), 0, 1));
-        g.fillRect(bbox.x + x * cw, bbox.y + y * ch, cw + 1, ch + 1);
+        const base = rampAB[Math.min(STEPS - 1, (shaped * STEPS) | 0)];
+        const tint = rampC[Math.min(STEPS - 1, (shapedB * 0.6 * STEPS) | 0)];
+        const mix = shapedB * 0.6;
+
+        field.set(
+          x, y,
+          base[0] * (1 - mix) + tint[0] * mix,
+          base[1] * (1 - mix) + tint[1] * mix,
+          base[2] * (1 - mix) + tint[2] * mix,
+          clamp(p.level * (0.35 + 0.65 * shaped), 0, 1)
+        );
       }
     }
+
+    g.save();
+    g.clip(shape.path);
+    field.blit(g, bbox.x, bbox.y, bbox.w, bbox.h);
     g.restore();
   },
 };

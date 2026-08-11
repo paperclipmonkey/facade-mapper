@@ -10,7 +10,8 @@
  * That is why most of these have an interval rather than just a speed.
  */
 
-import { rgba, clamp, lerp, TAU, frac, makeRng, mixHex } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, frac, makeRng } from '../../core/math.js';
+import { blackbodyCss } from '../color.js';
 
 const bats = {
   id: 'bats',
@@ -230,8 +231,11 @@ const fireworks = {
         if (y > groundY) continue;
 
         const fade = (1 - f) ** 1.5;
-        // Sparks cool towards red as they die, like real stars burning out.
-        const tint = mixHex(colour, '#ff2d00', clamp(f * 0.8, 0, 1));
+        // A firework star is burning metal, so it cools along the blackbody
+        // curve as it dies: white-hot, then yellow, then a deep red ember. The
+        // palette colour tints the hot end; physics does the rest.
+        const kelvin = 2600 * Math.exp(-1.6 * f) + 900;
+        const tint = f < 0.25 ? colour : blackbodyCss(kelvin);
         const r = Math.max(0.6, bbox.h * 0.005 * (0.5 + fade));
         g.fillStyle = rgba(tint, fade * (0.5 + 0.5 * Math.sin(burstAge * 22 + s)));
         g.beginPath();

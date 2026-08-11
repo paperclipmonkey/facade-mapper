@@ -24,9 +24,14 @@ it maps shapes to projectors and runs programmable effects on them.
   windows, figures moving behind glass, bats, rain, searchlights, fog, snow,
   Santa, icicles, fairy lights, fireworks.
 - **A proper look.** Bloom, filmic highlight roll-off and colour grading are
-  applied after everything, by every projector identically. This is the
-  difference between light that appears to fall on brickwork and shapes that
-  look stuck to it.
+  applied after everything, by every projector identically, and the whole chain
+  runs in linear light. This is the difference between light that appears to
+  fall on brickwork and shapes that look stuck to it.
+- **Effects that model light, not paint.** Anything hot — fire, embers, sparks,
+  candles, lightning, firework stars — takes its colour from a temperature on
+  the blackbody curve, so it reddens correctly as it cools. Anything
+  volumetric — fire, smoke, fog — is a density field rather than a pile of
+  additive circles. See [How the effects are built](#how-the-effects-are-built).
 - **It reacts.** Point a motion trigger at the path and the house does something
   when somebody walks up it — jump to a scene, play a sound, then go back to
   what it was doing.
@@ -212,6 +217,47 @@ clamp(low * 2, 0, 1)                     // follow the bass
 base * (0.6 + 0.4 * noise(t * 0.5, i))   // wander
 ```
 
+## How the effects are built
+
+Three ideas do most of the work of making the built-in effects read as light
+falling on a wall rather than as graphics stuck to it. They are all available to
+effects you write yourself.
+
+**Linear light.** sRGB values are gamma-encoded, so adding or blending them
+directly is not the same as adding light. The post chain decodes to linear
+before bloom and tonemapping and re-encodes at the end, and `fx.mixLinear` does
+the same for a two-colour blend. The difference shows up most in gradients: a
+yellow-to-red flame lerped in sRGB travels through a muddy brown middle, and in
+linear it does not. Soft-edge blending between overlapping projectors is done in
+linear for the same reason — that is the only way two feathered edges sum to the
+brightness of one unfeathered one.
+
+**Colour from temperature.** Fire, embers, sparks, candle flames, lightning
+channels and firework stars are thermal emitters, so their colour is a function
+of how hot they are, not an arbitrary hex. `fx.blackbodyCss(kelvin)` returns the
+colour of a blackbody at that temperature. Driving an effect from a temperature
+and letting it cool is what makes a dying ember go deep red instead of merely
+dim — which is the thing your eye actually reads as "that is burning". Useful
+landmarks: 1000 K dull red embers, 1500 K orange flame, 1850 K candle, 2400 K
+bright yellow flame, 3000 K tungsten, 9000 K and up the blue-white of a
+lightning channel.
+
+**Volumes as fields.** Fire, smoke and fog are volumes of stuff, and drawing
+them as a few hundred additive circles reads as a bag of marbles no matter how
+they are tuned. Instead they evaluate a density on a coarse grid — around a
+hundred cells across — and let the browser's bilinear upscale turn it into a
+continuous volume. `fx.ensureField` allocates and caches one; `fx.curlNoise`
+gives a divergence-free velocity to advect it with, which is what makes smoke
+curl and billow instead of drifting. It also happens to be several times faster
+than the particle version it replaced.
+
+There is a fourth, less principled rule that matters just as much: **never set
+`ctx.filter` per particle**. Each filtered draw is rendered into its own layer
+and composited back, so a few hundred of them will cost tens of milliseconds a
+frame on their own. Bake a small ladder of pre-softened sprites once and stamp
+them with `drawImage` instead — the snow effect does this for its depth of
+field, and it is about thirty times faster than the filter it replaced.
+
 ## Writing your own effects
 
 The **Code** panel compiles a real ES module. Export an object with a `params`
@@ -255,7 +301,7 @@ What `draw` receives:
 | `rng`, `noise` | Seeded generators — identical in every tab. |
 | `media(id)` | A decoded video or image element from the library, or null. |
 | `world` | `{ w, h }` of the virtual frame. |
-| `fx` | Helpers: `fx.rgba`, `fx.glow`, `fx.mixHex`, `fx.TAU`… |
+| `fx` | Helpers: `fx.rgba`, `fx.glow`, `fx.mixHex`, `fx.TAU`, plus the physical set — `fx.blackbodyCss`, `fx.mixLinear`, `fx.rampAt`, `fx.ensureField`, `fx.curlNoise`. |
 
 Parameter types: `range`, `number`, `color`, `bool`, `select` (with `options`),
 `text`, `media`.

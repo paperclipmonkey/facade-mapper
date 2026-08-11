@@ -6,7 +6,54 @@
  * icicles and candy stripes want a specific edge or outline.
  */
 
-import { rgba, clamp, TAU, frac, mixHex } from '../../core/math.js';
+import { rgba, clamp, TAU, frac } from '../../core/math.js';
+import { mixLinear } from '../color.js';
+
+/**
+ * Depth of field, cheaply.
+ *
+ * Setting `ctx.filter` before each flake gives a correct blur and costs about
+ * 180µs per flake, because every filtered draw is rendered into its own layer
+ * and composited back — 320 flakes came to 59ms a frame on its own. Instead we
+ * bake a small ladder of pre-softened discs once and stamp them with drawImage,
+ * which is a plain textured blit. The softness is a radial falloff rather than a
+ * true Gaussian; at the size a flake occupies on a wall the difference is not
+ * visible, and it is roughly two hundred times faster.
+ */
+const SPRITE_PX = 64;
+const SPRITE_LEVELS = 6;
+
+function buildFlakeSprites(colour) {
+  const sprites = [];
+  for (let i = 0; i < SPRITE_LEVELS; i++) {
+    const softness = i / (SPRITE_LEVELS - 1);
+    const canvas =
+      typeof OffscreenCanvas === 'function'
+        ? new OffscreenCanvas(SPRITE_PX, SPRITE_PX)
+        : Object.assign(document.createElement('canvas'), { width: SPRITE_PX, height: SPRITE_PX });
+    const c = canvas.getContext('2d');
+    const half = SPRITE_PX / 2;
+    // The solid core shrinks as softness rises, so the same stamp reads as a
+    // sharp grain at level 0 and a diffuse blob at the top of the ladder.
+    const core = half * (0.9 - 0.86 * softness);
+    const grad = c.createRadialGradient(half, half, core, half, half, half);
+    grad.addColorStop(0, rgba(colour, 1));
+    grad.addColorStop(0.45, rgba(colour, 0.52 - 0.12 * softness));
+    grad.addColorStop(1, rgba(colour, 0));
+    c.fillStyle = grad;
+    c.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
+    sprites.push(canvas);
+  }
+  return sprites;
+}
+
+function ensureFlakeSprites(state, colour) {
+  if (state.spriteKey !== colour) {
+    state.sprites = buildFlakeSprites(colour);
+    state.spriteKey = colour;
+  }
+  return state.sprites;
+}
 
 const snow = {
   id: 'snow',
@@ -14,7 +61,7 @@ const snow = {
   category: 'christmas',
   scope: 'shape',
   description:
-    'Falling snow with depth layers and wind. Leave targets empty to cover everything.',
+    'Falling snow with real depth: near flakes are large, soft and out of focus, far ones are small, sharp and slow.',
   params: [
     { key: 'color', type: 'color', label: 'Colour', default: '#ffffff' },
     { key: 'count', type: 'range', label: 'Flakes', default: 320, min: 10, max: 2000, step: 10 },
@@ -23,11 +70,12 @@ const snow = {
     { key: 'gust', type: 'range', label: 'Gustiness', default: 0.5, min: 0, max: 3, step: 0.05 },
     { key: 'size', type: 'range', label: 'Flake size', default: 5, min: 0.5, max: 30, step: 0.25 },
     { key: 'depth', type: 'range', label: 'Depth spread', default: 0.7, min: 0, max: 1, step: 0.01 },
-    { key: 'sparkle', type: 'range', label: 'Sparkle', default: 0.3, min: 0, max: 1, step: 0.01 },
+    { key: 'blur', type: 'range', label: 'Near-flake blur', default: 0.7, min: 0, max: 1, step: 0.01 },
+    { key: 'flutter', type: 'range', label: 'Flutter', default: 0.6, min: 0, max: 2, step: 0.01 },
     { key: 'settle', type: 'range', label: 'Settle at bottom', default: 0, min: 0, max: 1, step: 0.01 },
   ],
   init() {
-    return { flakes: [], count: 0 };
+    return { flakes: [], count: 0, sprites: null, spriteKey: null };
   },
   draw({ g, p, shape, t, dt, rng, state, noise }) {
     const { bbox } = shape;
@@ -37,43 +85,72 @@ const snow = {
     const spawn = (flake = {}, atTop = true) => {
       flake.x = bbox.x + rng() * bbox.w;
       flake.y = atTop ? bbox.y - rng() * bbox.h * 0.1 : bbox.y + rng() * bbox.h;
-      // Depth drives size, speed and brightness together, which is what sells
-      // the parallax without needing separate layers.
+      // Depth drives size, speed, brightness *and* focus together, which is what
+      // sells the parallax without needing separate layers.
       flake.z = 1 - p.depth * rng();
       flake.phase = rng() * TAU;
-      flake.spin = (rng() - 0.5) * 2;
+      // Flakes are flat plates: they rock and present more or less area to the
+      // viewer as they tumble, which is why real snow twinkles as it falls.
+      flake.tumble = 0.6 + rng() * 2.4;
+      flake.tilt = rng() * TAU;
       return flake;
     };
 
     while (state.flakes.length < target) state.flakes.push(spawn({}, false));
     if (state.flakes.length > target) state.flakes.length = target;
 
+    const gust = p.gust > 0 ? noise.noise2(t * 0.12, 0) * p.gust : 0;
+    const sprites = ensureFlakeSprites(state, p.color);
+
     g.save();
     g.clip(shape.path);
-    g.fillStyle = p.color;
 
-    const gust = p.gust > 0 ? noise.noise2(t * 0.12, 0) * p.gust : 0;
+    // Sorting back to front costs nothing at these counts and means near flakes
+    // correctly occlude far ones. Sorted once per frame, in place.
+    state.flakes.sort((a, b) => a.z - b.z);
 
     for (const flake of state.flakes) {
       const z = flake.z;
       flake.y += p.speed * z * dt;
-      flake.x +=
-        (p.wind * z + Math.sin(t * 0.9 + flake.phase) * 16 * z + gust * 60) * dt;
+      // Flutter is a sideways drift that reverses — a flake does not fall
+      // straight, it slips from side to side as it rocks.
+      flake.tilt += flake.tumble * dt;
+      const flutter = Math.sin(flake.tilt) * 26 * p.flutter * z;
+      flake.x += (p.wind * z + flutter + gust * 60) * dt;
 
       if (flake.y > bbox.y + bbox.h + 10) spawn(flake, true);
       if (flake.x < bbox.x - 20) flake.x = bbox.x + bbox.w + 10;
       if (flake.x > bbox.x + bbox.w + 20) flake.x = bbox.x - 10;
 
       const r = p.size * z * 0.5;
-      let alpha = 0.35 + 0.65 * z;
-      if (p.sparkle > 0) {
-        alpha *= 1 - p.sparkle * (0.5 + 0.5 * Math.sin(t * 6 + flake.phase * 3));
-      }
-      g.globalAlpha = clamp(alpha, 0, 1);
-      g.beginPath();
-      g.arc(flake.x, flake.y, Math.max(0.4, r), 0, TAU);
-      g.fill();
+
+      // Presented area varies as the plate rocks: a flake edge-on nearly
+      // disappears, which is the twinkle.
+      const facing = 0.35 + 0.65 * Math.abs(Math.cos(flake.tilt));
+      const alpha = clamp((0.3 + 0.7 * z) * facing, 0, 1);
+
+      // Depth of field. A camera focused on the house renders flakes a metre
+      // from the lens as soft discs; drawing every flake sharp is the single
+      // most obvious tell that it is an overlay.
+      const spread = p.blur * Math.max(0, z - 0.55) * 26;
+      const level = Math.min(
+        SPRITE_LEVELS - 1,
+        Math.round((spread / (spread + Math.max(0.6, r))) * (SPRITE_LEVELS - 1) * 1.6)
+      );
+      // Blur spreads the same light over more area, so a soft flake is dimmer.
+      const rx = Math.max(0.5, r) + spread;
+      const ry = Math.max(0.5, r * facing) + spread;
+      g.globalAlpha = alpha * Math.max(0.25, 1 - spread / (spread + r * 1.5));
+
+      // Squashed along the tumble axis, so flakes read as plates not spheres.
+      g.save();
+      g.translate(flake.x, flake.y);
+      g.rotate(flake.tilt);
+      g.drawImage(sprites[level], -rx, -ry, rx * 2, ry * 2);
+      g.restore();
     }
+
+    g.globalAlpha = 1;
 
     if (p.settle > 0) {
       // A soft drift along the bottom edge, as if snow is piling up on the sill.
@@ -81,7 +158,6 @@ const snow = {
       const grad = g.createLinearGradient(0, bbox.y + bbox.h - h * 2.2, 0, bbox.y + bbox.h);
       grad.addColorStop(0, rgba(p.color, 0));
       grad.addColorStop(1, rgba(p.color, 0.85));
-      g.globalAlpha = 1;
       g.fillStyle = grad;
       g.beginPath();
       g.moveTo(bbox.x, bbox.y + bbox.h);
@@ -458,7 +534,8 @@ const aurora = {
     const cols = 40;
     for (let b = 0; b < bands; b++) {
       const f = b / Math.max(1, bands - 1 || 1);
-      const colour = mixHex(p.color, p.color2, f);
+      // Linear blend: two light sources mixing, not two pigments.
+      const colour = mixLinear(p.color, p.color2, f);
       const yBase = bbox.y + bbox.h * (0.15 + f * 0.55);
       const thickness = bbox.h * p.thickness * (0.6 + 0.6 * (1 - f));
 

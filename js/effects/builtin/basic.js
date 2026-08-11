@@ -6,7 +6,8 @@
  * elaborate is built on the same primitives.
  */
 
-import { rgba, mixHex, clamp, TAU } from '../../core/math.js';
+import { rgba, clamp, TAU } from '../../core/math.js';
+import { mixLinear } from '../color.js';
 
 /** Applies a blur filter only where the browser supports it. */
 function softFilter(g, softness, world) {
@@ -319,7 +320,8 @@ const wash = {
   draw({ g, p, world }) {
     g.save();
     g.globalAlpha *= clamp(p.level, 0, 1);
-    g.fillStyle = mixHex(p.color, p.color2, clamp(p.blend, 0, 1));
+    // Linear blend — this is two washes of light, not two tins of paint.
+    g.fillStyle = mixLinear(p.color, p.color2, clamp(p.blend, 0, 1));
     g.fillRect(0, 0, world.w, world.h);
 
     if (p.vignette > 0) {
