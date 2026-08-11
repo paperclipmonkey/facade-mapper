@@ -17,11 +17,22 @@ import halloween from './builtin/halloween.js';
 import christmas from './builtin/christmas.js';
 import text from './builtin/text.js';
 import mediaEffects from './builtin/media.js';
+import atmosphere from './builtin/atmosphere.js';
+import creatures from './builtin/creatures.js';
 
-export const CATEGORIES = ['basic', 'path', 'halloween', 'christmas', 'text', 'media', 'custom'];
+export const CATEGORIES = [
+  'basic',
+  'path',
+  'atmosphere',
+  'halloween',
+  'christmas',
+  'text',
+  'media',
+  'custom',
+];
 
 const builtins = new Map();
-for (const list of [basic, paths, halloween, christmas, text, mediaEffects]) {
+for (const list of [basic, paths, atmosphere, halloween, christmas, creatures, text, mediaEffects]) {
   for (const def of list) builtins.set(def.id, normaliseEffect(def, true));
 }
 

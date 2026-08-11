@@ -11,7 +11,9 @@
  * resolution, and shapes stay put when you swap a webcam for a better one.
  */
 
-export const PROJECT_VERSION = 3;
+import { DEFAULT_GRADE } from '../render/postfx.js';
+
+export const PROJECT_VERSION = 4;
 
 /** Virtual pixel size handed to effects, so line widths and speeds feel natural. */
 export const WORLD_WIDTH = 1920;
@@ -109,6 +111,8 @@ export function createLayer(effectId, overrides = {}) {
     bindings: {},
     /** Stagger multi-target instances so a row of windows doesn't pulse in unison. */
     stagger: 0,
+    /** Blur applied to this layer alone, in world pixels. Softens hard cutouts. */
+    softness: 0,
     order: 0,
     ...overrides,
   };
@@ -124,6 +128,45 @@ export function createScene(overrides = {}) {
     fade: 0.6,
     /** layerId -> { enabled, opacity, params } overrides. */
     state: {},
+    ...overrides,
+  };
+}
+
+/**
+ * A trigger fires a scene for a while and then puts the previous one back.
+ *
+ * The interesting source is 'motion': the control tab watches a region of the
+ * camera view and fires when something moves through it. That is what turns the
+ * house from a loop into something that reacts to whoever walks up the path.
+ */
+export function createTrigger(overrides = {}) {
+  return {
+    id: uid('trig'),
+    name: 'Scare',
+    enabled: true,
+    /** 'motion' | 'hotkey' | 'timer' | 'manual' */
+    source: 'motion',
+    /** Scene to jump to. */
+    sceneId: null,
+    /** Seconds to hold it before returning to what was playing. 0 = stay. */
+    hold: 6,
+    /** Media id of a sound to play with it. */
+    sound: null,
+    soundVolume: 1,
+    /** Minimum seconds between firings, so one visitor doesn't retrigger it. */
+    cooldown: 20,
+
+    /** source: 'motion' — which part of the camera view to watch. */
+    region: { x: 0.25, y: 0.55, w: 0.5, h: 0.45 },
+    sensitivity: 0.5,
+
+    /** source: 'hotkey' — a single key. */
+    key: 'q',
+
+    /** source: 'timer' — average seconds between firings, with jitter. */
+    every: 180,
+    jitter: 0.5,
+
     ...overrides,
   };
 }
@@ -149,6 +192,18 @@ export function createProject(name = 'Untitled show') {
     /** Media entries: { id, name, kind, size, duration }. Bytes live in IndexedDB. */
     media: [],
 
+    /** Reactive and timed one-shots. See createTrigger. */
+    triggers: [],
+
+    /** Unattended on/off times, so the show runs itself all evening. */
+    schedule: {
+      enabled: false,
+      on: '18:00',
+      off: '22:30',
+      /** Days of the week it runs, 0 = Sunday. */
+      days: [0, 1, 2, 3, 4, 5, 6],
+    },
+
     show: {
       /** Ordered scene ids with durations, for unattended running. */
       playlist: [],
@@ -169,6 +224,8 @@ export function createProject(name = 'Untitled show') {
       cameraId: null,
       showSafeArea: true,
       previewFps: 60,
+      /** Bloom and colour grading, applied identically by every projector. */
+      grade: { ...DEFAULT_GRADE },
     },
   };
 }
@@ -187,7 +244,9 @@ export function migrateProject(raw) {
   const p = { ...base, ...raw };
 
   p.settings = { ...base.settings, ...(raw.settings || {}) };
+  p.settings.grade = { ...DEFAULT_GRADE, ...(raw.settings?.grade || {}) };
   p.show = { ...base.show, ...(raw.show || {}) };
+  p.schedule = { ...base.schedule, ...(raw.schedule || {}) };
   p.version = PROJECT_VERSION;
 
   p.projectors = (Array.isArray(raw.projectors) ? raw.projectors : []).map((proj, i) => {
@@ -216,6 +275,12 @@ export function migrateProject(raw) {
     ...createScene(),
     ...s,
     state: { ...(s.state || {}) },
+  }));
+
+  p.triggers = (Array.isArray(raw.triggers) ? raw.triggers : []).map((t) => ({
+    ...createTrigger(),
+    ...t,
+    region: { ...createTrigger().region, ...(t.region || {}) },
   }));
 
   p.userEffects = Array.isArray(raw.userEffects) ? raw.userEffects : [];

@@ -20,8 +20,18 @@ it maps shapes to projectors and runs programmable effects on them.
   draw on the camera picture and it appears on the right part of the house.
 - **Draw over the real view.** Trace windows, the door, the roofline and the
   gutter directly on the camera image.
-- **Effects.** Around forty built in — blood drips, lightning, fire, candlelit
-  windows, figures moving behind glass, fog, snow, Santa, icicles, fairy lights.
+- **Effects.** Around fifty built in — blood drips, lightning, fire, candlelit
+  windows, figures moving behind glass, bats, rain, searchlights, fog, snow,
+  Santa, icicles, fairy lights, fireworks.
+- **A proper look.** Bloom, filmic highlight roll-off and colour grading are
+  applied after everything, by every projector identically. This is the
+  difference between light that appears to fall on brickwork and shapes that
+  look stuck to it.
+- **It reacts.** Point a motion trigger at the path and the house does something
+  when somebody walks up it — jump to a scene, play a sound, then go back to
+  what it was doing.
+- **It runs itself.** A nightly schedule turns the show on at dusk and off at
+  bedtime, every night, without you going near the laptop.
 - **Paths, not just areas.** Any traced line carries an evenly-spaced path, so
   chases, light strings, comets and text can travel round a window frame or
   along a roofline at constant speed.
@@ -49,7 +59,8 @@ it maps shapes to projectors and runs programmable effects on them.
    tool for rooflines and gutters. Tag each shape (`window`, `door`, `roof`…) so
    effects can target groups rather than individual shapes.
 6. **Effects → Halloween starter** (or Christmas). That builds a complete look
-   out of what you have tagged. Then take it apart and make it yours.
+   out of what you have tagged, grading included. Then take it apart and make it
+   yours.
 7. **Export** once the alignment is right. That JSON file is your backup.
 
 ## How the alignment works
@@ -108,6 +119,75 @@ crossing a short edge as a long one. Text can follow it too: set Placement to
 **Stagger** on a layer offsets each targeted shape a little further back in time.
 Point one Pulse layer at the `window` tag, add half a second of stagger, and the
 windows light in sequence rather than together.
+
+## The look
+
+Everything an effect draws goes through one post-processing stage before it
+reaches the wall, in the **Look** panel:
+
+- **Bloom** — bright areas spill light into their surroundings, using a mip
+  chain so the halo is wide and smooth rather than a tight ring. Real light
+  spills; without this, every projected edge reads as a cutout.
+- **Filmic roll-off** — stacked layers and lightning routinely push past white.
+  Clipping turns those into flat blobs; a filmic curve keeps their shape and
+  colour.
+- **Exposure, contrast, saturation, temperature, gamma** — applied globally, so
+  you can push a whole show warm and moody without touching forty sliders.
+
+Six starting looks are provided (Neutral, Haunted, Ember, Frost, Saturated,
+Flat). **Flat** switches the whole stage off, which is what you want while
+checking alignment.
+
+Contrast and gamma matter more here than in most rendering, because a projector
+cannot emit darkness: whatever grey it puts in the "black" parts of the frame
+lands on your brickwork and greys the whole wall. Crushing the low end is how
+you get the surrounding wall to disappear.
+
+Per layer there is also a **Softness** control, which blurs that layer alone —
+useful when a hard-edged fill looks like a sticker rather than like light.
+
+## Triggers
+
+A trigger jumps to a scene, optionally plays a sound, holds it for a few
+seconds, then puts back whatever was playing. That last part is what makes it a
+scare rather than a scene change: the ambient loop resumes on its own and the
+next group gets the same surprise.
+
+| Source | Fires when |
+| --- | --- |
+| **Motion** | Something moves in a region of the camera view. |
+| **Key** | You press a key. |
+| **Timer** | On an interval, with randomness so it doesn't become predictable. |
+| **Manual** | Only when you press the button. |
+
+### Getting motion triggers right
+
+The camera is pointed at a building you are actively projecting onto, so the
+fastest-moving thing in frame is your own show. Three things stop that firing
+the trigger constantly, and one of them is your choice:
+
+1. **Watch ground your projectors don't light** — the path, the drive, the gate.
+   Aimed at the house itself it will fire on your own effects.
+2. The background model adapts continuously, so anything that changes slowly or
+   repeats becomes "normal" within a few seconds. A parked car stops registering.
+3. A change covering nearly the whole region is treated as a light switching on,
+   not a person, and re-baselines instead of firing.
+
+The Triggers panel shows a live reading of how much of the region is moving and
+the level it has to beat, which is the only sane way to aim one.
+
+**Sounds** are imported into the media library like anything else, and play from
+the control tab only — projector tabs usually drive displays with no speakers,
+and four copies a few milliseconds apart sounds like a flanger, not a thunderclap.
+
+## Running it every night
+
+**Setup → Nightly schedule** gives on/off times and which days. It drives the
+same blackout the <kbd>B</kbd> key does, so a scheduled "off" leaves the
+projectors awake and aligned — they simply stop emitting. Windows that end
+before they start run past midnight, and the day filter applies to the day the
+window opened, so a Friday 20:00–01:00 slot is still running at half past
+midnight on Saturday.
 
 ## Modulating parameters
 
@@ -205,8 +285,8 @@ cycle test patterns.
 
 | | |
 | --- | --- |
-| Shapes, alignment, effects, scenes | `localStorage` — small, and the thing worth keeping |
-| Video, images, the traced camera still | IndexedDB — too big for `localStorage`, and shared across tabs so projector tabs can read the same files |
+| Shapes, alignment, effects, scenes, triggers, schedule | `localStorage` — small, and the thing worth keeping |
+| Video, images, sounds, the traced camera still | IndexedDB — too big for `localStorage`, and shared across tabs so projector tabs can read the same files |
 
 Nothing is uploaded anywhere. Clearing site data deletes it all, so **Export**
 once your alignment is right.
@@ -218,10 +298,12 @@ Needs `BroadcastChannel`, `getUserMedia` and WebGL. Camera access requires a
 secure context, which GitHub Pages provides.
 
 Performance depends on your GPU. Each projector tab uploads one frame-sized
-texture per frame and warps it, which is cheap on real hardware. If a tab
-struggles, drop **Render detail** in that projector's inspector — it trades
+texture per frame, builds a small bloom chain from it and warps the result,
+which is cheap on real hardware. If a tab struggles, drop **Render detail** in
+that projector's inspector, or turn bloom down in **Look** — both trade
 sharpness for frame rate. The projector status panel (<kbd>I</kbd>) shows the
-live frame rate and buffer size.
+live frame rate and buffer size. If the driver refuses the bloom render targets,
+bloom is skipped and everything else carries on.
 
 ## Running locally
 
@@ -243,8 +325,14 @@ including an end-to-end calibration run against a simulated projector and
 camera:
 
 ```bash
-node test/geometry.test.mjs
+node test/geometry.test.mjs   # homography, marker detection, region and mesh maths
+node test/runtime.test.mjs    # motion detection, trigger gating, scheduling, grading
 ```
+
+The motion tests are worth a look if you plan to rely on triggers: they cover a
+person walking into frame, a parked car fading into the background, and a porch
+light coming on, which are the three cases that decide whether the feature is
+usable in a real garden.
 
 ## Layout
 
@@ -253,15 +341,16 @@ index.html          control tab
 projector.html      output tab, one per projector
 js/core/            project model, storage, cross-tab bus, maths, clock, modulation
 js/effects/         effect registry and the built-in library
-js/render/          world renderer (2D) and the projective warp (WebGL)
-js/control/         camera, calibration, stage editing, panels, inspector
+js/render/          world renderer (2D), projective warp and post-processing (WebGL)
+js/control/         camera, calibration, motion, sound, triggers, schedule, UI
 js/projector/       the output tab
-test/               geometry and calibration tests (plain Node, no dependencies)
+test/               plain Node tests, no dependencies
 ```
 
-The two interesting files are `js/render/warp.js`, which explains how the
-perspective-correct warp works, and `js/control/calibration.js`, which explains
-the structured-light alignment.
+The interesting files are `js/render/warp.js`, which explains how the
+perspective-correct warp works, `js/render/postfx.js` for the bloom and grading,
+`js/control/calibration.js` for the structured-light alignment, and
+`js/control/motion.js` for how the house decides somebody is there.
 
 ## Licence
 

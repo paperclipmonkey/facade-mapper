@@ -18,6 +18,7 @@ export function renderInspector(container, app) {
   else if (type === 'layer') renderLayer(container, app, id);
   else if (type === 'projector') renderProjector(container, app, id);
   else if (type === 'scene') renderScene(container, app, id);
+  else if (type === 'trigger') renderTrigger(container, app, id);
   else {
     container.appendChild(
       el('p', {
@@ -291,6 +292,26 @@ function renderLayer(container, app, id) {
   });
   blendRow.append(el('div', { class: 'param-control' }, [blendSelect]), el('span'));
   container.appendChild(blendRow);
+
+  container.appendChild(
+    paramRow(
+      { key: 'softness', type: 'range', label: 'Softness', min: 0, max: 60, step: 0.5, default: 0 },
+      layer.softness ?? 0,
+      null,
+      {
+        onChange: (value) => {
+          layer.softness = value;
+          app.commitLive();
+        },
+      }
+    )
+  );
+  container.appendChild(
+    el('p', {
+      class: 'panel-note',
+      text: 'Softness blurs this layer alone. Use it when a hard-edged fill reads as a sticker rather than as light.',
+    })
+  );
 
   container.appendChild(
     paramRow(
@@ -780,4 +801,212 @@ function renderScene(container, app, id) {
   });
 
   container.appendChild(el('div', { class: 'panel-actions' }, [recapture, apply, remove]));
+}
+
+/* ------------------------------------------------------------------ *
+ * Triggers
+ * ------------------------------------------------------------------ */
+
+function renderTrigger(container, app, id) {
+  const trigger = app.project.triggers.find((t) => t.id === id);
+  if (!trigger) return;
+
+  container.appendChild(
+    nameField(trigger.name, (value) => {
+      app.pushUndo();
+      trigger.name = value;
+      app.commit();
+    })
+  );
+
+  const fire = el('button', { type: 'button', class: 'btn small primary', text: 'Fire it now' });
+  fire.addEventListener('click', () => app.fireTrigger(trigger.id));
+  container.appendChild(el('div', { class: 'panel-actions' }, [fire]));
+
+  container.appendChild(
+    checkbox('Armed', trigger.enabled !== false, (checked) => {
+      trigger.enabled = checked;
+      app.commitLive();
+      app.refreshPanels();
+    })
+  );
+
+  /* --- what sets it off --- */
+
+  container.appendChild(heading('Fires on'));
+  const sourceRow = el('div', { class: 'field' }, [el('span', { text: 'Source' })]);
+  const sourceSelect = el('select');
+  for (const [value, label] of [
+    ['motion', 'Motion in the camera'],
+    ['hotkey', 'A key press'],
+    ['timer', 'A timer'],
+    ['manual', 'Only when I press the button'],
+  ]) {
+    sourceSelect.appendChild(el('option', { value, text: label, selected: value === trigger.source }));
+  }
+  sourceSelect.addEventListener('change', () => {
+    app.pushUndo();
+    trigger.source = sourceSelect.value;
+    app.commit();
+    app.refreshInspector();
+  });
+  sourceRow.appendChild(sourceSelect);
+  container.appendChild(sourceRow);
+
+  if (trigger.source === 'motion') {
+    container.appendChild(
+      el('p', {
+        class: 'panel-note',
+        text:
+          'Watch part of the camera view that your projectors do not light — the path, the drive, the gate. Aimed at the house itself it will fire on your own effects.',
+      })
+    );
+
+    for (const [key, label] of [['x', 'Region left'], ['y', 'Region top'], ['w', 'Region width'], ['h', 'Region height']]) {
+      container.appendChild(
+        paramRow({ key, type: 'range', label, min: 0, max: 1, step: 0.005, default: 0.5 }, trigger.region?.[key] ?? 0.5, null, {
+          onChange: (value) => {
+            trigger.region = trigger.region || {};
+            trigger.region[key] = value;
+            app.commitLive();
+          },
+        })
+      );
+    }
+
+    container.appendChild(
+      paramRow({ key: 'sensitivity', type: 'range', label: 'Sensitivity', min: 0, max: 1, step: 0.01, default: 0.5 }, trigger.sensitivity ?? 0.5, null, {
+        onChange: (value) => {
+          trigger.sensitivity = value;
+          app.commitLive();
+        },
+      })
+    );
+    container.appendChild(
+      el('p', {
+        class: 'panel-note',
+        text: 'The Triggers panel shows a live reading of how much of the region is moving, and the level it has to beat.',
+      })
+    );
+  }
+
+  if (trigger.source === 'hotkey') {
+    const keyRow = el('div', { class: 'field' }, [el('span', { text: 'Key' })]);
+    const keyInput = el('input', { type: 'text', value: trigger.key || '', maxlength: '1' });
+    keyInput.addEventListener('change', () => {
+      app.pushUndo();
+      trigger.key = keyInput.value.slice(0, 1).toLowerCase();
+      app.commit();
+    });
+    keyRow.appendChild(keyInput);
+    container.appendChild(keyRow);
+    container.appendChild(
+      el('p', { class: 'panel-note', text: 'Avoid 1–9 (scene hotkeys) and the tool keys V, P, L, R, C, B.' })
+    );
+  }
+
+  if (trigger.source === 'timer') {
+    container.appendChild(
+      paramRow({ key: 'every', type: 'range', label: 'Every (s)', min: 5, max: 1800, step: 5, default: 180 }, trigger.every ?? 180, null, {
+        onChange: (value) => {
+          trigger.every = value;
+          app.commitLive();
+        },
+      })
+    );
+    container.appendChild(
+      paramRow({ key: 'jitter', type: 'range', label: 'Randomness', min: 0, max: 1, step: 0.01, default: 0.5 }, trigger.jitter ?? 0.5, null, {
+        onChange: (value) => {
+          trigger.jitter = value;
+          app.commitLive();
+        },
+      })
+    );
+    container.appendChild(
+      el('p', { class: 'panel-note', text: 'Randomness spreads the firing around the interval so it does not become predictable.' })
+    );
+  }
+
+  /* --- what it does --- */
+
+  container.appendChild(heading('Does this'));
+
+  const sceneRow = el('div', { class: 'field' }, [el('span', { text: 'Go to scene' })]);
+  const sceneSelect = el('select');
+  sceneSelect.appendChild(el('option', { value: '', text: '— none —' }));
+  for (const scene of app.project.scenes) {
+    sceneSelect.appendChild(el('option', { value: scene.id, text: scene.name, selected: scene.id === trigger.sceneId }));
+  }
+  sceneSelect.addEventListener('change', () => {
+    app.pushUndo();
+    trigger.sceneId = sceneSelect.value || null;
+    app.commit();
+  });
+  sceneRow.appendChild(sceneSelect);
+  container.appendChild(sceneRow);
+
+  if (!app.project.scenes.length) {
+    container.appendChild(
+      el('p', { class: 'panel-note', text: 'Save a scene first — build the scare you want, then Scenes > Save current as scene.' })
+    );
+  }
+
+  const soundRow = el('div', { class: 'field' }, [el('span', { text: 'Sound' })]);
+  const soundSelect = el('select');
+  soundSelect.appendChild(el('option', { value: '', text: '— none —' }));
+  for (const entry of (app.project.media || []).filter((m) => m.kind === 'audio')) {
+    soundSelect.appendChild(el('option', { value: entry.id, text: entry.name, selected: entry.id === trigger.sound }));
+  }
+  soundSelect.addEventListener('change', () => {
+    app.pushUndo();
+    trigger.sound = soundSelect.value || null;
+    app.commit();
+  });
+  soundRow.appendChild(soundSelect);
+  container.appendChild(soundRow);
+
+  container.appendChild(
+    paramRow({ key: 'soundVolume', type: 'range', label: 'Volume', min: 0, max: 2, step: 0.01, default: 1 }, trigger.soundVolume ?? 1, null, {
+      onChange: (value) => {
+        trigger.soundVolume = value;
+        app.commitLive();
+      },
+    })
+  );
+
+  container.appendChild(
+    paramRow({ key: 'hold', type: 'range', label: 'Hold (s)', min: 0, max: 60, step: 0.5, default: 6 }, trigger.hold ?? 6, null, {
+      onChange: (value) => {
+        trigger.hold = value;
+        app.commitLive();
+      },
+    })
+  );
+  container.appendChild(
+    el('p', {
+      class: 'panel-note',
+      text: 'After the hold it returns to whatever was playing. Set it to 0 to stay on the new scene.',
+    })
+  );
+
+  container.appendChild(
+    paramRow({ key: 'cooldown', type: 'range', label: 'Cooldown (s)', min: 0, max: 300, step: 1, default: 20 }, trigger.cooldown ?? 20, null, {
+      onChange: (value) => {
+        trigger.cooldown = value;
+        app.commitLive();
+      },
+    })
+  );
+  container.appendChild(
+    el('p', { class: 'panel-note', text: 'Minimum gap between firings, so one group of visitors gets one scare.' })
+  );
+
+  const remove = el('button', { type: 'button', class: 'btn small danger', text: 'Delete trigger' });
+  remove.addEventListener('click', () => {
+    app.pushUndo();
+    app.project.triggers = app.project.triggers.filter((t) => t.id !== trigger.id);
+    app.select(null);
+    app.commit();
+  });
+  container.appendChild(el('div', { class: 'panel-actions' }, [remove]));
 }

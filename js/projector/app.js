@@ -437,6 +437,9 @@ function frame(now) {
       feather: projector.blend,
       gamma: projector.blend?.gamma ?? 1.8,
       brightness: projector.brightness ?? 1,
+      // Grading lives on the project, not the projector, so every output
+      // applies the same curve and overlapping projectors still match.
+      grade: project.settings?.grade,
     });
   } catch (err) {
     reportError(`Warp failed: ${err.message}`);

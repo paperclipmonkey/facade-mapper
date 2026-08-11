@@ -82,6 +82,63 @@ export const HELP_HTML = `
   part its own projector.
 </p>
 
+<h2>The look</h2>
+<p>
+  Everything an effect draws goes through one post-processing stage before it reaches the wall,
+  set in the <strong>Look</strong> panel. Bloom spreads light out of bright areas; a filmic curve
+  rolls off anything past white so stacked layers keep their shape instead of clipping to flat
+  blobs; and exposure, contrast, saturation and temperature grade the whole show at once.
+</p>
+<p>
+  Contrast and gamma matter more here than in ordinary rendering, because a projector cannot emit
+  darkness. Whatever grey it puts in the black parts of the frame lands on your brickwork and greys
+  the whole wall. Crushing the low end is how the surrounding wall disappears.
+</p>
+<p>
+  Six looks are supplied. <strong>Flat</strong> switches the stage off entirely, which is what you
+  want while checking alignment. Each layer also has its own <strong>Softness</strong>, which blurs
+  that layer alone — useful when a hard-edged fill reads as a sticker rather than as light.
+</p>
+
+<h2>Triggers</h2>
+<p>
+  A trigger jumps to a scene, optionally plays a sound, holds it for a few seconds, then puts back
+  whatever was playing. That last part is what makes it a scare rather than a scene change: the
+  ambient loop resumes on its own and the next group gets the same surprise.
+</p>
+<table>
+  <tr><th>Motion</th><td>Something moves in a region of the camera view.</td></tr>
+  <tr><th>Key</th><td>You press a key.</td></tr>
+  <tr><th>Timer</th><td>On an interval, with randomness so it does not become predictable.</td></tr>
+  <tr><th>Manual</th><td>Only when you press the button.</td></tr>
+</table>
+<h3>Aiming a motion trigger</h3>
+<p>
+  The camera is pointed at a building you are actively projecting onto, so the fastest-moving thing
+  in frame is your own show. <strong>Watch ground your projectors do not light</strong> — the path,
+  the drive, the gate. The background model adapts continuously, so a parked car stops registering
+  within seconds, and a change covering nearly the whole region is treated as a light switching on
+  rather than a person.
+</p>
+<p>
+  The Triggers panel shows a live reading of how much of the region is moving and the level it has
+  to beat. That is the only sane way to aim one.
+</p>
+<p class="muted">
+  Sounds are imported into the media library like anything else and play from this tab only —
+  projector tabs usually drive displays with no speakers, and four copies a few milliseconds apart
+  sounds like a flanger rather than a thunderclap.
+</p>
+
+<h2>Running it every night</h2>
+<p>
+  <strong>Setup &rarr; Nightly schedule</strong> gives on and off times and which days. It drives
+  the same blackout the <kbd>B</kbd> key does, so a scheduled "off" leaves the projectors awake and
+  aligned — they simply stop emitting. A window that ends before it starts runs past midnight, and
+  the day filter applies to the day it opened: a Friday 20:00–01:00 slot is still going at half past
+  midnight on Saturday.
+</p>
+
 <h2>Multiple projectors</h2>
 <p>
   Every tab shares one project through the browser, so the control tab is the only place you edit.
@@ -161,6 +218,9 @@ export const HELP_HTML = `
   <tr><th><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></th><td>Undo / redo</td></tr>
 </table>
 <p>In a projector tab: <kbd>F</kbd> fullscreen, <kbd>I</kbd> status, <kbd>T</kbd> cycle test patterns.</p>
+<p class="muted">
+  Any other single key can be bound to a trigger. Avoid the ones above and 1–9, which are taken.
+</p>
 
 <h2>Getting a good alignment</h2>
 <ul>

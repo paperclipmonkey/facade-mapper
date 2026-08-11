@@ -36,10 +36,12 @@ import {
   createLayer,
   createScene,
   createShape,
+  createTrigger,
   migrateProject,
-  worldSize,
 } from '../core/state.js';
 import { createWorldRenderer } from '../render/worldRenderer.js';
+import { createWarpRenderer } from '../render/warp.js';
+import { GRADE_PRESETS, DEFAULT_GRADE } from '../render/postfx.js';
 import { createMediaPool, importMediaFile, removeMedia } from '../core/media.js';
 import { loadUserEffects, listByCategory, defaultParams, getEffect, getCompileErrors } from '../effects/registry.js';
 import { captureScene, activateScene as applyScene, tickPlaylist, transitionProgress } from '../core/scenes.js';
@@ -57,8 +59,14 @@ import {
   renderSceneButtons,
   renderMediaList,
   renderStorageInfo,
+  renderTriggerList,
+  renderMotionStatus,
 } from './panels.js';
-import { el, clear, toast } from './ui.js';
+import { createMotionDetector } from './motion.js';
+import { createSoundPlayer } from './sound.js';
+import { createTriggerRuntime } from './triggers.js';
+import { scheduleWantsOn, describeSchedule } from './schedule.js';
+import { el, clear, toast, paramRow } from './ui.js';
 import { HELP_HTML, EFFECT_TEMPLATE } from './help.js';
 import { PRESETS, applyPreset } from './presets.js';
 
@@ -87,6 +95,13 @@ const app = {
   bus,
 };
 
+const sound = createSoundPlayer({ onError: (m) => toast(m, 'bad') });
+const motion = createMotionDetector();
+let triggerRuntime = null;
+/** Motion is measured a few times a second, not every frame — it costs a readback. */
+let lastMotionAt = 0;
+let scheduleState = null;
+
 let audioAnalyser = null;
 let audioLevels = { level: 0, low: 0, mid: 0, high: 0 };
 let stillImage = null;
@@ -104,8 +119,19 @@ const UNDO_LIMIT = 60;
  * Preview rendering
  * ------------------------------------------------------------------ */
 
+/**
+ * The preview runs the full pipeline, not a simplified one.
+ *
+ * `previewCanvas` is the 2D world render; `previewGL` warps it with an identity
+ * homography and applies the same bloom and grade a projector would. Anything
+ * less and the preview would lie about the look you are tuning.
+ */
 const previewCanvas = document.createElement('canvas');
 const previewCtx = previewCanvas.getContext('2d');
+const previewGL = document.createElement('canvas');
+let previewWarp = null;
+let previewWarpFailed = false;
+
 const worldRenderer = createWorldRenderer({
   mediaPool,
   camera: () => (camera.isRunning() ? camera.video : null),
@@ -216,6 +242,7 @@ app.select = (selection) => {
   if (selection?.type === 'shape') switchPanel('shapes');
   else if (selection?.type === 'layer') switchPanel('layers');
   else if (selection?.type === 'projector') switchPanel('projectors');
+  else if (selection?.type === 'trigger') switchPanel('triggers');
   refreshPanels();
   refreshInspector();
   updateStageStatus();
@@ -229,6 +256,21 @@ app.selectedProjector = () => {
 };
 
 app.resetLayerState = (layerId) => worldRenderer.resetLayer(layerId);
+
+app.fireTrigger = (triggerId) => {
+  const trigger = app.project.triggers.find((t) => t.id === triggerId);
+  if (!trigger) return;
+  if (!trigger.sceneId && !trigger.sound) {
+    toast('This trigger has nothing to do yet — give it a scene or a sound.', 'bad');
+    return;
+  }
+  triggerRuntime?.fire(trigger, { manual: true });
+  app.commit();
+};
+
+app.triggerActivity = (id) => triggerRuntime?.activityFor(id) ?? 0;
+app.triggerArmedIn = (id, cooldown) => triggerRuntime?.gate.armedIn(id, cooldown) ?? 0;
+app.motionThreshold = (sensitivity) => triggerRuntime?.gate.threshold(sensitivity) ?? 0.05;
 app.refreshInspector = () => refreshInspector();
 app.refreshPanels = () => refreshPanels();
 app.estimateQuota = estimateQuota;
@@ -245,7 +287,10 @@ function refreshPanels() {
   renderPlaylist($('playlist'), app);
   renderSceneButtons($('sceneButtons'), app);
   renderMediaList($('mediaList'), app);
+  renderTriggerList($('triggerList'), app);
+  refreshLookPanel();
   renderStorageInfo($('storageDetail'), app);
+  updateScheduleNote();
   updateCalibrationNote();
   // The "point a camera at the house" placeholder covers the stage, so it has to
   // clear as soon as there is anything to look at.
@@ -553,6 +598,7 @@ async function addMediaFiles(files) {
     }
   }
   mediaPool.sync(app.project.media);
+  sound.warm(app.project.media);
   bus.post(MSG.MEDIA, { added: true });
   app.commit();
 }
@@ -745,10 +791,20 @@ function frame() {
   const time = clock.tick();
   $('showTime').textContent = formatTime(time.t);
 
+  // The playlist and trigger runtimes mutate show state on their own. Both need
+  // saving as well as broadcasting, or closing the tab mid-scare would reopen
+  // stuck in it.
   if (tickPlaylist(app.project)) {
+    markDirty();
     broadcast(true);
     renderSceneButtons($('sceneButtons'), app);
     renderSceneList($('sceneList'), app);
+  }
+
+  if (tickTriggers()) {
+    markDirty();
+    broadcast(true);
+    renderSceneButtons($('sceneButtons'), app);
   }
 
   mediaPool.syncPlayback(time.t, time.running);
@@ -770,10 +826,11 @@ function frame() {
       pixelSize: { w: previewCanvas.width, h: previewCanvas.height },
       preview: true,
     });
+    renderPreviewPost(targetW, targetH);
   }
 
   stage.draw({
-    previewCanvas: app.showEffectsPreview ? previewCanvas : null,
+    previewCanvas: app.showEffectsPreview ? (previewWarp ? previewGL : previewCanvas) : null,
     cameraElement: app.cameraVisible && camera.isRunning() ? camera.video : null,
     stillImage: app.cameraVisible ? stillImage : null,
     cameraOpacity: app.cameraOpacity,
@@ -790,6 +847,170 @@ function frame() {
   $('stageCoords').textContent = world ? `${world.x.toFixed(3)}, ${world.y.toFixed(3)}` : '—';
 }
 
+/**
+ * Sample the camera for motion and let the trigger runtime act on it.
+ *
+ * Deliberately not every frame: reading pixels back from the camera stalls the
+ * pipeline, and a person walking up a path is not a sub-100ms event.
+ */
+function tickTriggers() {
+  if (!triggerRuntime) return false;
+  const now = performance.now();
+
+  let sample = null;
+  const wantsMotion = (app.project.triggers || []).some((t) => t.enabled && t.source === 'motion');
+
+  if (wantsMotion && camera.isRunning() && now - lastMotionAt > 120) {
+    lastMotionAt = now;
+    const frame = camera.captureLuma();
+    if (frame) {
+      // One frame, measured per trigger region — several triggers can watch
+      // different parts of the same view without extra readbacks.
+      const readings = new Map();
+      for (const trigger of app.project.triggers) {
+        if (!trigger.enabled || trigger.source !== 'motion') continue;
+        const result = motion.update(frame.luma, frame.width, frame.height, trigger.region);
+        readings.set(trigger.id, result.ready ? result.activity : null);
+      }
+      sample = { activityFor: (trigger) => readings.get(trigger.id) ?? null };
+    }
+  }
+
+  return triggerRuntime.tick(sample);
+}
+
+/**
+ * Apply the nightly schedule.
+ *
+ * Only acts on transitions, so pressing B mid-evening isn't immediately undone
+ * by the scheduler on the next tick.
+ */
+function tickSchedule() {
+  const wanted = scheduleWantsOn(app.project.schedule);
+  if (wanted === null) {
+    scheduleState = null;
+    return;
+  }
+  if (scheduleState === wanted) return;
+
+  scheduleState = wanted;
+  app.project.settings.blackout = !wanted;
+  $('btnBlackout').classList.toggle('active', !wanted);
+  app.commitLive();
+  toast(wanted ? 'Scheduled: show on.' : 'Scheduled: show off for the night.', 'good');
+}
+
+const GRADE_CONTROLS = [
+  { key: 'bloom', label: 'Bloom', min: 0, max: 2, step: 0.01, note: 'How much the halo adds. This is the single biggest look control.' },
+  { key: 'bloomThreshold', label: 'Bloom from', min: 0, max: 1.5, step: 0.01, note: 'Brightness at which things start to glow. Lower = more of the frame blooms.' },
+  { key: 'bloomKnee', label: 'Bloom knee', min: 0.01, max: 1, step: 0.01, note: 'Softens the threshold so slow fades do not pop into bloom.' },
+  { key: 'bloomRadius', label: 'Bloom spread', min: 0.2, max: 4, step: 0.05 },
+  { key: 'exposure', label: 'Exposure', min: 0.2, max: 3, step: 0.01 },
+  { key: 'contrast', label: 'Contrast', min: 0.4, max: 2.5, step: 0.01 },
+  { key: 'saturation', label: 'Saturation', min: 0, max: 2.5, step: 0.01 },
+  { key: 'temperature', label: 'Temperature', min: -1, max: 1, step: 0.01, note: 'Negative is colder, positive warmer.' },
+  { key: 'gamma', label: 'Gamma', min: 0.4, max: 2.5, step: 0.01 },
+];
+
+function refreshLookPanel() {
+  const presets = $('gradePresets');
+  const controls = $('gradeControls');
+  if (!presets || !controls) return;
+  const grade = app.project.settings.grade || (app.project.settings.grade = { ...DEFAULT_GRADE });
+
+  clear(presets);
+  for (const preset of GRADE_PRESETS) {
+    const button = el('button', { type: 'button', class: 'btn small', text: preset.name, title: preset.description });
+    button.addEventListener('click', () => {
+      app.pushUndo();
+      Object.assign(app.project.settings.grade, preset.values);
+      app.commit();
+      refreshLookPanel();
+      toast(`Look: ${preset.name}`);
+    });
+    presets.appendChild(button);
+  }
+
+  clear(controls);
+  for (const def of GRADE_CONTROLS) {
+    controls.appendChild(
+      paramRow({ ...def, type: 'range', default: DEFAULT_GRADE[def.key] }, grade[def.key] ?? DEFAULT_GRADE[def.key], null, {
+        onChange: (value) => {
+          grade[def.key] = value;
+          app.commitLive();
+        },
+      })
+    );
+    if (def.note) controls.appendChild(el('p', { class: 'panel-note', text: def.note }));
+  }
+
+  const tonemap = el('input', { type: 'checkbox' });
+  tonemap.checked = grade.tonemap !== false;
+  tonemap.addEventListener('change', () => {
+    app.pushUndo();
+    grade.tonemap = tonemap.checked;
+    app.commit();
+  });
+  controls.appendChild(el('label', { class: 'inline-check' }, [tonemap, 'Filmic highlight roll-off']));
+  controls.appendChild(
+    el('p', {
+      class: 'panel-note',
+      text: 'With this off, anything brighter than white clips flat. With it on, stacked layers and lightning keep their shape.',
+    })
+  );
+}
+
+function updateScheduleNote() {
+  const node = $('scheduleNote');
+  if (node) node.textContent = describeSchedule(app.project.schedule);
+}
+
+function syncScheduleDays() {
+  const days = app.project.schedule?.days || [];
+  for (const button of document.querySelectorAll('#scheduleDays .tag-toggle')) {
+    button.classList.toggle('on', days.includes(Number(button.dataset.day)));
+  }
+  updateScheduleNote();
+}
+
+/**
+ * Push the preview through bloom and grading with an identity warp.
+ *
+ * Falls back to the plain 2D buffer if WebGL is unavailable — the preview loses
+ * the glow but editing still works, which is the right trade.
+ */
+function renderPreviewPost(width, height) {
+  if (previewWarpFailed) return;
+
+  if (previewGL.width !== width || previewGL.height !== height) {
+    previewGL.width = width;
+    previewGL.height = height;
+  }
+
+  if (!previewWarp) {
+    try {
+      previewWarp = createWarpRenderer(previewGL, { preserveDrawingBuffer: true });
+    } catch (err) {
+      previewWarpFailed = true;
+      console.warn('[preview] falling back to ungraded preview:', err.message);
+      return;
+    }
+  }
+
+  previewWarp.buildMesh({
+    H: null,
+    region: { x: 0, y: 0, w: 1, h: 1 },
+    mesh: null,
+    subdivisions: 2,
+  });
+  previewWarp.draw(previewCanvas, {
+    feather: null,
+    gamma: 1,
+    brightness: 1,
+    grade: app.project.settings?.grade,
+  });
+}
+
 /* ------------------------------------------------------------------ *
  * Wiring
  * ------------------------------------------------------------------ */
@@ -801,6 +1022,10 @@ function syncControlsFromProject() {
   $('showSafeArea').checked = app.project.settings.showSafeArea !== false;
   $('audioEnabled').checked = !!app.project.settings.audioEnabled;
   $('audioGain').value = app.project.settings.audioGain ?? 1;
+  $('scheduleEnabled').checked = !!app.project.schedule?.enabled;
+  $('scheduleOn').value = app.project.schedule?.on ?? '18:00';
+  $('scheduleOff').value = app.project.schedule?.off ?? '22:30';
+  syncScheduleDays();
   $('playlistLoop').checked = app.project.show?.loop !== false;
   $('playlistShuffle').checked = !!app.project.show?.shuffle;
   $('btnBlackout').classList.toggle('active', !!app.project.settings.blackout);
@@ -982,7 +1207,7 @@ function wire() {
       toast(
         result.missing.length
           ? `Added ${result.added} effects. Nothing is tagged ${result.missing.map((t) => `#${t}`).join(' or ')} yet, so those layers have nothing to draw on.`
-          : `Added ${result.added} effects and saved them as the "${result.scene.name}" scene.`,
+          : `Added ${result.added} effects, the "${result.look}" look, and saved it all as the "${result.scene.name}" scene.`,
         result.missing.length ? 'bad' : 'good'
       );
     });
@@ -1046,6 +1271,69 @@ function wire() {
       broadcastClock();
     }
     app.commit();
+  });
+
+  /* --- Triggers --- */
+
+  $('btnAddTrigger').addEventListener('click', () => {
+    app.pushUndo();
+    const trigger = createTrigger({
+      name: `Trigger ${(app.project.triggers?.length || 0) + 1}`,
+      sceneId: app.project.scenes[0]?.id ?? null,
+    });
+    app.project.triggers = app.project.triggers || [];
+    app.project.triggers.push(trigger);
+    app.select({ type: 'trigger', id: trigger.id });
+    app.commit();
+    if (!app.project.scenes.length) {
+      toast('Build the scare you want, save it as a scene, then point this trigger at it.');
+    }
+  });
+
+  $('btnDeleteTrigger').addEventListener('click', () => {
+    if (app.selection.type !== 'trigger') return;
+    app.pushUndo();
+    app.project.triggers = app.project.triggers.filter((t) => t.id !== app.selection.id);
+    app.select(null);
+    app.commit();
+  });
+
+  /* --- Schedule --- */
+
+  $('scheduleEnabled').addEventListener('change', (ev) => {
+    app.project.schedule.enabled = ev.target.checked;
+    // Re-evaluate immediately rather than waiting for the next minute tick.
+    scheduleState = null;
+    app.commit();
+    if (!ev.target.checked) {
+      app.project.settings.blackout = false;
+      $('btnBlackout').classList.remove('active');
+      app.commitLive();
+    }
+  });
+
+  for (const [id, key] of [['scheduleOn', 'on'], ['scheduleOff', 'off']]) {
+    $(id).addEventListener('change', (ev) => {
+      app.pushUndo();
+      app.project.schedule[key] = ev.target.value.trim();
+      scheduleState = null;
+      app.commit();
+    });
+  }
+
+  const dayWrap = $('scheduleDays');
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  dayNames.forEach((name, index) => {
+    const button = el('button', { type: 'button', class: 'tag-toggle', text: name, dataset: { day: String(index) } });
+    button.addEventListener('click', () => {
+      app.pushUndo();
+      const days = app.project.schedule.days || [];
+      app.project.schedule.days = days.includes(index) ? days.filter((d) => d !== index) : [...days, index];
+      scheduleState = null;
+      app.commit();
+      syncScheduleDays();
+    });
+    dayWrap.appendChild(button);
   });
 
   /* --- Media --- */
@@ -1309,6 +1597,11 @@ function onKeyDown(ev) {
       if (/^[1-9]$/.test(ev.key)) {
         const scene = app.project.scenes.find((s) => String(s.hotkey) === ev.key);
         if (scene) app.activateScene(scene.id);
+        return;
+      }
+      // Anything else falls through to the trigger hotkeys.
+      if (ev.key.length === 1 && triggerRuntime?.fireByKey(ev.key)) {
+        app.commit();
       }
     }
   }
@@ -1384,7 +1677,17 @@ async function boot() {
     console.warn(`[custom effect ${id}]`, message);
   }
 
+  triggerRuntime = createTriggerRuntime({
+    app,
+    sound,
+    onFired: (trigger) => {
+      toast(`${trigger.name} fired`, 'good');
+      renderSceneButtons($('sceneButtons'), app);
+    },
+  });
+
   mediaPool.sync(app.project.media || []);
+  sound.warm(app.project.media || []);
   await loadStill();
   await refreshCameraDevices();
 
@@ -1410,6 +1713,17 @@ async function boot() {
   // Projector tabs derive time from the wall clock, so they need reminding of
   // the transport state whenever it might have changed underneath them.
   setInterval(broadcastClock, 3000);
+
+  // The schedule only needs checking about as often as the minute changes.
+  tickSchedule();
+  setInterval(tickSchedule, 20000);
+
+  // Motion readouts are only worth redrawing while you are looking at them.
+  setInterval(() => {
+    if (document.querySelector('.panel-page[data-page="triggers"]')?.classList.contains('active')) {
+      renderMotionStatus($('motionStatus'), app);
+    }
+  }, 400);
 
   requestAnimationFrame(frame);
 }

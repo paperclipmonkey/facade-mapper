@@ -15,6 +15,7 @@
 import { createLayer, createScene } from '../core/state.js';
 import { defaultParams } from '../effects/registry.js';
 import { captureScene } from '../core/scenes.js';
+import { GRADE_PRESETS } from '../render/postfx.js';
 
 /** Build a layer with sensible defaults filled in for anything unspecified. */
 function layer(effect, { name, targets = [], tags = [], params = {}, bindings = {}, ...rest }) {
@@ -35,7 +36,13 @@ const HALLOWEEN = () => [
   }),
   layer('fog', {
     name: 'Ground fog',
+    softness: 6,
     params: { color: '#7a8ba0', density: 0.22, scale: 2.4, speed: 0.04, layers: 3, height: 0.45 },
+  }),
+  layer('embers', {
+    name: 'Drifting embers',
+    opacity: 0.7,
+    params: { color: '#ffb257', color2: '#ff3a1f', count: 70, rise: 30, drift: 18, turbulence: 24, size: 3, twinkle: 0.6, opacity: 0.7 },
   }),
   layer('candle', {
     name: 'Candlelit windows',
@@ -76,6 +83,10 @@ const HALLOWEEN = () => [
     opacity: 0.35,
     params: { color: '#dfe8f5', corner: 'top-left', rings: 6, spokes: 10, width: 1.6, scale: 0.8, spider: true },
   }),
+  layer('bats', {
+    name: 'Bats',
+    params: { color: '#12040f', silhouette: false, count: 12, size: 0.07, speed: 0.16, flap: 7, spread: 0.6, wander: 0.4, direction: 'right', interval: 70, crossing: 9 },
+  }),
   layer('lightning', {
     name: 'Storm',
     params: { color: '#dbe9ff', rate: 5, flash: 0.5, bolt: true, thickness: 5, branches: 4, flickers: 3, duration: 0.5 },
@@ -83,9 +94,9 @@ const HALLOWEEN = () => [
 ];
 
 const CHRISTMAS = () => [
-  layer('wash', {
+  layer('plasma', {
     name: 'Cold night',
-    params: { color: '#04122b', color2: '#000000', blend: 0.3, level: 0.3, vignette: 0.35 },
+    params: { colorA: '#041a3a', colorB: '#0b2f52', colorC: '#1a0b3a', scale: 1.3, speed: 0.05, level: 0.42, resolution: 26, contrast: 1.2 },
   }),
   layer('stars', {
     name: 'Stars',
@@ -145,6 +156,7 @@ export const PRESETS = [
     description:
       'Candlelit windows with something looking out, blood down the door, ground fog and a storm overhead.',
     tagsUsed: ['window', 'door'],
+    grade: 'haunted',
     build: HALLOWEEN,
   },
   {
@@ -153,6 +165,7 @@ export const PRESETS = [
     description:
       'Chasing lights along the roofline, warm windows, icicles, a candy-cane door, snow and a Santa fly-past.',
     tagsUsed: ['roof', 'window', 'door'],
+    grade: 'frost',
     build: CHRISTMAS,
   },
 ];
@@ -175,6 +188,14 @@ export function applyPreset(project, presetId) {
   });
   project.layers.push(...layers);
 
+  // Each preset carries a grade, because half of what makes these looks work is
+  // the bloom and colour treatment rather than the effects themselves.
+  const look = GRADE_PRESETS.find((g) => g.id === preset.grade);
+  if (look) {
+    project.settings = project.settings || {};
+    project.settings.grade = { ...project.settings.grade, ...look.values };
+  }
+
   const present = new Set(project.shapes.flatMap((s) => s.tags || []));
   const missing = preset.tagsUsed.filter((t) => !present.has(t));
 
@@ -186,7 +207,7 @@ export function applyPreset(project, presetId) {
   });
   project.scenes.push(scene);
 
-  return { preset, added: layers.length, missing, scene };
+  return { preset, added: layers.length, missing, scene, look: look?.name ?? null };
 }
 
 function nextFreeHotkey(project) {

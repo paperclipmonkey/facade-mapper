@@ -24,7 +24,9 @@ export async function importMediaFile(file) {
     ? 'video'
     : file.type.startsWith('image')
       ? 'image'
-      : null;
+      : file.type.startsWith('audio')
+        ? 'audio'
+        : null;
   if (!kind) throw new Error(`Unsupported file type: ${file.type || 'unknown'}`);
 
   const id = uid('media');
@@ -43,11 +45,14 @@ export async function importMediaFile(file) {
   };
 
   // Probe dimensions/duration so the UI can show something useful and effects
-  // can letterbox correctly before the element is ready.
-  try {
-    Object.assign(entry, await probe(file, kind));
-  } catch (err) {
-    console.warn('[media] probe failed', file.name, err);
+  // can letterbox correctly before the element is ready. Audio is decoded by
+  // the sound player instead, so it needs nothing here.
+  if (kind !== 'audio') {
+    try {
+      Object.assign(entry, await probe(file, kind));
+    } catch (err) {
+      console.warn('[media] probe failed', file.name, err);
+    }
   }
   return entry;
 }
@@ -97,7 +102,8 @@ export function createMediaPool({ onError } = {}) {
   let manifest = [];
 
   function sync(mediaList) {
-    manifest = mediaList || [];
+    // Audio never becomes a drawable element; control/sound.js owns it.
+    manifest = (mediaList || []).filter((m) => m.kind !== 'audio');
     const wanted = new Set(manifest.map((m) => m.id));
     for (const [id, rec] of entries) {
       if (!wanted.has(id)) {

@@ -108,6 +108,29 @@ function frameShape(world) {
 
 export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
   const geometry = createGeometryCache();
+  /**
+   * Scratch buffer for layers that ask to be softened.
+   *
+   * Blurring by setting ctx.filter around the effect's draw would blur every
+   * individual draw call — hundreds of them for a particle effect, and each one
+   * a separate filter pass. Rendering the layer here first means exactly one
+   * blur per layer regardless of how it is drawn.
+   */
+  let scratch = null;
+  let scratchCtx = null;
+
+  function getScratch(w, h) {
+    if (!scratch) {
+      scratch = document.createElement('canvas');
+      scratchCtx = scratch.getContext('2d');
+    }
+    if (scratch.width !== w || scratch.height !== h) {
+      scratch.width = w;
+      scratch.height = h;
+    }
+    return scratchCtx;
+  }
+
   const instanceState = new Map(); // "layerId:shapeId" -> { state, rng, noise }
   const reportedErrors = new Set();
   let frameShapeCache = null;
@@ -165,7 +188,10 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
     // World pixels -> canvas pixels for this projector's slice of the frame.
     const scaleX = pixelSize.w / (roi.w * world.w);
     const scaleY = pixelSize.h / (roi.h * world.h);
-    g.setTransform(scaleX, 0, 0, scaleY, -roi.x * world.w * scaleX, -roi.y * world.h * scaleY);
+    const worldTransform = [
+      scaleX, 0, 0, scaleY, -roi.x * world.w * scaleX, -roi.y * world.h * scaleY,
+    ];
+    g.setTransform(...worldTransform);
 
     if (frameShapeKey !== `${world.w}x${world.h}`) {
       frameShapeCache = frameShape(world);
@@ -241,27 +267,56 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
           }
         }
 
-        g.save();
-        g.globalAlpha = (layer.opacity ?? 1) * master;
-        g.globalCompositeOperation = layer.blend || 'source-over';
+        // A softened layer is drawn into the scratch buffer at the same world
+        // transform, then composited back through a single blur.
+        const softness = layer.softness || 0;
+        const useScratch = softness > 0 && 'filter' in g;
+        let target = g;
+
+        if (useScratch) {
+          const sg = getScratch(pixelSize.w, pixelSize.h);
+          sg.setTransform(1, 0, 0, 1, 0, 0);
+          sg.clearRect(0, 0, pixelSize.w, pixelSize.h);
+          sg.setTransform(...worldTransform);
+          target = sg;
+          ctx.g = sg;
+        }
+
+        target.save();
+        target.globalAlpha = useScratch ? 1 : (layer.opacity ?? 1) * master;
+        target.globalCompositeOperation = useScratch ? 'source-over' : layer.blend || 'source-over';
         // Reset the drawing state effects tend to assume is fresh.
-        g.lineWidth = 1;
-        g.lineCap = 'butt';
-        g.lineJoin = 'miter';
-        g.textAlign = 'start';
-        g.textBaseline = 'alphabetic';
-        g.setLineDash([]);
-        g.lineDashOffset = 0;
-        g.shadowBlur = 0;
-        g.shadowColor = 'transparent';
-        if ('filter' in g) g.filter = 'none';
+        target.lineWidth = 1;
+        target.lineCap = 'butt';
+        target.lineJoin = 'miter';
+        target.textAlign = 'start';
+        target.textBaseline = 'alphabetic';
+        target.setLineDash([]);
+        target.lineDashOffset = 0;
+        target.shadowBlur = 0;
+        target.shadowColor = 'transparent';
+        if ('filter' in target) target.filter = 'none';
 
         try {
           effect.draw(ctx);
         } catch (err) {
           reportError(layer.id, effect.id, err);
         }
-        g.restore();
+        target.restore();
+
+        if (useScratch) {
+          ctx.g = g;
+          g.save();
+          g.setTransform(1, 0, 0, 1, 0, 0);
+          g.globalAlpha = (layer.opacity ?? 1) * master;
+          g.globalCompositeOperation = layer.blend || 'source-over';
+          // Softness is authored in world pixels so it means the same thing
+          // regardless of the projector's buffer resolution.
+          g.filter = `blur(${(softness * pixelSize.w) / (roi.w * world.w)}px)`;
+          g.drawImage(scratch, 0, 0);
+          g.filter = 'none';
+          g.restore();
+        }
       }
     }
 

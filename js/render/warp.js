@@ -1,5 +1,5 @@
 /**
- * Projective warp.
+ * Projective warp, with bloom and colour grading.
  *
  * The world render is a flat 2D canvas covering some rectangle of camera space.
  * Getting it onto the wall means applying the projector's homography — a
@@ -11,9 +11,29 @@
  * by w during rasterisation, so texture coordinates come out perspective-correct
  * for free, even across a single quad. Subdividing the mesh then costs nothing in
  * accuracy and buys us the optional per-point warp for walls that aren't flat.
+ *
+ * Passes per frame:
+ *   1. upload the world canvas
+ *   2. bright-pass into a quarter-size target
+ *   3. blur it (horizontal, vertical), twice at two scales
+ *   4. warp the mesh, adding bloom and applying the grade (see render/postfx.js)
+ *
+ * Bloom is computed on the *unwarped* source, so it warps along with the image
+ * and two projectors covering the same wall produce identical halos.
  */
 
 import { applyH3, mat3Inverse, applyH, clamp, IDENTITY3 } from '../core/math.js';
+import {
+  FULLSCREEN_VERT,
+  BRIGHTPASS_FRAG,
+  BLUR_FRAG,
+  COMBINE_FRAG,
+  GRADE_GLSL,
+  DEFAULT_GRADE,
+  temperatureTint,
+  createRenderTarget,
+  disposeRenderTarget,
+} from './postfx.js';
 
 const VERT = `
 attribute vec3 aPos;   // x, y in projector NDC; z carries the homography denominator
@@ -29,10 +49,14 @@ const FRAG = `
 precision mediump float;
 varying vec2 vUV;
 uniform sampler2D uTex;
+uniform sampler2D uBloom;
+uniform float uBloomAmount;
 uniform vec2 uResolution;
 uniform vec4 uFeather;   // top, right, bottom, left, in fractions of the output
 uniform float uGamma;
 uniform float uBrightness;
+
+${GRADE_GLSL}
 
 float ramp(float x, float w) {
   return w <= 0.0001 ? 1.0 : clamp(x / w, 0.0, 1.0);
@@ -45,10 +69,16 @@ void main() {
     gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
     return;
   }
-  vec4 c = texture2D(uTex, vUV);
+
+  vec3 c = texture2D(uTex, vUV).rgb;
+  if (uBloomAmount > 0.0) {
+    c += texture2D(uBloom, vUV).rgb * uBloomAmount;
+  }
+  c = applyGrade(c);
 
   // Soft-edge blending is computed in real output pixels, which is what matters
-  // when two projectors overlap on the same wall.
+  // when two projectors overlap on the same wall. It happens after grading so
+  // the fade goes to true black rather than to the graded black point.
   vec2 p = gl_FragCoord.xy / uResolution;
   float f = ramp(1.0 - p.y, uFeather.x)
           * ramp(1.0 - p.x, uFeather.y)
@@ -56,7 +86,7 @@ void main() {
           * ramp(p.x, uFeather.w);
   f = pow(f, uGamma);
 
-  gl_FragColor = vec4(c.rgb * f * uBrightness, 1.0);
+  gl_FragColor = vec4(c * f * uBrightness, 1.0);
 }`;
 
 function compile(gl, type, source) {
@@ -69,6 +99,17 @@ function compile(gl, type, source) {
     throw new Error(`Shader failed to compile: ${log}`);
   }
   return shader;
+}
+
+function link(gl, vertSource, fragSource, label) {
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, vertSource));
+  gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, fragSource));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    throw new Error(`${label} failed to link: ${gl.getProgramInfoLog(program)}`);
+  }
+  return program;
 }
 
 /* ------------------------------------------------------------------ *
@@ -176,34 +217,68 @@ export function sampleMesh(mesh, u, v) {
 
 const DEFAULT_SUBDIVISIONS = 24;
 
-export function createWarpRenderer(canvas) {
+/**
+ * @param {HTMLCanvasElement} canvas
+ * @param {object} [options]
+ *   preserveDrawingBuffer - needed when something will drawImage() this canvas
+ *   into another one, as the control tab's preview does. Costs a little
+ *   performance, so projector outputs leave it off.
+ */
+export function createWarpRenderer(canvas, { preserveDrawingBuffer = false } = {}) {
   const gl =
-    canvas.getContext('webgl', { alpha: false, antialias: true, preserveDrawingBuffer: false }) ||
-    canvas.getContext('experimental-webgl', { alpha: false });
+    canvas.getContext('webgl', { alpha: false, antialias: true, preserveDrawingBuffer }) ||
+    canvas.getContext('experimental-webgl', { alpha: false, preserveDrawingBuffer });
   if (!gl) throw new Error('WebGL is not available in this browser');
 
-  const program = gl.createProgram();
-  gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, VERT));
-  gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, FRAG));
-  gl.linkProgram(program);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    throw new Error(`Warp program failed to link: ${gl.getProgramInfoLog(program)}`);
-  }
-  gl.useProgram(program);
+  const warpProgram = link(gl, VERT, FRAG, 'Warp program');
+  const brightProgram = link(gl, FULLSCREEN_VERT, BRIGHTPASS_FRAG, 'Bright-pass program');
+  const blurProgram = link(gl, FULLSCREEN_VERT, BLUR_FRAG, 'Blur program');
+  const combineProgram = link(gl, FULLSCREEN_VERT, COMBINE_FRAG, 'Combine program');
 
   const loc = {
-    aPos: gl.getAttribLocation(program, 'aPos'),
-    aUV: gl.getAttribLocation(program, 'aUV'),
-    uTex: gl.getUniformLocation(program, 'uTex'),
-    uResolution: gl.getUniformLocation(program, 'uResolution'),
-    uFeather: gl.getUniformLocation(program, 'uFeather'),
-    uGamma: gl.getUniformLocation(program, 'uGamma'),
-    uBrightness: gl.getUniformLocation(program, 'uBrightness'),
+    aPos: gl.getAttribLocation(warpProgram, 'aPos'),
+    aUV: gl.getAttribLocation(warpProgram, 'aUV'),
+    uTex: gl.getUniformLocation(warpProgram, 'uTex'),
+    uBloom: gl.getUniformLocation(warpProgram, 'uBloom'),
+    uBloomAmount: gl.getUniformLocation(warpProgram, 'uBloomAmount'),
+    uResolution: gl.getUniformLocation(warpProgram, 'uResolution'),
+    uFeather: gl.getUniformLocation(warpProgram, 'uFeather'),
+    uGamma: gl.getUniformLocation(warpProgram, 'uGamma'),
+    uBrightness: gl.getUniformLocation(warpProgram, 'uBrightness'),
+    uTint: gl.getUniformLocation(warpProgram, 'uTint'),
+    uExposure: gl.getUniformLocation(warpProgram, 'uExposure'),
+    uContrast: gl.getUniformLocation(warpProgram, 'uContrast'),
+    uSaturation: gl.getUniformLocation(warpProgram, 'uSaturation'),
+    uGradeGamma: gl.getUniformLocation(warpProgram, 'uGradeGamma'),
+    uTonemap: gl.getUniformLocation(warpProgram, 'uTonemap'),
+  };
+
+  const brightLoc = {
+    aPos: gl.getAttribLocation(brightProgram, 'aPos'),
+    uTex: gl.getUniformLocation(brightProgram, 'uTex'),
+    uThreshold: gl.getUniformLocation(brightProgram, 'uThreshold'),
+    uKnee: gl.getUniformLocation(brightProgram, 'uKnee'),
+  };
+  const blurLoc = {
+    aPos: gl.getAttribLocation(blurProgram, 'aPos'),
+    uTex: gl.getUniformLocation(blurProgram, 'uTex'),
+    uDirection: gl.getUniformLocation(blurProgram, 'uDirection'),
+  };
+  const combineLoc = {
+    aPos: gl.getAttribLocation(combineProgram, 'aPos'),
+    uNear: gl.getUniformLocation(combineProgram, 'uNear'),
+    uFar: gl.getUniformLocation(combineProgram, 'uFar'),
+    uFarWeight: gl.getUniformLocation(combineProgram, 'uFarWeight'),
   };
 
   const posBuffer = gl.createBuffer();
   const uvBuffer = gl.createBuffer();
   const indexBuffer = gl.createBuffer();
+
+  // One oversized triangle covering clip space, for every fullscreen pass.
+  const quadBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
 
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -225,6 +300,135 @@ export function createWarpRenderer(canvas) {
 
   let indexCount = 0;
   let meshKey = '';
+  let textureSize = { w: 0, h: 0 };
+
+  /**
+   * Bloom mip chain.
+   *
+   * A single blur at one resolution cannot produce a convincing halo: to spill
+   * light a hundred pixels you would need a hundred-tap kernel. Instead the
+   * bright-pass result is repeatedly halved, blurred a little at each level,
+   * then accumulated back up. Each halving doubles the effective reach, so five
+   * cheap levels cover a wide, smooth falloff — a tight core from the big
+   * levels and a broad glow from the small ones.
+   */
+  const BLOOM_LEVELS = 5;
+  let bloomChain = null;
+  let bloomSourceSize = { w: 0, h: 0 };
+  let bloomSupported = true;
+
+  function ensureBloomChain(sourceW, sourceH) {
+    if (bloomChain && bloomSourceSize.w === sourceW && bloomSourceSize.h === sourceH) return bloomChain;
+    disposeBloomChain();
+
+    const levels = [];
+    let w = Math.max(4, Math.floor(sourceW / 2));
+    let h = Math.max(4, Math.floor(sourceH / 2));
+
+    for (let i = 0; i < BLOOM_LEVELS; i++) {
+      const a = createRenderTarget(gl, w, h);
+      const b = createRenderTarget(gl, w, h);
+      if (!a.complete || !b.complete) {
+        // Some drivers refuse non-power-of-two colour attachments. Rather than
+        // failing the whole render, drop bloom and keep projecting.
+        disposeRenderTarget(gl, a);
+        disposeRenderTarget(gl, b);
+        for (const level of levels) {
+          disposeRenderTarget(gl, level.a);
+          disposeRenderTarget(gl, level.b);
+        }
+        bloomSupported = false;
+        return null;
+      }
+      levels.push({ a, b, width: w, height: h });
+      if (w <= 8 || h <= 8) break;
+      w = Math.max(4, Math.floor(w / 2));
+      h = Math.max(4, Math.floor(h / 2));
+    }
+
+    bloomChain = levels;
+    bloomSourceSize = { w: sourceW, h: sourceH };
+    return bloomChain;
+  }
+
+  function disposeBloomChain() {
+    if (!bloomChain) return;
+    for (const level of bloomChain) {
+      disposeRenderTarget(gl, level.a);
+      disposeRenderTarget(gl, level.b);
+    }
+    bloomChain = null;
+    bloomSourceSize = { w: 0, h: 0 };
+  }
+
+  function drawFullscreen(program, attribLocation) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+    gl.enableVertexAttribArray(attribLocation);
+    gl.vertexAttribPointer(attribLocation, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  function renderToTarget(target, fn) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+    gl.viewport(0, 0, target.width, target.height);
+    fn();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  /** One separable blur step from `from` into `to`, along a single axis. */
+  function blurStep(from, to, dx, dy) {
+    gl.useProgram(blurProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, from.texture);
+    gl.uniform1i(blurLoc.uTex, 0);
+    gl.uniform2f(blurLoc.uDirection, dx, dy);
+    renderToTarget(to, () => drawFullscreen(blurProgram, blurLoc.aPos));
+  }
+
+  /** Bright-pass, downsample-and-blur down the chain, then accumulate back up. */
+  function buildBloom(grade) {
+    const chain = ensureBloomChain(textureSize.w, textureSize.h);
+    if (!chain || !chain.length) return null;
+
+    const radius = Math.max(0.1, grade.bloomRadius ?? 1);
+
+    // Bright-pass the source into the largest level.
+    gl.useProgram(brightProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.uniform1i(brightLoc.uTex, 0);
+    gl.uniform1f(brightLoc.uThreshold, grade.bloomThreshold ?? DEFAULT_GRADE.bloomThreshold);
+    gl.uniform1f(brightLoc.uKnee, grade.bloomKnee ?? DEFAULT_GRADE.bloomKnee);
+    renderToTarget(chain[0].a, () => drawFullscreen(brightProgram, brightLoc.aPos));
+
+    // Blur each level, feeding the next one down from the level above it.
+    for (let i = 0; i < chain.length; i++) {
+      const level = chain[i];
+      const source = i === 0 ? chain[0].a : chain[i - 1].a;
+      blurStep(source, level.b, radius / level.width, 0);
+      blurStep(level.b, level.a, 0, radius / level.height);
+    }
+
+    // Walk back up, adding each smaller level into the one above. The upsample
+    // is free: sampling a small texture with LINEAR filtering interpolates it.
+    let accumulator = chain[chain.length - 1].a;
+    for (let i = chain.length - 2; i >= 0; i--) {
+      const level = chain[i];
+      gl.useProgram(combineProgram);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, level.a.texture);
+      gl.uniform1i(combineLoc.uNear, 0);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, accumulator.texture);
+      gl.uniform1i(combineLoc.uFar, 1);
+      gl.uniform1f(combineLoc.uFarWeight, 0.8);
+      renderToTarget(level.b, () => drawFullscreen(combineProgram, combineLoc.aPos));
+      accumulator = level.b;
+    }
+
+    gl.activeTexture(gl.TEXTURE0);
+    return accumulator;
+  }
 
   /**
    * Rebuild the warp mesh. Cheap enough to call whenever calibration changes,
@@ -304,17 +508,16 @@ export function createWarpRenderer(canvas) {
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
   }
 
-  let textureSize = { w: 0, h: 0 };
-
-  /** Upload the world render and draw the warped result. */
-  function draw(source, { feather, gamma = 1.8, brightness = 1 } = {}) {
+  /** Upload the world render, build bloom, and draw the warped, graded result. */
+  function draw(source, { feather, gamma = 1.8, brightness = 1, grade } = {}) {
     const width = canvas.width;
     const height = canvas.height;
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, width, height);
     gl.clear(gl.COLOR_BUFFER_BIT);
     if (!indexCount) return;
 
-    gl.useProgram(program);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
 
@@ -327,13 +530,38 @@ export function createWarpRenderer(canvas) {
     } else {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
     }
+
+    const settings = { ...DEFAULT_GRADE, ...(grade || {}) };
+    const bloomAmount = bloomSupported ? Math.max(0, settings.bloom ?? 0) : 0;
+    const bloomTarget = bloomAmount > 0 ? buildBloom(settings) : null;
+
+    // The bloom passes rebind the framebuffer and viewport; restore them.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, width, height);
+
+    gl.useProgram(warpProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.uniform1i(loc.uTex, 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, bloomTarget ? bloomTarget.texture : texture);
+    gl.uniform1i(loc.uBloom, 1);
+    gl.uniform1f(loc.uBloomAmount, bloomTarget ? bloomAmount : 0);
 
     gl.uniform2f(loc.uResolution, width, height);
     const f = feather || { top: 0, right: 0, bottom: 0, left: 0 };
     gl.uniform4f(loc.uFeather, f.top || 0, f.right || 0, f.bottom || 0, f.left || 0);
     gl.uniform1f(loc.uGamma, gamma > 0 ? gamma : 1);
     gl.uniform1f(loc.uBrightness, brightness);
+
+    const tint = temperatureTint(settings.temperature ?? 0);
+    gl.uniform3f(loc.uTint, tint[0], tint[1], tint[2]);
+    gl.uniform1f(loc.uExposure, settings.exposure ?? 1);
+    gl.uniform1f(loc.uContrast, settings.contrast ?? 1);
+    gl.uniform1f(loc.uSaturation, settings.saturation ?? 1);
+    gl.uniform1f(loc.uGradeGamma, settings.gamma ?? 1);
+    gl.uniform1f(loc.uTonemap, settings.tonemap === false ? 0 : 1);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
     gl.enableVertexAttribArray(loc.aPos);
@@ -348,17 +576,23 @@ export function createWarpRenderer(canvas) {
   }
 
   function clear() {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clear(gl.COLOR_BUFFER_BIT);
   }
 
   function dispose() {
+    disposeBloomChain();
     gl.deleteBuffer(posBuffer);
     gl.deleteBuffer(uvBuffer);
     gl.deleteBuffer(indexBuffer);
+    gl.deleteBuffer(quadBuffer);
     gl.deleteTexture(texture);
-    gl.deleteProgram(program);
+    gl.deleteProgram(warpProgram);
+    gl.deleteProgram(brightProgram);
+    gl.deleteProgram(blurProgram);
+    gl.deleteProgram(combineProgram);
   }
 
-  return { gl, buildMesh, draw, clear, dispose };
+  return { gl, buildMesh, draw, clear, dispose, get bloomSupported() { return bloomSupported; } };
 }

@@ -317,3 +317,106 @@ export async function renderStorageInfo(node, app) {
     `Show data in local storage: <strong>${escapeHtml(formatBytes(local))}</strong>.${escapeHtml(quotaText)}` +
     ' Media and camera stills live in a separate, much larger store.';
 }
+
+/* ------------------------------------------------------------------ *
+ * Triggers
+ * ------------------------------------------------------------------ */
+
+const SOURCE_LABEL = {
+  motion: 'motion',
+  hotkey: 'key',
+  timer: 'timer',
+  manual: 'manual',
+};
+
+export function renderTriggerList(node, app) {
+  clear(node);
+  const triggers = app.project.triggers || [];
+
+  if (!triggers.length) {
+    node.appendChild(
+      el('p', {
+        class: 'panel-note',
+        html:
+          'No triggers yet. A good first one: a <strong>motion</strong> trigger watching the path, ' +
+          'firing a scene with lightning and a scream.',
+      })
+    );
+    return;
+  }
+
+  for (const trigger of triggers) {
+    const selected = app.selection.type === 'trigger' && app.selection.id === trigger.id;
+    const scene = app.project.scenes.find((s) => s.id === trigger.sceneId);
+
+    const power = el('button', {
+      type: 'button',
+      class: `icon-btn${trigger.enabled ? ' on' : ''}`,
+      title: 'Arm or disarm',
+      text: trigger.enabled ? '◉' : '○',
+    });
+    power.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      trigger.enabled = !trigger.enabled;
+      app.commitLive();
+      app.refreshPanels();
+    });
+
+    const test = el('button', { type: 'button', class: 'icon-btn', title: 'Fire it now', text: '⚡' });
+    test.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      app.fireTrigger(trigger.id);
+    });
+
+    const item = el('div', { class: `list-item${selected ? ' selected' : ''}` }, [
+      power,
+      test,
+      el('span', { class: 'item-title', text: trigger.name, title: trigger.name }),
+      el('span', { class: 'item-sub', text: SOURCE_LABEL[trigger.source] || trigger.source }),
+      scene ? null : el('span', { class: 'chip warn', text: 'no scene' }),
+    ]);
+    item.addEventListener('click', () => app.select({ type: 'trigger', id: trigger.id }));
+    node.appendChild(item);
+  }
+}
+
+/**
+ * Live readout for motion triggers.
+ *
+ * Aiming a motion region is guesswork without feedback, so this shows the
+ * measured activity against the threshold it has to clear.
+ */
+export function renderMotionStatus(node, app) {
+  const motionTriggers = (app.project.triggers || []).filter((t) => t.source === 'motion' && t.enabled);
+
+  if (!motionTriggers.length) {
+    node.textContent = '';
+    return;
+  }
+  if (!app.camera.isRunning()) {
+    node.textContent = 'Start the camera in Setup for motion triggers to work.';
+    return;
+  }
+
+  clear(node);
+  for (const trigger of motionTriggers) {
+    const activity = app.triggerActivity(trigger.id);
+    const threshold = app.motionThreshold(trigger.sensitivity);
+    const armed = app.triggerArmedIn(trigger.id, trigger.cooldown);
+    const meter = el('div', { class: 'meter' }, [el('span')]);
+    meter.firstElementChild.style.width = `${Math.min(100, (activity / Math.max(threshold, 1e-6)) * 50)}%`;
+
+    node.appendChild(
+      el('div', {}, [
+        el('div', {
+          class: 'panel-note',
+          style: 'margin:0',
+          text: `${trigger.name}: ${(activity * 100).toFixed(1)}% moving, fires at ${(threshold * 100).toFixed(1)}%${
+            armed > 0.5 ? ` · re-arms in ${armed.toFixed(0)}s` : ' · armed'
+          }`,
+        }),
+        meter,
+      ])
+    );
+  }
+}

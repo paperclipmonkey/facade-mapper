@@ -36,3 +36,6 @@ jobs:
 
       - name: Geometry and calibration tests
         run: node test/geometry.test.mjs
+
+      - name: Motion, trigger, schedule and grading tests
+        run: node test/runtime.test.mjs

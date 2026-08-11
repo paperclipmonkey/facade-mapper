@@ -45,6 +45,8 @@
           <button type="button" class="panel-tab" data-panel="shapes" role="tab">Shapes</button>
           <button type="button" class="panel-tab" data-panel="layers" role="tab">Effects</button>
           <button type="button" class="panel-tab" data-panel="scenes" role="tab">Scenes</button>
+          <button type="button" class="panel-tab" data-panel="triggers" role="tab">Triggers</button>
+          <button type="button" class="panel-tab" data-panel="look" role="tab">Look</button>
           <button type="button" class="panel-tab" data-panel="media" role="tab">Media</button>
           <button type="button" class="panel-tab" data-panel="code" role="tab">Code</button>
           <button type="button" class="panel-tab" data-panel="settings" role="tab">Setup</button>
@@ -97,14 +99,39 @@
             <button type="button" class="btn" id="btnRunShow">Run show</button>
           </section>
 
+          <section class="panel-page" data-page="triggers">
+            <p class="panel-note">
+              A trigger jumps to a scene, holds it for a few seconds and then puts back whatever was
+              playing. Point <strong>motion</strong> at the path and the house reacts when somebody
+              walks up it.
+            </p>
+            <div class="panel-actions">
+              <button type="button" class="btn small primary" id="btnAddTrigger">Add trigger</button>
+              <button type="button" class="btn small danger" id="btnDeleteTrigger">Delete</button>
+            </div>
+            <div id="triggerList" class="list"></div>
+            <div id="motionStatus" class="panel-note"></div>
+          </section>
+
+          <section class="panel-page" data-page="look">
+            <p class="panel-note">
+              Bloom and grading are applied by every projector identically, after all the effects.
+              This is what makes light look like it is falling on brickwork rather than pasted onto it.
+            </p>
+            <h3 class="panel-heading">Presets</h3>
+            <div class="panel-actions" id="gradePresets"></div>
+            <div id="gradeControls"></div>
+          </section>
+
           <section class="panel-page" data-page="media">
             <div class="panel-actions">
-              <button type="button" class="btn small primary" id="btnAddMedia">Add video or image…</button>
-              <input type="file" id="mediaFile" accept="video/*,image/*" multiple hidden />
+              <button type="button" class="btn small primary" id="btnAddMedia">Add video, image or sound…</button>
+              <input type="file" id="mediaFile" accept="video/*,image/*,audio/*" multiple hidden />
             </div>
             <p class="panel-note">
-              Files stay on this machine, stored in the browser. Every projector tab reads them from
-              the same local store, so nothing is uploaded and nothing is re-encoded.
+              Files stay on this machine, stored in the browser. Every projector tab reads video and
+              images from the same local store, so nothing is uploaded and nothing is re-encoded.
+              Sounds play from this tab only — pick them from a trigger.
             </p>
             <div id="mediaList" class="list"></div>
             <div id="storageInfo" class="panel-note"></div>
@@ -157,6 +184,13 @@
             <label class="inline-check"><input type="checkbox" id="showSafeArea" checked /> Show projector coverage outlines</label>
             <label class="inline-check"><input type="checkbox" id="showShapeNames" checked /> Show shape names</label>
             <label class="inline-check"><input type="checkbox" id="showPreviewRender" checked /> Show effects in preview</label>
+
+            <h3 class="panel-heading">Nightly schedule</h3>
+            <label class="inline-check"><input type="checkbox" id="scheduleEnabled" /> Run to a schedule</label>
+            <label class="field"><span>On at</span><input type="text" id="scheduleOn" value="18:00" placeholder="18:00" /></label>
+            <label class="field"><span>Off at</span><input type="text" id="scheduleOff" value="22:30" placeholder="22:30" /></label>
+            <div class="tag-picker" id="scheduleDays"></div>
+            <div id="scheduleNote" class="panel-note"></div>
 
             <h3 class="panel-heading">Storage</h3>
             <div id="storageDetail" class="panel-note"></div>
