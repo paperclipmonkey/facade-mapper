@@ -198,6 +198,7 @@ export const HELP_HTML = `
   <tr><th><code>rng, noise</code></th><td>Seeded generators — identical in every tab, so overlapping projectors agree.</td></tr>
   <tr><th><code>media(id)</code></th><td>A decoded video or image element from the library, or null.</td></tr>
   <tr><th><code>world</code></th><td><code>{ w, h }</code> of the virtual frame.</td></tr>
+  <tr><th><code>shapes(tag, excludeId)</code></th><td>Every other shape in the project, for collisions. Filter to one tag, and pass <code>shape.id</code> so you do not collide with the thing you are drawing into.</td></tr>
   <tr><th><code>fx</code></th><td>Module-level helper namespace: <code>fx.rgba</code>, <code>fx.glow</code>, <code>fx.mixHex</code>, <code>fx.TAU</code>…</td></tr>
 </table>
 <p class="muted">
@@ -226,6 +227,16 @@ export const HELP_HTML = `
       Blend two colours through linear light instead of through sRGB. An sRGB lerp from yellow to red
       dips through a muddy brown; this one does not. <code>fx.rampAt(stops, t)</code> is the
       multi-stop version.
+    </td>
+  </tr>
+  <tr>
+    <th><code>fx.ensureSurfaces(...)</code></th>
+    <td>
+      Collision against the house. <code>ctx.shapes()</code> gives you the rest of the scene;
+      this collapses each shape to the top surface it presents, and <code>sweepLanding</code>,
+      <code>settle</code>, <code>shedSlabs</code> and <code>drawDrift</code> accumulate material on
+      it, let it slump to a natural angle, and break it off when it gets too deep. Snow uses the
+      whole set to settle on your sills and slide off them.
     </td>
   </tr>
   <tr>

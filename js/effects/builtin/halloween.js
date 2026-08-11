@@ -853,6 +853,111 @@ const ghost = {
   },
 };
 
+/**
+ * A spider, drawn the way a spider is actually built.
+ *
+ * The old one was eight identical spokes on a single ellipse, which reads as a
+ * sun symbol. Three things separate that from something your eye accepts:
+ *
+ * - **Two body segments.** A big abdomen behind a small cephalothorax, joined by
+ *   a narrow waist. Every leg hangs off the *front* segment, not the middle of
+ *   the whole animal.
+ * - **Legs that arch.** A spider leg goes out and *outward* to a raised knee,
+ *   then back in to the foot. That outward bow is the single most recognisable
+ *   thing about the silhouette, and a straight line has none of it.
+ * - **Four different pairs.** Legs I and II reach forward, III sideways, IV
+ *   backward and longest. Eight evenly spaced legs is a wheel; unevenly spaced
+ *   ones are an animal.
+ *
+ * `gait` runs 0..1 and walks it, alternate tetrapod — the diagonal groups swing
+ * out of phase, which is how eight legs stay coordinated without tripping.
+ *
+ * Drawn facing +x at the origin; rotate before calling to aim it.
+ */
+export function drawSpider(g, size, gait, colour, lineWidth) {
+  // Per pair: angle away from forward (degrees, toward that leg's own side),
+  // reach in body units, and where along the cephalothorax the hip sits. All
+  // angles are positive and mirrored by `side` — a negative here would put the
+  // leg on the opposite flank and the two sides would sit on top of each other.
+  // Leg I reaches forward, IV trails behind and is the longest.
+  const PAIRS = [
+    [32, 2.45, 0.74],
+    [68, 2.3, 0.55],
+    [108, 2.15, 0.34],
+    [143, 2.8, 0.16],
+  ];
+  const s = size;
+  const RAD = Math.PI / 180;
+
+  g.strokeStyle = colour;
+  g.fillStyle = colour;
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+
+  for (let pair = 0; pair < 4; pair++) {
+    const [baseDeg, reach, along] = PAIRS[pair];
+    for (const side of [-1, 1]) {
+      // Alternate tetrapod: diagonal legs swing together, so the body is always
+      // held up by four feet spread around it.
+      const group = (pair + (side > 0 ? 1 : 0)) % 2;
+      const swing = Math.sin((gait + group * 0.5) * TAU);
+
+      const hip = { x: s * along, y: side * s * 0.26 };
+      const theta = side * (baseDeg + swing * 11) * RAD;
+      const len = s * reach * (1 + swing * 0.06);
+      // The knee is pulled towards straight-out-sideways, so the leg bows away
+      // from the body and comes back in to the foot. Pulling *towards* 90°
+      // rather than adding a fixed offset is what keeps the rear legs arching
+      // outward too instead of folding under the abdomen.
+      const kneeA = side * (baseDeg + (90 - baseDeg) * 0.5) * RAD;
+      const kneeR = len * (0.56 + Math.max(0, swing) * 0.07);
+      const knee = { x: hip.x + Math.cos(kneeA) * kneeR, y: hip.y + Math.sin(kneeA) * kneeR };
+      const foot = { x: hip.x + Math.cos(theta) * len, y: hip.y + Math.sin(theta) * len };
+
+      g.lineWidth = lineWidth;
+      g.beginPath();
+      g.moveTo(hip.x, hip.y);
+      g.lineTo(knee.x, knee.y);
+      g.stroke();
+      // The lower half of the leg is visibly finer than the thigh, and curves
+      // down to the foot rather than meeting it in a straight line.
+      g.lineWidth = lineWidth * 0.6;
+      g.beginPath();
+      g.moveTo(knee.x, knee.y);
+      g.quadraticCurveTo(
+        (knee.x + foot.x) / 2 + Math.cos(kneeA) * len * 0.1,
+        (knee.y + foot.y) / 2 + Math.sin(kneeA) * len * 0.1,
+        foot.x, foot.y
+      );
+      g.stroke();
+    }
+  }
+
+  // Waist first, so the two segments read as joined rather than overlapping.
+  g.lineWidth = s * 0.22;
+  g.beginPath();
+  g.moveTo(-s * 0.25, 0);
+  g.lineTo(s * 0.3, 0);
+  g.stroke();
+
+  g.beginPath();
+  g.ellipse(-s * 0.72, 0, s * 0.78, s * 0.62, 0, 0, TAU);
+  g.fill();
+  g.beginPath();
+  g.ellipse(s * 0.46, 0, s * 0.5, s * 0.42, 0, 0, TAU);
+  g.fill();
+
+  // Pedipalps — the short pair under the face. Small, but their absence is why
+  // a spider without them looks like it is missing something at the front.
+  g.lineWidth = lineWidth * 0.7;
+  for (const side of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(s * 0.75, side * s * 0.16);
+    g.quadraticCurveTo(s * 1.15, side * s * 0.3, s * 1.3, side * s * 0.14);
+    g.stroke();
+  }
+}
+
 const web = {
   id: 'web',
   name: 'Spider Web',
@@ -928,26 +1033,23 @@ const web = {
       const sr = 0.15 * maxR + out * maxR * 0.7;
       const sx = ax + Math.cos(sa) * sr;
       const sy = ay + Math.sin(sa) * sr;
-      const bodyR = maxR * 0.035;
+      const bodyR = maxR * 0.03;
+
+      // It faces the way it is going, and it is going backwards on the way in —
+      // a spider that slides down its own thread nose-first and then reverses up
+      // it without turning round is the tell that this is a sprite on a rail.
+      const heading = phase < 0.5 ? sa : sa + Math.PI;
+      // Legs only cycle while it is actually travelling. The pause at full
+      // stretch is a pause, not a moonwalk.
+      const moving = Math.abs(phase - 0.5) > 0.03;
+      const gait = moving ? frac(t * p.spiderSpeed * 9) : 0.25;
 
       g.globalAlpha = 1;
-      g.fillStyle = p.color;
-      g.lineWidth = Math.max(0.8, p.width * 0.8);
-      for (let l = 0; l < 8; l++) {
-        const la = (l / 8) * TAU + Math.sin(t * 6 + l) * 0.14;
-        g.beginPath();
-        g.moveTo(sx, sy);
-        g.quadraticCurveTo(
-          sx + Math.cos(la) * bodyR * 2.2,
-          sy + Math.sin(la) * bodyR * 1.4,
-          sx + Math.cos(la) * bodyR * 3,
-          sy + Math.sin(la) * bodyR * 3
-        );
-        g.stroke();
-      }
-      g.beginPath();
-      g.ellipse(sx, sy, bodyR * 1.4, bodyR, 0, 0, TAU);
-      g.fill();
+      g.save();
+      g.translate(sx, sy);
+      g.rotate(heading);
+      drawSpider(g, bodyR, gait, p.color, Math.max(0.8, p.width * 0.85));
+      g.restore();
     }
     g.restore();
   },
