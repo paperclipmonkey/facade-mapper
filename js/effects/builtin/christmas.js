@@ -532,7 +532,11 @@ const santa = {
     }
 
     g.translate(x, y);
-    g.scale(dir, 1);
+    // The rig is drawn nose-left — the team sits at negative x, ahead of the
+    // sleigh at the origin — so travelling right has to mirror it and
+    // travelling left must not. Hence -dir: `dir` alone flew it backwards in
+    // both directions, sleigh first and reindeer trailing.
+    g.scale(-dir, 1);
     if (p.silhouette) {
       g.globalCompositeOperation = 'destination-out';
       g.fillStyle = '#000';
