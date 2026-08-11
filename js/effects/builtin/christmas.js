@@ -6,8 +6,17 @@
  * icicles and candy stripes want a specific edge or outline.
  */
 
-import { rgba, clamp, TAU, frac } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, frac } from '../../core/math.js';
 import { mixLinear } from '../color.js';
+import {
+  ensureSurfaces,
+  sweepLanding,
+  settle,
+  shedSlabs,
+  advanceSlabs,
+  drawDrift,
+  drawSlabs,
+} from '../collide.js';
 
 /**
  * Depth of field, cheaply.
@@ -61,7 +70,7 @@ const snow = {
   category: 'christmas',
   scope: 'shape',
   description:
-    'Falling snow with real depth: near flakes are large, soft and out of focus, far ones are small, sharp and slow.',
+    'Falling snow with real depth, that settles on whatever you have traced. Piles round off, overload, and slide away down the wall.',
   params: [
     { key: 'color', type: 'color', label: 'Colour', default: '#ffffff' },
     { key: 'count', type: 'range', label: 'Flakes', default: 320, min: 10, max: 2000, step: 10 },
@@ -72,15 +81,30 @@ const snow = {
     { key: 'depth', type: 'range', label: 'Depth spread', default: 0.7, min: 0, max: 1, step: 0.01 },
     { key: 'blur', type: 'range', label: 'Near-flake blur', default: 0.7, min: 0, max: 1, step: 0.01 },
     { key: 'flutter', type: 'range', label: 'Flutter', default: 0.6, min: 0, max: 2, step: 0.01 },
-    { key: 'settle', type: 'range', label: 'Settle at bottom', default: 0, min: 0, max: 1, step: 0.01 },
+    { key: 'collide', type: 'bool', label: 'Settle on shapes', default: true },
+    { key: 'colliderTag', type: 'text', label: 'Settle on tag', default: '' },
+    { key: 'buildUp', type: 'range', label: 'Build-up rate', default: 2.5, min: 0, max: 15, step: 0.1 },
+    { key: 'maxDepth', type: 'range', label: 'Depth before it slides', default: 22, min: 2, max: 120, step: 1 },
+    { key: 'shed', type: 'range', label: 'Slide-off chance', default: 0.3, min: 0, max: 3, step: 0.01 },
   ],
   init() {
     return { flakes: [], count: 0, sprites: null, spriteKey: null };
   },
-  draw({ g, p, shape, t, dt, rng, state, noise }) {
+  draw({ g, p, shape, shapes, world, t, dt, rng, state, noise }) {
     const { bbox } = shape;
     if (bbox.w <= 0 || bbox.h <= 0) return;
     const target = Math.round(p.count);
+
+    /**
+     * Everything else in the scene is what snow lands on. Excluding the shape
+     * we are drawing into matters: snow aimed at the whole frame should settle
+     * on the house, not on the frame's own bottom edge — that edge is where
+     * slabs are supposed to disappear.
+     */
+    const colliders = p.collide && typeof shapes === 'function'
+      ? shapes(p.colliderTag, shape.id).filter((geo) => geo.points && geo.points.length > 1)
+      : [];
+    const surfaces = colliders.length ? ensureSurfaces(state, 'surfaces', colliders, world, 260) : null;
 
     const spawn = (flake = {}, atTop = true) => {
       flake.x = bbox.x + rng() * bbox.w;
@@ -109,8 +133,29 @@ const snow = {
     // correctly occlude far ones. Sorted once per frame, in place.
     state.flakes.sort((a, b) => a.z - b.z);
 
+    // The drift sits on the house, so it belongs between the flakes falling
+    // behind it and the ones falling in front. Splitting the pass at the depth
+    // where flakes stop landing is what stops the house looking pasted on.
+    let drewDrift = !surfaces;
+    const paintDrift = () => {
+      drewDrift = true;
+      g.globalAlpha = 1;
+      // Snow is lit by the whole sky, so its body takes a blue cast and only the
+      // top edge sees anything like a direct light. That split is most of what
+      // makes a white shape read as a rounded volume rather than a cut-out.
+      const style = {
+        fill: mixLinear(p.color, '#8fa8c8', 0.28),
+        crest: mixLinear(p.color, '#ffffff', 0.6),
+      };
+      for (const { field, drift } of surfaces) {
+        drawDrift(g, drift, field, style);
+        drawSlabs(g, drift, style);
+      }
+    };
+
     for (const flake of state.flakes) {
       const z = flake.z;
+      const prevY = flake.y;
       flake.y += p.speed * z * dt;
       // Flutter is a sideways drift that reverses — a flake does not fall
       // straight, it slips from side to side as it rocks.
@@ -123,6 +168,24 @@ const snow = {
       if (flake.x > bbox.x + bbox.w + 20) flake.x = bbox.x - 10;
 
       const r = p.size * z * 0.5;
+
+      if (surfaces && !drewDrift && z >= 0.62) paintDrift();
+
+      // Landing. A flake that hits a drift adds its own volume to that column
+      // and is recycled at the top, which keeps the flake count — and so the
+      // cost — flat however long the show runs.
+      if (surfaces && p.buildUp > 0) {
+        const hit = sweepLanding(surfaces, flake.x, prevY, flake.y);
+        if (hit) {
+          const { field, drift } = hit.surface;
+          // Volume in, depth out: a flake's area spread across the column it
+          // landed in. Big near flakes therefore build a drift much faster than
+          // distant specks, which is both correct and what you want to look at.
+          drift.depth[hit.col] += (Math.PI * r * r * p.buildUp * 0.6) / field.colW;
+          spawn(flake, true);
+          continue;
+        }
+      }
 
       // Presented area varies as the plate rocks: a flake edge-on nearly
       // disappears, which is the twinkle.
@@ -152,28 +215,266 @@ const snow = {
 
     g.globalAlpha = 1;
 
-    if (p.settle > 0) {
-      // A soft drift along the bottom edge, as if snow is piling up on the sill.
-      const h = bbox.h * 0.06 * p.settle;
-      const grad = g.createLinearGradient(0, bbox.y + bbox.h - h * 2.2, 0, bbox.y + bbox.h);
-      grad.addColorStop(0, rgba(p.color, 0));
-      grad.addColorStop(1, rgba(p.color, 0.85));
-      g.fillStyle = grad;
-      g.beginPath();
-      g.moveTo(bbox.x, bbox.y + bbox.h);
-      for (let x = 0; x <= 24; x++) {
-        const f = x / 24;
-        const px = bbox.x + f * bbox.w;
-        const py = bbox.y + bbox.h - h * (0.6 + 0.4 * noise.noise2(f * 4, 3.1));
-        g.lineTo(px, py);
+    if (surfaces) {
+      // Slumping, shedding and falling all happen once per frame per surface,
+      // regardless of how many flakes landed, so the cost does not scale with
+      // the weather. 38° is roughly the angle settled snow holds before it
+      // slumps, and it is what rounds a column of landings into a drift.
+      for (const { field, drift } of surfaces) {
+        settle(drift, field, 0.66, 4);
+        shedSlabs(drift, field, {
+          maxDepth: p.maxDepth,
+          gustChance: p.shed,
+          dt,
+          rng,
+          minDepth: 1,
+        });
+        advanceSlabs(drift, field, dt, 620);
       }
-      g.lineTo(bbox.x + bbox.w, bbox.y + bbox.h);
-      g.closePath();
-      g.fill();
+      if (!drewDrift) paintDrift();
     }
+
     g.restore();
   },
 };
+
+/**
+ * One reindeer, facing -x, drawn around the origin at unit scale `s`.
+ *
+ * The old one was an ellipse, a stick neck, a circle head, two lines for legs
+ * and a pair of forked twigs. Read at any size it was a balloon animal. What
+ * actually makes a quadruped silhouette land:
+ *
+ * - **A body with a front and a back.** Deep chest, dip behind the withers,
+ *   rising croup, tucked belly. An ellipse has none of those and so has no
+ *   direction — it reads the same drawn backwards.
+ * - **Four legs, jointed, out of phase.** Two legs is a hobby horse. The hock
+ *   bends the opposite way to the knee, and a galloping leg tucks hard on the
+ *   recovery and straightens on the reach; that contrast is the motion.
+ * - **Antlers with a beam.** Real antlers sweep back from the skull and throw
+ *   tines *forward* off that beam. Two forked twigs read as a stick.
+ */
+export function drawReindeer(g, s, gallop, lineWidth) {
+  const w = lineWidth;
+
+  // A leg as thigh plus shank. The shank tucks under on the recovery stroke and
+  // swings out straight on the reach, which is most of what says "running".
+  const leg = (hx, hy, upper, lower, phase, flip) => {
+    const swing = Math.sin(phase);
+    const thigh = swing * 0.85;
+    const shank = thigh - flip * (0.55 + 0.75 * Math.max(0, -swing));
+    const kx = hx + Math.sin(thigh) * upper;
+    const ky = hy + Math.cos(thigh) * upper;
+    const fx = kx + Math.sin(shank) * lower;
+    const fy = ky + Math.cos(shank) * lower;
+    g.lineWidth = w;
+    g.beginPath();
+    g.moveTo(hx, hy);
+    g.lineTo(kx, ky);
+    g.stroke();
+    g.lineWidth = w * 0.72;
+    g.beginPath();
+    g.moveTo(kx, ky);
+    g.lineTo(fx, fy);
+    g.stroke();
+  };
+
+  // Far side of the body first, dimmer, so the near legs read as nearer.
+  g.save();
+  g.globalAlpha *= 0.55;
+  leg(-0.26 * s, 0.06 * s, 0.2 * s, 0.22 * s, gallop + 0.5, 1);
+  leg(0.24 * s, 0.04 * s, 0.22 * s, 0.23 * s, gallop + 2.1, -1);
+  g.restore();
+
+  // Body: deep chest, a dip behind the withers, rising croup, tucked flank.
+  // Drawn as one closed curve so the silhouette stays clean when it is only a
+  // few pixels tall — and short enough in the barrel that it reads as a deer
+  // rather than a dachshund.
+  g.beginPath();
+  g.moveTo(-0.34 * s, -0.04 * s);
+  g.quadraticCurveTo(-0.32 * s, -0.21 * s, -0.14 * s, -0.20 * s);
+  g.quadraticCurveTo(0.06 * s, -0.15 * s, 0.22 * s, -0.22 * s);
+  g.quadraticCurveTo(0.38 * s, -0.26 * s, 0.38 * s, -0.04 * s);
+  g.quadraticCurveTo(0.37 * s, 0.08 * s, 0.22 * s, 0.09 * s);
+  g.quadraticCurveTo(0.02 * s, 0.14 * s, -0.16 * s, 0.11 * s);
+  g.quadraticCurveTo(-0.32 * s, 0.09 * s, -0.34 * s, -0.04 * s);
+  g.closePath();
+  g.fill();
+
+  /**
+   * Neck and head as one continuous outline.
+   *
+   * Drawn as separate pieces they never quite join: a stroked neck is a stick,
+   * and a head built from an ellipse plus a muzzle reads as two blobs touching.
+   * One path that leaves the shoulder wide, tapers up the neck, swells slightly
+   * at the skull and runs out to a blunt nose is the whole silhouette, and it
+   * survives being three pixels tall.
+   */
+  g.beginPath();
+  g.moveTo(-0.28 * s, 0.03 * s);                                     // throat, at the chest
+  g.quadraticCurveTo(-0.42 * s, -0.06 * s, -0.52 * s, -0.19 * s);    // up the underside
+  g.quadraticCurveTo(-0.62 * s, -0.22 * s, -0.72 * s, -0.20 * s);    // along the jaw
+  g.quadraticCurveTo(-0.79 * s, -0.19 * s, -0.77 * s, -0.25 * s);    // round the blunt nose
+  g.quadraticCurveTo(-0.72 * s, -0.29 * s, -0.62 * s, -0.30 * s);    // back over the muzzle
+  g.quadraticCurveTo(-0.54 * s, -0.32 * s, -0.44 * s, -0.27 * s);    // the brow and poll
+  g.quadraticCurveTo(-0.30 * s, -0.24 * s, -0.16 * s, -0.19 * s);    // down the crest to the withers
+  g.lineTo(-0.20 * s, 0.02 * s);                                     // into the chest
+  g.closePath();
+  g.fill();
+
+  // Ear, off the back of the skull.
+  g.lineWidth = w * 1.2;
+  g.beginPath();
+  g.moveTo(-0.53 * s, -0.29 * s);
+  g.quadraticCurveTo(-0.50 * s, -0.37 * s, -0.43 * s, -0.38 * s);
+  g.stroke();
+
+  /**
+   * Antlers: a beam sweeping back over the shoulders, with tines thrown off it
+   * at genuinely different angles — one low over the brow, one forward-up, one
+   * near-vertical. Evenly spaced parallel tines are what made the old pair read
+   * as a garden rake; a real rack fans. Sized to about a third of the body, and
+   * rooted on the skull rather than floating above it.
+   */
+  const rack = (ox, oy, alpha) => {
+    g.save();
+    g.globalAlpha *= alpha;
+    g.lineWidth = w * 1.3;
+    g.beginPath();
+    g.moveTo(ox, oy);
+    g.bezierCurveTo(
+      ox + 0.02 * s, oy - 0.14 * s,
+      ox + 0.10 * s, oy - 0.21 * s,
+      ox + 0.20 * s, oy - 0.21 * s
+    );
+    g.stroke();
+
+    g.lineWidth = w * 0.9;
+    // Brow tine, out over the face.
+    g.beginPath();
+    g.moveTo(ox + 0.005 * s, oy - 0.06 * s);
+    g.quadraticCurveTo(ox - 0.07 * s, oy - 0.09 * s, ox - 0.11 * s, oy - 0.14 * s);
+    g.stroke();
+    // Two off the top of the beam, splaying apart as they rise.
+    g.beginPath();
+    g.moveTo(ox + 0.07 * s, oy - 0.18 * s);
+    g.quadraticCurveTo(ox + 0.04 * s, oy - 0.26 * s, ox + 0.005 * s, oy - 0.32 * s);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(ox + 0.16 * s, oy - 0.21 * s);
+    g.quadraticCurveTo(ox + 0.17 * s, oy - 0.28 * s, ox + 0.14 * s, oy - 0.34 * s);
+    g.stroke();
+    g.restore();
+  };
+  // The far rack is only hinted. Two fully drawn racks at the size a reindeer
+  // actually occupies on a wall is eight overlapping strokes in the space of a
+  // few pixels, which resolves to a smear.
+  rack(-0.52 * s, -0.30 * s, 0.3);
+  rack(-0.60 * s, -0.32 * s, 1);
+
+  // Tail.
+  g.lineWidth = w * 1.4;
+  g.beginPath();
+  g.moveTo(0.37 * s, -0.10 * s);
+  g.quadraticCurveTo(0.47 * s, -0.16 * s, 0.46 * s, -0.03 * s);
+  g.stroke();
+
+  // Near legs, at full strength.
+  leg(-0.28 * s, 0.06 * s, 0.2 * s, 0.22 * s, gallop, 1);
+  leg(0.26 * s, 0.04 * s, 0.22 * s, 0.23 * s, gallop + 1.6, -1);
+}
+
+/**
+ * The sleigh, facing -x, with Santa in it. Origin is the middle of the hull.
+ *
+ * The shape people actually recognise is the *runner* — one continuous line that
+ * sweeps up into a scroll at the prow — and a hull whose back rises into a high
+ * curved seat. The previous version had a straight runner and a flat seat, which
+ * is a shopping trolley.
+ */
+export function drawSleigh(g, s, t, lineWidth) {
+  const w = lineWidth;
+
+  // Hull: low curved prow, deep body, tall sweeping seat back.
+  g.beginPath();
+  g.moveTo(-0.52 * s, 0.06 * s);
+  g.quadraticCurveTo(-0.55 * s, 0.20 * s, -0.36 * s, 0.22 * s);
+  g.lineTo(0.30 * s, 0.22 * s);
+  g.quadraticCurveTo(0.52 * s, 0.20 * s, 0.56 * s, -0.02 * s);
+  g.quadraticCurveTo(0.60 * s, -0.30 * s, 0.44 * s, -0.34 * s);
+  g.quadraticCurveTo(0.46 * s, -0.12 * s, 0.30 * s, 0.02 * s);
+  g.lineTo(-0.30 * s, 0.02 * s);
+  g.quadraticCurveTo(-0.46 * s, 0.02 * s, -0.52 * s, 0.06 * s);
+  g.closePath();
+  g.fill();
+
+  // Runner: back along the ground, then up and over into the scroll at the prow.
+  g.lineWidth = w * 1.2;
+  g.lineCap = 'round';
+  g.beginPath();
+  g.moveTo(0.46 * s, 0.30 * s);
+  g.lineTo(-0.40 * s, 0.30 * s);
+  g.quadraticCurveTo(-0.66 * s, 0.30 * s, -0.68 * s, 0.12 * s);
+  g.quadraticCurveTo(-0.69 * s, 0.00 * s, -0.58 * s, 0.02 * s);
+  g.quadraticCurveTo(-0.52 * s, 0.03 * s, -0.54 * s, 0.10 * s);
+  g.stroke();
+  // Stanchions tying the runner to the hull.
+  g.lineWidth = w * 0.8;
+  for (const x of [-0.3, 0.1, 0.4]) {
+    g.beginPath();
+    g.moveTo(x * s, 0.22 * s);
+    g.lineTo(x * s, 0.30 * s);
+    g.stroke();
+  }
+
+  // Santa: leaning forward, one arm out on the reins, the other up mid-wave.
+  const wave = Math.sin(t * 5.5);
+  g.save();
+  g.translate(0.16 * s, -0.16 * s);
+  g.rotate(-0.12);
+  g.beginPath();
+  g.ellipse(0, 0, 0.15 * s, 0.19 * s, 0, 0, TAU);
+  g.fill();
+
+  // Rein arm, forward and low.
+  g.lineWidth = w * 1.5;
+  g.beginPath();
+  g.moveTo(-0.06 * s, -0.04 * s);
+  g.quadraticCurveTo(-0.22 * s, -0.02 * s, -0.34 * s, -0.08 * s);
+  g.stroke();
+  // Waving arm.
+  g.beginPath();
+  g.moveTo(0.06 * s, -0.08 * s);
+  g.quadraticCurveTo(0.20 * s, -0.20 * s, 0.16 * s + wave * 0.05 * s, -0.34 * s);
+  g.stroke();
+
+  // Beard — a wedge under the face, which is what makes the head read as Santa
+  // rather than as a person in a hat.
+  g.beginPath();
+  g.moveTo(-0.10 * s, -0.20 * s);
+  g.quadraticCurveTo(-0.14 * s, -0.02 * s, 0.0, -0.04 * s);
+  g.quadraticCurveTo(0.10 * s, -0.06 * s, 0.09 * s, -0.20 * s);
+  g.closePath();
+  g.fill();
+
+  // Head.
+  g.beginPath();
+  g.arc(-0.01 * s, -0.27 * s, 0.10 * s, 0, TAU);
+  g.fill();
+
+  // Hat: a cone flopping backwards off the crown, with the bobble on the end.
+  g.beginPath();
+  g.moveTo(-0.11 * s, -0.31 * s);
+  g.lineTo(0.09 * s, -0.33 * s);
+  g.quadraticCurveTo(0.14 * s, -0.46 * s, 0.24 * s, -0.50 * s);
+  g.quadraticCurveTo(0.10 * s, -0.44 * s, -0.06 * s, -0.38 * s);
+  g.closePath();
+  g.fill();
+  g.beginPath();
+  g.arc(0.26 * s, -0.51 * s, 0.045 * s, 0, TAU);
+  g.fill();
+  g.restore();
+}
 
 const santa = {
   id: 'santa',
@@ -244,84 +545,35 @@ const santa = {
     g.lineJoin = 'round';
     g.lineWidth = s * 0.035;
 
-    // Reindeer team, strung out ahead of the sleigh on a rein line.
     const team = Math.round(p.reindeer);
-    for (let i = 0; i < team; i++) {
-      const rx = -s * (1.6 + i * 1.05);
-      const gallop = Math.sin(t * 9 + i * 1.3);
-      g.save();
-      g.translate(rx, Math.sin(t * 2.4 + i) * s * 0.04);
-      // Body.
+    const spacing = s * 1.15;
+    const lead = (i) => -s * 1.5 - i * spacing;
+    // Each deer rises and falls a little out of phase with the one ahead, so the
+    // team undulates down its length instead of pumping in unison.
+    const lift = (i) => Math.sin(t * 2.6 - i * 0.9) * s * 0.05;
+
+    // Traces first, so the team is drawn over its own harness.
+    if (team > 0) {
+      g.lineWidth = s * 0.014;
       g.beginPath();
-      g.ellipse(0, 0, s * 0.34, s * 0.16, 0, 0, TAU);
-      g.fill();
-      // Head and antlers.
-      g.beginPath();
-      g.moveTo(-s * 0.3, -s * 0.05);
-      g.lineTo(-s * 0.52, -s * 0.26);
+      g.moveTo(-s * 0.34, -s * 0.2);
+      for (let i = 0; i < team; i++) g.lineTo(lead(i) + s * 0.3, lift(i) - s * 0.12);
+      g.lineTo(lead(team - 1) - s * 0.4, lift(team - 1) - s * 0.2);
       g.stroke();
-      g.beginPath();
-      g.arc(-s * 0.55, -s * 0.3, s * 0.08, 0, TAU);
-      g.fill();
-      g.lineWidth = s * 0.022;
-      for (const side of [-1, 1]) {
-        g.beginPath();
-        g.moveTo(-s * 0.55, -s * 0.36);
-        g.lineTo(-s * 0.62 + side * s * 0.04, -s * 0.55);
-        g.lineTo(-s * 0.7 + side * s * 0.09, -s * 0.5);
-        g.stroke();
-      }
       g.lineWidth = s * 0.035;
-      // Legs.
-      for (const [ox, ph] of [[-0.2, 0], [0.18, Math.PI]]) {
-        g.beginPath();
-        g.moveTo(s * ox, s * 0.12);
-        g.lineTo(s * ox + Math.sin(gallop + ph) * s * 0.16, s * 0.38);
-        g.stroke();
-      }
+    }
+
+    for (let i = 0; i < team; i++) {
+      // Alternate deer lead with the opposite pair of legs, which is what stops
+      // the team looking like one animal copied along a line.
+      const gallop = t * 9.5 - i * 1.9 + (i % 2) * Math.PI;
+      g.save();
+      g.translate(lead(i), lift(i));
+      drawReindeer(g, s, gallop, s * 0.035);
       g.restore();
     }
 
-    if (team > 0) {
-      g.lineWidth = s * 0.015;
-      g.beginPath();
-      g.moveTo(-s * 0.3, -s * 0.05);
-      g.lineTo(-s * (1.6 + (team - 1) * 1.05) - s * 0.3, -s * 0.08);
-      g.stroke();
-      g.lineWidth = s * 0.035;
-    }
-
-    // Sleigh: a curled runner and a seat back.
-    g.beginPath();
-    g.moveTo(-s * 0.5, s * 0.18);
-    g.quadraticCurveTo(-s * 0.65, s * 0.3, -s * 0.45, s * 0.34);
-    g.lineTo(s * 0.5, s * 0.34);
-    g.stroke();
-    g.beginPath();
-    g.moveTo(-s * 0.45, s * 0.18);
-    g.lineTo(s * 0.45, s * 0.18);
-    g.quadraticCurveTo(s * 0.6, s * 0.1, s * 0.62, -s * 0.25);
-    g.quadraticCurveTo(s * 0.4, -s * 0.05, s * 0.28, s * 0.18);
-    g.closePath();
-    g.fill();
-
-    // Santa.
-    g.beginPath();
-    g.ellipse(s * 0.05, -s * 0.06, s * 0.15, s * 0.19, 0, 0, TAU);
-    g.fill();
-    g.beginPath();
-    g.arc(s * 0.05, -s * 0.3, s * 0.1, 0, TAU);
-    g.fill();
-    g.beginPath();
-    g.moveTo(-s * 0.05, -s * 0.36);
-    g.lineTo(s * 0.15, -s * 0.36);
-    g.lineTo(s * 0.22, -s * 0.52);
-    g.closePath();
-    g.fill();
-    g.beginPath();
-    g.moveTo(s * 0.15, -s * 0.12);
-    g.lineTo(-s * 0.3, -s * 0.24);
-    g.stroke();
+    drawSleigh(g, s, t, s * 0.035);
 
     g.restore();
   },

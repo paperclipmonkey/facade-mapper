@@ -251,6 +251,21 @@ gives a divergence-free velocity to advect it with, which is what makes smoke
 curl and billow instead of drifting. It also happens to be several times faster
 than the particle version it replaced.
 
+**Things land on the house.** Snow does not fall past your windows, it settles on
+them. Every shape you have traced presents a top surface; falling flakes test
+against those surfaces, pile up where they land, slump to a natural angle, and
+when a ledge gets too loaded the excess breaks away as slabs that slide down the
+wall and fade out at the bottom. Turn it off with **Settle on shapes**, aim it at
+one group of shapes with **Settle on tag**, and control how fast it gathers and
+how deep it gets before it lets go. `fx.ensureSurfaces` and friends are available
+to your own effects — `js/effects/collide.js` explains the model.
+
+One thing worth knowing about the surfaces: they are built *per shape*, not as
+one combined heightfield. That matters on a facade, where a traced roofline spans
+the whole width — with one shared surface every window under it would sit in the
+roof's shadow and never collect a flake. Snow on a flat elevation gathers on
+every ledge it can reach, so each shape collects independently.
+
 There is a fourth, less principled rule that matters just as much: **never set
 `ctx.filter` per particle**. Each filtered draw is rendered into its own layer
 and composited back, so a few hundred of them will cost tens of milliseconds a
@@ -301,6 +316,7 @@ What `draw` receives:
 | `rng`, `noise` | Seeded generators — identical in every tab. |
 | `media(id)` | A decoded video or image element from the library, or null. |
 | `world` | `{ w, h }` of the virtual frame. |
+| `shapes(tag, excludeId)` | Every other shape in the project, for collisions. Filter by tag, and pass `shape.id` so you don't collide with yourself. |
 | `fx` | Helpers: `fx.rgba`, `fx.glow`, `fx.mixHex`, `fx.TAU`, plus the physical set — `fx.blackbodyCss`, `fx.mixLinear`, `fx.rampAt`, `fx.ensureField`, `fx.curlNoise`. |
 
 Parameter types: `range`, `number`, `color`, `bool`, `select` (with `options`),

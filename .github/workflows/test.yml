@@ -39,3 +39,6 @@ jobs:
 
       - name: Motion, trigger, schedule and grading tests
         run: node test/runtime.test.mjs
+
+      - name: Surface collision tests
+        run: node test/collide.test.mjs

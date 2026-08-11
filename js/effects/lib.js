@@ -49,6 +49,29 @@ export { blackbody, blackbodyCss, blackbodyBytes, mixLinear, rampAt, luminance, 
  */
 export { createField, ensureField, curlNoise } from './field.js';
 
+/**
+ * Surface collision, for things that should land on the house rather than fall
+ * straight past it.
+ *
+ * `ctx.shapes(tag, excludeId)` hands you the rest of the traced scene;
+ * `ensureHeightfield` collapses it to the top surface it presents, and the rest
+ * accumulate material on that surface, let it slump to a natural angle, and shed
+ * it as falling slabs when it gets too deep. Snow uses the whole set — read
+ * `js/effects/collide.js` for how the pieces fit together.
+ */
+export {
+  buildHeightfield,
+  ensureSurfaces,
+  ensureDrift,
+  columnAt,
+  sweepLanding,
+  settle,
+  shedSlabs,
+  advanceSlabs,
+  drawDrift,
+  drawSlabs,
+} from './collide.js';
+
 /** Trace a point list onto a context. Handy when you want your own path. */
 export function tracePoints(g, points, closed = true) {
   if (!points.length) return;

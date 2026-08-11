@@ -220,6 +220,29 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
           ? [frameShapeCache]
           : shapes.map((s) => geometry.get(s, world));
 
+      /**
+       * The rest of the scene, for effects that have to know what else is out
+       * there — collisions, mainly. Resolved lazily and memoised per layer,
+       * because most effects never ask and the resolve is not free.
+       *
+       * The geometry cache hands back the same object for a shape that has not
+       * moved, so callers can compare by identity to know when to rebuild
+       * whatever they derived from it.
+       */
+      const sceneCache = new Map();
+      const sceneShapes = (tag, exclude) => {
+        const key = tag || '';
+        let list = sceneCache.get(key);
+        if (!list) {
+          const wanted = key.trim().toLowerCase();
+          list = project.shapes
+            .filter((s) => !wanted || (s.tags || []).some((v) => String(v).toLowerCase() === wanted))
+            .map((s) => geometry.get(s, world));
+          sceneCache.set(key, list);
+        }
+        return exclude ? list.filter((geo) => geo.id !== exclude) : list;
+      };
+
       const n = targets.length;
       for (let i = 0; i < n; i++) {
         const shape = targets[i];
@@ -249,6 +272,10 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
           noise: inst.noise,
           media: (id) => mediaPool?.get(id) ?? null,
           camera: () => camera?.() ?? null,
+          // Every shape in the project, optionally filtered to one tag. Pass
+          // the current shape's id as `exclude` so an effect does not collide
+          // with the thing it is being drawn into.
+          shapes: (tag, exclude) => sceneShapes(tag, exclude),
           preview,
         };
 
