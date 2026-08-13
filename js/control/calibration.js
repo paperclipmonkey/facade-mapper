@@ -20,6 +20,9 @@
 import { MSG } from '../core/bus.js';
 import { solveHomography, homographyError, mat3Inverse, applyH } from '../core/math.js';
 import { findBrightestBlob } from './camera.js';
+// The mesh spans the projector's coverage region exactly as the renderer
+// computes it, so the same function has to define it in both places.
+import { computeRegion } from '../render/warp.js';
 
 /** Where the calibration dots sit in the projector's own normalised output. */
 export const MARKER_GRID = [0.12, 0.5, 0.88];
@@ -64,76 +67,87 @@ export function markerPositions(grid = MARKER_GRID) {
  * and seen by the camera somewhere; the gap between where the homography says it
  * should have landed and where it actually landed *is* the surface departing
  * from flat. Feed those residuals into the warp mesh and the departure is
- * corrected. On a genuinely flat wall they are all ~0 and the mesh does nothing,
- * so this costs nothing to have switched on.
+ * corrected. On a genuinely flat wall they are all ~0 and the mesh does nothing.
  *
- * The dots sit on an inset grid but mesh control points span the full output, so
- * the residual field is resampled onto 0..1, holding the edge gradient beyond
- * the outermost dots.
+ * **The mesh is indexed in camera space, not projector space.** That is the
+ * whole subtlety here, and getting it wrong produces a spectacular mess rather
+ * than a small error. The renderer walks a grid across its region of the *world*
+ * (which is camera space), maps each point through H to get a projector
+ * coordinate, and adds the mesh offset it finds at that world position:
  *
- * @param {Array} detections markers from a calibration pass, row-major
+ *     s, t = H(worldU, worldV)      // projector space
+ *     s += dx; t += dy              // offset looked up at (worldU, worldV)
+ *
+ * So the offsets are *valued* in projector space but *addressed* by world
+ * position. The dots are laid out on a regular grid in projector space and land
+ * on an irregular quadrilateral in camera space, so their residuals have to be
+ * resampled onto a regular grid in camera space before they mean anything to the
+ * renderer. Indexing them by their projector positions instead scatters every
+ * correction to the wrong part of the wall.
+ *
+ * Resampling is inverse-distance weighting over the nearest few dots. The
+ * samples are scattered and irregular by definition, the field they describe is
+ * smooth, and IDW extrapolates sensibly past the outermost dot rather than
+ * falling off a cliff at the edge of the grid.
+ *
+ * @param {Array} detections markers from a calibration pass
  * @param {number[]} H the solved camera→projector homography
  * @param {number[]} axis the grid coordinates the dots were placed on
+ * @param {{x:number,y:number,w:number,h:number}} region the world-space area the
+ *   projector covers, as the renderer computes it — the mesh spans exactly this
  */
-export function residualMesh(detections, H, axis) {
+export function residualMesh(detections, H, axis, region) {
   const n = axis.length;
-  if (n < 3 || detections.length < n * n) return null;
+  if (n < 3 || !region || !(region.w > 0) || !(region.h > 0)) return null;
 
-  // Residual per dot, in normalised projector units, indexed [row][col].
-  const known = [];
+  // Each usable dot becomes a sample: where it was seen (in mesh index space)
+  // and how far the homography was wrong about it (in projector space).
+  const samples = [];
   let offPlane = false;
-  for (let r = 0; r < n; r++) {
-    known.push([]);
-    for (let c = 0; c < n; c++) {
-      const d = detections[r * n + c];
-      const p = d?.camera ? applyH(H, d.camera[0], d.camera[1]) : null;
-      if (!p) { known[r].push(null); continue; }
-      const dx = d.projector[0] - p.x;
-      const dy = d.projector[1] - p.y;
-      known[r].push([dx, dy]);
-      // ~4px of a 1920-wide output. Below that it is detection noise, and
-      // baking noise into the mesh makes a flat wall worse, not better.
-      if (Math.hypot(dx, dy) > 0.002) offPlane = true;
-    }
+  for (const d of detections) {
+    if (!d?.camera) continue;
+    const p = applyH(H, d.camera[0], d.camera[1]);
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+    const dx = d.projector[0] - p.x;
+    const dy = d.projector[1] - p.y;
+    samples.push({
+      u: (d.camera[0] - region.x) / region.w,
+      v: (d.camera[1] - region.y) / region.h,
+      dx,
+      dy,
+    });
+    // ~4px of a 1920-wide output. Below that it is detection noise, and baking
+    // noise into the mesh makes a flat wall worse rather than better.
+    if (Math.hypot(dx, dy) > 0.002) offPlane = true;
   }
-  if (!offPlane) return null;
+  if (!offPlane || samples.length < 4) return null;
 
-  // Fill holes from the neighbours, so one missed dot does not punch a dent
-  // into the correction.
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      if (known[r][c]) continue;
-      let sx = 0; let sy = 0; let count = 0;
-      for (let dr = -1; dr <= 1; dr++) {
-        for (let dc = -1; dc <= 1; dc++) {
-          const v = known[r + dr]?.[c + dc];
-          if (v) { sx += v[0]; sy += v[1]; count++; }
-        }
-      }
-      known[r][c] = count ? [sx / count, sy / count] : [0, 0];
-    }
-  }
-
-  const span = axis[n - 1] - axis[0] || 1;
-  const at = (r, c, comp) => known[clampIdx(r, n)][clampIdx(c, n)][comp];
-  const bilinear = (fx, fy, comp) => {
-    const x0 = Math.floor(fx);
-    const y0 = Math.floor(fy);
-    const tx = fx - x0;
-    const ty = fy - y0;
-    const a = at(y0, x0, comp) * (1 - tx) + at(y0, x0 + 1, comp) * tx;
-    const b = at(y0 + 1, x0, comp) * (1 - tx) + at(y0 + 1, x0 + 1, comp) * tx;
-    return a * (1 - ty) + b * ty;
-  };
-
+  const NEIGHBOURS = 6;
   const offsets = [];
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {
-      // Where this control point sits within the dot grid, extrapolated past
-      // either end so the corners are covered.
-      const fx = ((c / (n - 1) - axis[0]) / span) * (n - 1);
-      const fy = ((r / (n - 1) - axis[0]) / span) * (n - 1);
-      offsets.push(bilinear(fx, fy, 0), bilinear(fx, fy, 1));
+      const u = c / (n - 1);
+      const v = r / (n - 1);
+      const near = samples
+        .map((s) => ({ s, d2: (s.u - u) ** 2 + (s.v - v) ** 2 }))
+        .sort((a, b) => a.d2 - b.d2)
+        .slice(0, NEIGHBOURS);
+
+      // Sitting exactly on a dot: take it rather than dividing by ~zero.
+      if (near[0].d2 < 1e-9) {
+        offsets.push(near[0].s.dx, near[0].s.dy);
+        continue;
+      }
+      let wsum = 0;
+      let dx = 0;
+      let dy = 0;
+      for (const { s, d2 } of near) {
+        const w = 1 / d2;
+        wsum += w;
+        dx += s.dx * w;
+        dy += s.dy * w;
+      }
+      offsets.push(dx / wsum, dy / wsum);
     }
   }
 
@@ -297,7 +311,9 @@ export async function runCalibration({
 
   // With a denser grid there is enough information to measure how far the wall
   // departs from the single plane the homography assumes, and correct it.
-  const mesh = axis.length > 3 ? residualMesh(detections, H, axis) : null;
+  const mesh = axis.length > 3
+    ? residualMesh(detections, H, axis, computeRegion(H))
+    : null;
 
   return {
     H,

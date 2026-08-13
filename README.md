@@ -108,6 +108,11 @@ better plane — they measure how far the wall departs from one. The homography
 still does the global mapping; the leftover error at each dot is exactly the
 surface bending away, and that goes into the warp mesh as a correction.
 
+A corner is a discontinuity in slope and the mesh interpolates smoothly, so the
+correction rounds the seam off slightly rather than reproducing it exactly. It
+takes the bulk of the misalignment out; if the crease itself still reads as soft,
+nudge those control points by hand with **Surface warp**.
+
 On a genuinely flat wall the residuals come out at nothing and the mesh stays
 flat, so there is no cost to using a denser grid other than the time it takes to
 step through the dots. Anything left over after that can still be nudged by hand
