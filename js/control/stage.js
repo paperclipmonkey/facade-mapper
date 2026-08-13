@@ -279,6 +279,7 @@ export function createStage({ canvas, wrap, app }) {
         app.project.shapes.push(shape);
         app.select({ type: 'shape', id: shape.id });
         app.commit();
+        app.nameNewShape?.(shape.id);
       }
     } else if (gesture) {
       app.commit();
@@ -364,6 +365,7 @@ export function createStage({ canvas, wrap, app }) {
       app.project.shapes.push(shape);
       app.select({ type: 'shape', id: shape.id });
       app.commit();
+      app.nameNewShape?.(shape.id);
     }
     drafting = null;
   }

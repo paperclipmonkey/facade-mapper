@@ -75,11 +75,15 @@ instead of this list.
    rather than the fit. A denser pass measures how far the wall departs from a
    plane and bends the output to match.
 5. **Trace the house.** The **Area** tool for windows and doors, the **Path**
-   tool for rooflines and gutters. Tag each shape (`window`, `door`, `roof`…) so
-   effects can target groups rather than individual shapes.
+   tool for rooflines and gutters. As each shape closes you are asked to name it,
+   and clicking a tag both tags *and* names it — one click turns a new rectangle
+   into "Window 2" tagged `window`. Worth doing: an effect pointed at the
+   `window` tag lights every window, and keeps working as you trace more.
 6. **Effects → Halloween starter** (or Christmas). That builds a complete look
    out of what you have tagged, grading included. Then take it apart and make it
-   yours.
+   yours — **Browse…** on any layer opens a gallery that renders all fifty
+   effects live, on a shape like the one you are pointing at, so you can pick by
+   eye rather than by name.
 7. **Export** once the alignment is right. That JSON file is your backup.
 
 ## How the alignment works
