@@ -294,10 +294,27 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
           }
         }
 
-        // A softened layer is drawn into the scratch buffer at the same world
-        // transform, then composited back through a single blur.
+        /**
+         * Opacity, blend and softness are *layer* properties, so they have to
+         * survive whatever the effect does to the context.
+         *
+         * Setting `globalAlpha` before calling draw() only works for effects
+         * that multiply into it. Most do not — they assign, because that is the
+         * obvious thing to write — and the moment one does, the layer's Opacity
+         * slider stops doing anything at all. Same for Blend against any effect
+         * that sets its own composite operation, which every additive effect
+         * does. Both controls looked broken, and were.
+         *
+         * The fix is to composite the layer as a *group*: draw it into a scratch
+         * buffer where it can do as it likes, then blit that once with the
+         * layer's alpha and blend. Canvas has no group opacity, so the buffer is
+         * the mechanism. It costs one full-frame blit, paid only by layers that
+         * actually use one of these controls.
+         */
         const softness = layer.softness || 0;
-        const useScratch = softness > 0 && 'filter' in g;
+        const opacity = layer.opacity ?? 1;
+        const blend = layer.blend || 'source-over';
+        const useScratch = softness > 0 || opacity < 1 || blend !== 'source-over';
         let target = g;
 
         if (useScratch) {
@@ -310,8 +327,8 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
         }
 
         target.save();
-        target.globalAlpha = useScratch ? 1 : (layer.opacity ?? 1) * master;
-        target.globalCompositeOperation = useScratch ? 'source-over' : layer.blend || 'source-over';
+        target.globalAlpha = useScratch ? 1 : opacity * master;
+        target.globalCompositeOperation = useScratch ? 'source-over' : blend;
         // Reset the drawing state effects tend to assume is fresh.
         target.lineWidth = 1;
         target.lineCap = 'butt';
@@ -335,13 +352,15 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
           ctx.g = g;
           g.save();
           g.setTransform(1, 0, 0, 1, 0, 0);
-          g.globalAlpha = (layer.opacity ?? 1) * master;
-          g.globalCompositeOperation = layer.blend || 'source-over';
+          g.globalAlpha = opacity * master;
+          g.globalCompositeOperation = blend;
           // Softness is authored in world pixels so it means the same thing
           // regardless of the projector's buffer resolution.
-          g.filter = `blur(${(softness * pixelSize.w) / (roi.w * world.w)}px)`;
+          if (softness > 0 && 'filter' in g) {
+            g.filter = `blur(${(softness * pixelSize.w) / (roi.w * world.w)}px)`;
+          }
           g.drawImage(scratch, 0, 0);
-          g.filter = 'none';
+          if ('filter' in g) g.filter = 'none';
           g.restore();
         }
       }

@@ -76,10 +76,9 @@ export const HELP_HTML = `
   pixels.
 </p>
 <p>
-  The consequence worth knowing: <strong>it assumes a flat surface</strong>. A flat front elevation
-  is fine. A bay window, a porch roof or a deep reveal sticks out of that plane and will land
-  slightly off. Fix those with the per-projector <em>Surface warp</em> grid, or give the protruding
-  part its own projector.
+  The consequence worth knowing: a homography describes a <strong>plane</strong>. A flat front
+  elevation is fine. A bay window, a porch roof, a deep reveal or a corner where faces meet sticks
+  out of that plane — see below.
 </p>
 
 <h2>The look</h2>
@@ -271,6 +270,22 @@ export const HELP_HTML = `
 <p>In a projector tab: <kbd>F</kbd> fullscreen, <kbd>I</kbd> status, <kbd>T</kbd> cycle test patterns.</p>
 <p class="muted">
   Any other single key can be bound to a trigger. Avoid the ones above and 1–9, which are taken.
+</p>
+
+<h2>When the wall is not flat</h2>
+<p>
+  The alignment solves a homography, which describes a <em>plane</em>. A flat front elevation is
+  exactly right for that. A corner where two or three faces meet is exactly wrong for it — no single
+  plane fits, so you can line one face up and the others go out, and re-aligning will not help
+  because the problem is the model rather than the fit.
+</p>
+<p>
+  Set <strong>Wall shape</strong> on the projector to a denser grid. The alignment then steps through
+  25 or 49 dots instead of 9. The extra dots are not fitting a better plane; they are measuring how
+  far the wall departs from one. The homography still does the global mapping, and the error left
+  over at each dot — which <em>is</em> the surface bending away — goes into the warp mesh as a
+  correction. On a flat wall those residuals come out at nothing and the mesh stays flat, so the only
+  cost is the time it takes to step through the dots.
 </p>
 
 <h2>Getting a good alignment</h2>

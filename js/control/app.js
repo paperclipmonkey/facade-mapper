@@ -85,6 +85,8 @@ const mediaPool = createMediaPool({ onError: (m) => toast(m, 'bad') });
 const app = {
   project: loadOrCreateProject(),
   selection: { type: null, id: null },
+  /** Shape ids lit up from the panels, linking a layer to what it draws into. */
+  highlightedShapes: null,
   tool: 'select',
   showShapeNames: true,
   showEffectsPreview: true,
@@ -256,6 +258,24 @@ app.selectedProjector = () => {
 };
 
 app.resetLayerState = (layerId) => worldRenderer.resetLayer(layerId);
+
+/**
+ * Light up a set of shapes on the stage without selecting them.
+ *
+ * Selection is a commitment — it changes the inspector and what the keyboard
+ * does. Answering "which shape is this layer pointed at?" should not cost you
+ * the panel you are working in, so hovering only highlights.
+ */
+app.highlightShapes = (ids) => {
+  const next = ids && ids.length ? ids : null;
+  const same = next === app.highlightedShapes
+    || (next && app.highlightedShapes && next.length === app.highlightedShapes.length
+        && next.every((id, i) => id === app.highlightedShapes[i]));
+  if (same) return;
+  // No redraw needed: the stage repaints every frame and will pick this up on
+  // the next one. Calling draw() here would also need the whole frame payload.
+  app.highlightedShapes = next;
+};
 
 app.fireTrigger = (triggerId) => {
   const trigger = app.project.triggers.find((t) => t.id === triggerId);
@@ -465,10 +485,12 @@ app.startCalibration = async (projectorId) => {
   app.pushUndo();
 
   try {
+    const gridSize = Math.max(3, Math.round(projector.calibration?.gridSize || 3));
     const result = await runCalibration({
       bus,
       camera,
       projectorId,
+      gridSize,
       onProgress: updateCalibrationProgress,
       signal: calibrationAbort.signal,
     });
@@ -479,14 +501,22 @@ app.startCalibration = async (projectorId) => {
       worldQuad: projector.calibration?.worldQuad || null,
       quality: result.quality,
       calibratedAt: result.calibratedAt,
+      gridSize: result.gridSize,
       markers: result.markers,
     };
+    // A denser pass measures how far the wall departs from the plane the
+    // homography assumes and hands back a correction for it. On a flat wall it
+    // hands back nothing, so an existing hand-tuned mesh is left alone.
+    if (result.mesh) projector.mesh = result.mesh;
     projector.testPattern = 'off';
     app.commit();
 
     const found = result.markers.filter((m) => m.camera).length;
+    const shaped = result.mesh
+      ? ` Surface correction applied — the wall is not flat, so ${result.gridSize}×${result.gridSize} control points now carry the difference.`
+      : '';
     toast(
-      `${projector.name} aligned — ${result.quality.rating}, ${result.quality.meanPx.toFixed(1)} px average error from ${found} markers.`,
+      `${projector.name} aligned — ${result.quality.rating}, ${result.quality.meanPx.toFixed(1)} px average error from ${found} markers.${shaped}`,
       result.quality.rating === 'poor' ? 'bad' : 'good'
     );
   } catch (err) {

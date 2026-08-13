@@ -463,7 +463,11 @@ export function createStage({ canvas, wrap, app }) {
     for (const shape of app.project.shapes) {
       if (shape.visible === false) continue;
       const selected = app.selection.type === 'shape' && app.selection.id === shape.id;
-      const hovered = hover.shapeId === shape.id;
+      // Highlighted from the panels: hovering a layer lights up everything it
+      // draws into, so "which one is Area 3" is answered by pointing at it
+      // rather than by reading names off a list.
+      const linked = app.highlightedShapes?.includes(shape.id);
+      const hovered = hover.shapeId === shape.id || linked;
       const points = shape.points.map((p) => ({ x: p.x * w, y: p.y * h }));
       if (!points.length) continue;
 
@@ -473,11 +477,18 @@ export function createStage({ canvas, wrap, app }) {
       if (shape.closed) g.closePath();
 
       if (shape.closed) {
-        g.fillStyle = selected ? 'rgba(255,122,24,0.16)' : hovered ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.03)';
+        g.fillStyle = selected
+          ? 'rgba(255,122,24,0.16)'
+          : linked ? 'rgba(76,194,255,0.20)'
+          : hovered ? 'rgba(255,255,255,0.07)'
+          : 'rgba(255,255,255,0.03)';
         g.fill();
       }
-      g.strokeStyle = selected ? '#ff7a18' : shape.locked ? '#6b7488' : hovered ? '#ffffff' : '#8fa0bd';
-      g.lineWidth = (selected ? 2 : 1.2) * dpr;
+      g.strokeStyle = selected ? '#ff7a18'
+          : linked ? '#4cc2ff'
+          : shape.locked ? '#6b7488'
+          : hovered ? '#ffffff' : '#8fa0bd';
+      g.lineWidth = (selected || linked ? 2 : 1.2) * dpr;
       g.setLineDash(shape.closed ? [] : [6 * dpr, 4 * dpr]);
       g.stroke();
       g.setLineDash([]);

@@ -426,6 +426,38 @@ function renderProjector(container, app, id) {
 
   container.appendChild(heading('Alignment'));
 
+  /**
+   * Grid density is really a question about the *wall*, so it is worded as one.
+   * Three dots per axis is all a flat elevation needs — a homography fits that
+   * exactly. More dots do not fit a better plane; they measure how far the wall
+   * departs from one, which is the only way to align a surface that turns a
+   * corner.
+   */
+  const surfaceSelect = el('select', { class: 'input' }, [
+    ['3', 'Flat wall — 9 dots, fastest'],
+    ['5', 'Slightly uneven — 25 dots'],
+    ['7', 'Corners or several faces — 49 dots'],
+  ].map(([value, label]) => el('option', {
+    value,
+    text: label,
+    selected: String(projector.calibration?.gridSize || 3) === value,
+  })));
+  surfaceSelect.addEventListener('change', () => {
+    projector.calibration = { ...(projector.calibration || {}), gridSize: Number(surfaceSelect.value) };
+    app.commit();
+  });
+  container.appendChild(el('label', { class: 'field' }, [
+    el('span', { text: 'Wall shape' }),
+    surfaceSelect,
+  ]));
+  container.appendChild(el('p', {
+    class: 'panel-note',
+    text: 'A flat wall is a single plane, and nine dots pin it down exactly. Where two or three faces '
+      + 'meet at a corner, no single plane fits — line up one face and the others are out. A denser '
+      + 'pass measures that difference and bends the output to match. It takes longer, one dot at a '
+      + 'time, and it is the fix for a wall you cannot get aligned on all sides at once.',
+  }));
+
   const calibrateBtn = el('button', {
     type: 'button',
     class: 'btn small primary',
