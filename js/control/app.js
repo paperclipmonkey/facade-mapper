@@ -50,6 +50,7 @@ import { runCalibration, checkDrift, solveFromCorners } from './calibration.js';
 import { createStage, defaultWorldQuad } from './stage.js';
 import { createAudioAnalyser } from './audio.js';
 import { renderInspector } from './inspector.js';
+import { renderSetupGuide } from './setup.js';
 import {
   renderProjectorList,
   renderShapeList,
@@ -259,6 +260,27 @@ app.selectedProjector = () => {
 
 app.resetLayerState = (layerId) => worldRenderer.resetLayer(layerId);
 
+/* The setup walkthrough drives the app through these rather than reaching into
+ * the DOM for other panels' buttons, so the two cannot drift apart. */
+app.switchPanel = (name) => switchPanel(name);
+
+app.addProjector = () => {
+  app.pushUndo();
+  const projector = createProjector(app.project.projectors.length);
+  app.project.projectors.push(projector);
+  app.select({ type: 'projector', id: projector.id });
+  app.commit();
+  return projector;
+};
+
+app.rollCall = () => {
+  presence.rollCall();
+  setTimeout(() => {
+    refreshPanels();
+    updateStageStatus();
+  }, 400);
+};
+
 /**
  * Light up a set of shapes on the stage without selecting them.
  *
@@ -300,6 +322,7 @@ app.estimateQuota = estimateQuota;
  * ------------------------------------------------------------------ */
 
 function refreshPanels() {
+  renderSetupGuide($('setupGuide'), app);
   renderProjectorList($('projectorList'), app);
   renderShapeList($('shapeList'), app, $('shapeFilter').value);
   renderLayerList($('layerList'), app);
@@ -1132,21 +1155,8 @@ function wire() {
 
   /* --- Projectors --- */
 
-  $('btnAddProjector').addEventListener('click', () => {
-    app.pushUndo();
-    const projector = createProjector(app.project.projectors.length);
-    app.project.projectors.push(projector);
-    app.select({ type: 'projector', id: projector.id });
-    app.commit();
-  });
-
-  $('btnRollCall').addEventListener('click', () => {
-    presence.rollCall();
-    setTimeout(() => {
-      refreshPanels();
-      updateStageStatus();
-    }, 400);
-  });
+  $('btnAddProjector').addEventListener('click', () => app.addProjector());
+  $('btnRollCall').addEventListener('click', () => app.rollCall());
 
   /* --- Shapes --- */
 

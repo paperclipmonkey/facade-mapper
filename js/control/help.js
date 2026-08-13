@@ -53,6 +53,11 @@ export default {
 
 export const HELP_HTML = `
 <h2>Getting a house mapped</h2>
+<p>
+  The <strong>Start here</strong> panel walks you through all of this and knows how far you have
+  got — it ticks off what is done, expands the step you are on, and gives you the button for it.
+  What follows is the same sequence in prose.
+</p>
 <ol>
   <li><strong>Point a camera at the house</strong> from roughly where people will stand. Setup &rarr; Start camera. A tripod matters more than a good camera — everything below assumes the camera does not move.</li>
   <li><strong>Open a projector tab</strong> for each projector, drag each to its own display and press <kbd>F</kbd> for fullscreen.</li>

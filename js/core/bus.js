@@ -140,11 +140,16 @@ export function createPresence(bus, { staleMs = 9000 } = {}) {
     const existing = peers.get(info.tabId);
     const next = { ...existing, ...info, lastSeen: Date.now() };
     peers.set(info.tabId, next);
+    // Anything the setup walkthrough shows has to be in here, or the checklist
+    // sits on a stale answer until something else happens to trigger a redraw.
     const changed =
       !existing ||
       existing.projectorId !== next.projectorId ||
       existing.width !== next.width ||
-      existing.height !== next.height;
+      existing.height !== next.height ||
+      existing.fullscreen !== next.fullscreen ||
+      existing.screenX !== next.screenX ||
+      existing.screenY !== next.screenY;
     if (changed) notify();
   };
 
