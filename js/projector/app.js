@@ -105,6 +105,63 @@ function reportError(message) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Camera, on demand
+ *
+ * The control tab owns the camera for tracing and alignment, and for a long
+ * time it was the only tab that had one. That quietly meant every camera-driven
+ * effect worked in the control preview and drew nothing on the actual wall —
+ * `ctx.camera()` returned null out here, so a Live Camera layer simply never
+ * appeared, with no error to say why.
+ *
+ * A projector tab now opens the camera itself, but only when something asks:
+ * the stream starts on the first `ctx.camera()` call and returns null until it
+ * is ready. Nothing pays for a camera it does not use, and a show with no
+ * camera effects never touches the device. Opening the same device from several
+ * tabs is fine — same origin, so the permission is already granted.
+ * ------------------------------------------------------------------ */
+
+let cameraVideo = null;
+let cameraState = 'idle'; // idle | starting | ready | failed
+
+function cameraFrame() {
+  if (cameraState === 'ready') {
+    return cameraVideo && cameraVideo.readyState >= 2 ? cameraVideo : null;
+  }
+  // One attempt only. A denied permission or an absent device must not turn
+  // into a getUserMedia call on every frame for the rest of the night.
+  if (cameraState !== 'idle') return null;
+  cameraState = 'starting';
+
+  const deviceId = project?.settings?.cameraId || null;
+  const constraints = {
+    audio: false,
+    video: deviceId
+      ? { deviceId: { ideal: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      : { width: { ideal: 1280 }, height: { ideal: 720 } },
+  };
+
+  navigator.mediaDevices?.getUserMedia(constraints)
+    .then(async (stream) => {
+      cameraVideo = document.createElement('video');
+      cameraVideo.playsInline = true;
+      cameraVideo.muted = true;
+      cameraVideo.autoplay = true;
+      cameraVideo.srcObject = stream;
+      await cameraVideo.play().catch(() => {});
+      cameraState = 'ready';
+    })
+    .catch((err) => {
+      cameraState = 'failed';
+      reportError(
+        `A layer wants the camera but this tab could not open it (${err.name || err.message}). `
+        + 'Allow camera access for this tab, or remove the camera layer.'
+      );
+    });
+
+  return null;
+}
+
+/* ------------------------------------------------------------------ *
  * Project handling
  * ------------------------------------------------------------------ */
 
@@ -588,6 +645,7 @@ async function boot() {
   mediaPool = createMediaPool({ onError: reportError });
   worldRenderer = createWorldRenderer({
     mediaPool,
+    camera: cameraFrame,
     onEffectError: ({ effectId, message }) => reportError(`Effect "${effectId}": ${message}`),
   });
 

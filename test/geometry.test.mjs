@@ -229,5 +229,60 @@ async function calibrateAgainst(Hgt, opts = {}) {
   ok('disabled mesh is a no-op', sampleMesh({ ...mesh, enabled: false }, 0.5, 0.5)[0] === 0);
 }
 
+
+/* ------------------------------------------------------------------ *
+ * Non-planar correction
+ *
+ * A homography is the right model for a flat wall and the wrong one for a
+ * corner. These check that the leftover error after the solve is turned into a
+ * correction with the right sign and the right magnitude — a mesh applied
+ * backwards doubles the misalignment instead of removing it, and looks
+ * plausible right up until you point it at a real wall.
+ * ------------------------------------------------------------------ */
+
+{
+  console.log('\n— residual mesh —');
+
+  const { gridAxis, residualMesh } = await import('../js/control/calibration.js');
+
+  const axis = gridAxis(5);
+  ok('a denser grid spans the output', axis.length === 5 && axis[0] > 0 && axis[4] < 1,
+     axis.map((v) => v.toFixed(2)).join(' '));
+  ok('3 keeps the original marker positions', gridAxis(3).join() === [0.12, 0.5, 0.88].join());
+
+  // A camera that sees the projector output exactly: H is the identity, so a
+  // perfectly flat wall leaves no residual at all.
+  const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  const flat = [];
+  for (const t of axis) for (const s of axis) flat.push({ projector: [s, t], camera: [s, t] });
+  ok('a flat wall produces no mesh', residualMesh(flat, identity, axis) === null);
+
+  // Now bend it: everything right of centre is seen 3% further right than a
+  // plane would put it, as a face angled away from the camera would be.
+  const bent = flat.map(({ projector, camera }) => ({
+    projector,
+    camera: [camera[0] > 0.5 ? camera[0] + 0.03 : camera[0], camera[1]],
+  }));
+  const mesh = residualMesh(bent, identity, axis);
+  ok('a bent wall produces a mesh', mesh !== null && mesh.enabled);
+  ok('the mesh matches the grid', mesh.cols === 5 && mesh.rows === 5 && mesh.offsets.length === 50);
+
+  // The correction has to oppose the error, not repeat it: the camera saw those
+  // points shifted +x, so the output must move -x to land back on target.
+  const dxAt = (col, row) => mesh.offsets[(row * 5 + col) * 2];
+  ok('the correction opposes the measured error', dxAt(4, 2) < -0.01,
+     `right-hand offset ${dxAt(4, 2).toFixed(4)}`);
+  ok('and is roughly the size of it', Math.abs(dxAt(4, 2) + 0.03) < 0.012,
+     `${dxAt(4, 2).toFixed(4)} vs the -0.03 needed`);
+  ok('the unbent side is left alone', Math.abs(dxAt(0, 2)) < 0.005,
+     `left-hand offset ${dxAt(0, 2).toFixed(4)}`);
+
+  // A dot the camera never found must not punch a hole in the correction.
+  const holed = bent.map((d, i) => (i === 12 ? { ...d, camera: null } : d));
+  const patched = residualMesh(holed, identity, axis);
+  ok('a missed marker is filled from its neighbours',
+     patched !== null && patched.offsets.every((v) => Number.isFinite(v)));
+}
+
 console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILURE(S)`}`);
 process.exit(failures ? 1 : 0);

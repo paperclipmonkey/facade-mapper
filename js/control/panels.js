@@ -80,13 +80,33 @@ export function renderShapeList(node, app, filter = '') {
       app.commit();
     });
 
+    // The other half of the link: what is actually lighting this shape up. A
+    // shape you traced and never pointed anything at looks exactly like one
+    // carrying four effects, and "nothing is happening on that window" is the
+    // hardest thing to diagnose from a list that does not say.
+    const hits = app.project.layers.filter(
+      (layer) => layer.enabled !== false && targetedShapeIds(app, layer).includes(shape.id)
+    );
+    const effectsLabel = hits.length
+      ? `${hits.length} effect${hits.length === 1 ? '' : 's'}`
+      : 'no effects';
+
     const item = el('div', { class: `list-item${selected ? ' selected' : ''}` }, [
       visibility,
       el('span', { class: 'item-title', text: shape.name, title: shape.name }),
       shape.tags?.length ? el('span', { class: 'item-sub', text: `#${shape.tags[0]}${shape.tags.length > 1 ? `+${shape.tags.length - 1}` : ''}` }) : null,
       el('span', { class: 'item-sub', text: shape.closed ? 'area' : 'path' }),
+      el('span', {
+        class: `item-sub${hits.length ? '' : ' muted'}`,
+        text: effectsLabel,
+        title: hits.length
+          ? hits.map((l) => l.name || getEffect(l.effect)?.name || l.effect).join(', ')
+          : 'Nothing is drawing into this shape yet.',
+      }),
     ]);
     item.addEventListener('click', () => app.select({ type: 'shape', id: shape.id }));
+    item.addEventListener('mouseenter', () => app.highlightShapes?.([shape.id]));
+    item.addEventListener('mouseleave', () => app.highlightShapes?.(null));
     node.appendChild(item);
   }
 }
@@ -147,23 +167,67 @@ export function renderLayerList(node, app) {
       reorder(app, layers, index, 1);
     });
 
-    const targetCount = (layer.targets?.length || 0) + (layer.targetTags?.length || 0);
+    /**
+     * What a layer *is* and what it *hits*, both readable without clicking.
+     *
+     * The old row said "1 target", which is a count rather than an answer — you
+     * could not tell which window it pointed at without opening it. Worse, the
+     * title fell back to a stored name that goes stale the moment the effect
+     * changes: a layer created by a preset as "Night wash" and switched to Live
+     * Camera still read as "Night wash", so the list actively lied about what
+     * was running. The effect name is now always shown, whatever the layer is
+     * called.
+     */
+    const effectName = effect?.name || layer.effect;
+    const title = layer.name || effectName;
+    const named = Boolean(layer.name) && layer.name !== effectName;
+    const targets = describeTargets(app, layer);
 
     const item = el('div', { class: `list-item${selected ? ' selected' : ''}` }, [
       power,
       solo,
+      el('span', { class: 'item-title', text: title, title }),
       el('span', {
-        class: 'item-title',
-        text: layer.name || effect?.name || layer.effect,
-        title: layer.name || effect?.name || layer.effect,
+        class: 'item-sub',
+        text: named ? `${effectName} · ${targets}` : targets,
+        title: named ? `${effectName} on ${targets}` : `on ${targets}`,
       }),
-      el('span', { class: 'item-sub', text: targetCount ? `${targetCount} target${targetCount === 1 ? '' : 's'}` : 'whole frame' }),
       up,
       down,
     ]);
     item.addEventListener('click', () => app.select({ type: 'layer', id: layer.id }));
+    // Hovering a layer lights up the shapes it draws into, which is the fastest
+    // way to answer "which one is Area 3?" without reading any labels.
+    item.addEventListener('mouseenter', () => app.highlightShapes?.(targetedShapeIds(app, layer)));
+    item.addEventListener('mouseleave', () => app.highlightShapes?.(null));
     node.appendChild(item);
   });
+}
+
+/** Shape ids a layer actually draws into, resolving its tag filter. */
+export function targetedShapeIds(app, layer) {
+  const ids = new Set(layer.targets || []);
+  const tags = (layer.targetTags || []).map((t) => String(t).toLowerCase());
+  if (tags.length) {
+    for (const shape of app.project.shapes) {
+      if ((shape.tags || []).some((t) => tags.includes(String(t).toLowerCase()))) ids.add(shape.id);
+    }
+  }
+  return [...ids];
+}
+
+/** "porch and door", "4 × #window", "whole frame" — a phrase, not a count. */
+function describeTargets(app, layer) {
+  const tags = layer.targetTags || [];
+  const ids = targetedShapeIds(app, layer);
+  if (!ids.length && !tags.length) return 'whole frame';
+  if (tags.length && ids.length > 3) return `${ids.length} × ${tags.map((t) => `#${t}`).join(', ')}`;
+  const names = ids
+    .map((id) => app.project.shapes.find((s) => s.id === id)?.name)
+    .filter(Boolean);
+  if (!names.length) return tags.length ? tags.map((t) => `#${t}`).join(', ') : 'whole frame';
+  if (names.length <= 2) return names.join(' and ');
+  return `${names.slice(0, 2).join(', ')} +${names.length - 2}`;
 }
 
 function reorder(app, ordered, index, direction) {

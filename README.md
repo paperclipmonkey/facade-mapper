@@ -60,6 +60,14 @@ it maps shapes to projectors and runs programmable effects on them.
    <kbd>F</kbd>.
 4. **Projectors → select one → Align with camera.** It shows nine dots one at a
    time and finds them. Do this after dark. Repeat for each projector.
+
+   If the surface is not flat — a corner where two or three faces meet, a bay,
+   a porch that stands proud of the wall — set **Wall shape** to a denser grid
+   first. A homography is exactly the right model for a flat elevation and
+   exactly the wrong one for a corner: line one face up and the others go out,
+   and no amount of re-aligning fixes it, because the problem is the model
+   rather than the fit. A denser pass measures how far the wall departs from a
+   plane and bends the output to match.
 5. **Trace the house.** The **Area** tool for windows and doors, the **Path**
    tool for rooflines and gutters. Tag each shape (`window`, `door`, `roof`…) so
    effects can target groups rather than individual shapes.
@@ -81,11 +89,23 @@ The app reports the solve quality in pixels of a nominal 1920-wide output. Under
 about 5 px is good. It also throws away a single bad detection — a reflection, a
 passing car — and re-solves if that clearly helps.
 
-**The important caveat: it assumes a flat surface.** A flat front elevation is
-fine. A bay window, a porch roof or a deep reveal sticks out of that plane and
-will land slightly off. Two ways round it: the per-projector **Surface warp**
-grid, which lets you drag control points until it sits right, or give the
-protruding part its own projector.
+### When the wall is not flat
+
+A homography describes a plane, so a flat front elevation is exactly right and a
+corner is exactly wrong. Where two or three faces meet, no single plane fits: you
+can line one face up and the others go out, and re-running the alignment does not
+help, because the problem is the model rather than the fit.
+
+**Wall shape**, on the projector, is the answer. Set it to a denser grid and the
+alignment runs 25 or 49 dots instead of 9. The extra dots are not there to fit a
+better plane — they measure how far the wall departs from one. The homography
+still does the global mapping; the leftover error at each dot is exactly the
+surface bending away, and that goes into the warp mesh as a correction.
+
+On a genuinely flat wall the residuals come out at nothing and the mesh stays
+flat, so there is no cost to using a denser grid other than the time it takes to
+step through the dots. Anything left over after that can still be nudged by hand
+with the **Surface warp** grid.
 
 If the camera can't manage it — too bright, too far, a phone that insists on
 auto-exposing — put a test grid up and drag the four corners by hand with the
