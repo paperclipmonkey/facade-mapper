@@ -41,7 +41,8 @@
       <!-- ---------------------------------------------------------- -->
       <aside class="panel panel-left" id="leftPanel">
         <nav class="panel-tabs" role="tablist" aria-label="Editor sections">
-          <button type="button" class="panel-tab active" data-panel="projectors" role="tab">Projectors</button>
+          <button type="button" class="panel-tab active" data-panel="start" role="tab">Start here</button>
+          <button type="button" class="panel-tab" data-panel="projectors" role="tab">Projectors</button>
           <button type="button" class="panel-tab" data-panel="shapes" role="tab">Shapes</button>
           <button type="button" class="panel-tab" data-panel="layers" role="tab">Effects</button>
           <button type="button" class="panel-tab" data-panel="scenes" role="tab">Scenes</button>
@@ -53,7 +54,11 @@
         </nav>
 
         <div class="panel-body">
-          <section class="panel-page active" data-page="projectors">
+          <section class="panel-page active" data-page="start">
+            <div id="setupGuide" class="setup-guide"></div>
+          </section>
+
+          <section class="panel-page" data-page="projectors">
             <div class="panel-actions">
               <button type="button" class="btn small" id="btnAddProjector">Add projector</button>
               <button type="button" class="btn small" id="btnRollCall">Refresh tabs</button>

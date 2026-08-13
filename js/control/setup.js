@@ -1,0 +1,229 @@
+/**
+ * The setup walkthrough.
+ *
+ * Getting a house mapped means visiting three panels in an order nothing tells
+ * you, doing two things that are physical rather than on-screen (drag a window
+ * to the right display; go outside in the dark), and knowing that alignment has
+ * to happen before tracing because shapes are stored in camera coordinates. All
+ * of that was documented and none of it was *visible*, which is a fair summary
+ * of why the app read as unintuitive.
+ *
+ * So this is a checklist that knows the answers rather than a page of prose.
+ * Every step reports its own state from what is actually true right now — the
+ * camera is either running or it is not, a projector tab has either checked in
+ * or it has not — and carries the button that does the thing. The first
+ * incomplete step is expanded; everything above it collapses to a tick.
+ *
+ * The rule it exists to enforce: **align before you trace**. Everything you draw
+ * is in camera coordinates, so tracing first and aligning afterwards is not a
+ * different order, it is lost work.
+ */
+
+import { el, clear } from './ui.js';
+
+/** A projector tab that has checked in for this projector, if any. */
+function peerFor(app, projectorId) {
+  return app.presence.list().find((p) => p.projectorId === projectorId) || null;
+}
+
+/**
+ * Projector tabs that look like they are sharing a display.
+ *
+ * Two tabs reporting the same screen origin are on the same monitor, which
+ * means one projector is showing the other's output — invisible from the
+ * control tab, and maddening to diagnose from the garden.
+ */
+function displayClashes(app) {
+  const seen = new Map();
+  const clashes = [];
+  for (const projector of app.project.projectors) {
+    const peer = peerFor(app, projector.id);
+    if (!peer || peer.screenX === undefined) continue;
+    const key = `${peer.screenX},${peer.screenY},${peer.screenW}x${peer.screenH}`;
+    if (seen.has(key)) clashes.push([seen.get(key), projector.name]);
+    else seen.set(key, projector.name);
+  }
+  return clashes;
+}
+
+/**
+ * The steps, in the order they have to happen, each answering three questions:
+ * is it done, what does it mean, and what do I press.
+ */
+function buildSteps(app) {
+  const { projectors, shapes, layers } = app.project;
+  const live = projectors.filter((p) => peerFor(app, p.id));
+  const aligned = projectors.filter((p) => p.calibration?.H);
+  const fullscreen = projectors.filter((p) => peerFor(app, p.id)?.fullscreen);
+  const clashes = displayClashes(app);
+
+  const goto = (panel) => () => app.switchPanel(panel);
+  const selectProjector = (projector, panel = 'projectors') => () => {
+    app.select({ type: 'projector', id: projector.id });
+    app.switchPanel(panel);
+  };
+
+  const firstUnaligned = projectors.find((p) => !p.calibration?.H);
+  const firstOffline = projectors.find((p) => !peerFor(app, p.id));
+
+  return [
+    {
+      id: 'camera',
+      title: 'Point a camera at the house',
+      done: app.camera.isRunning(),
+      why: 'Everything you draw is drawn on the camera picture, and the camera is also what '
+        + 'watches the alignment dots. Put it on a tripod roughly where people will stand — if it '
+        + 'moves later, your whole mapping moves with it.',
+      status: app.camera.isRunning() ? 'Camera running.' : 'No camera yet.',
+      actions: [{ label: 'Camera settings', run: goto('settings'), primary: !app.camera.isRunning() }],
+    },
+    {
+      id: 'projectors',
+      title: 'Add a projector for each one you own',
+      done: projectors.length > 0,
+      why: 'One entry per physical projector. Each gets its own alignment, its own slice of the '
+        + 'house, and its own browser tab.',
+      status: projectors.length
+        ? `${projectors.length} projector${projectors.length === 1 ? '' : 's'} set up.`
+        : 'None yet.',
+      actions: [{ label: 'Add projector', run: () => app.addProjector(), primary: !projectors.length }],
+    },
+    {
+      id: 'tabs',
+      title: 'Open a tab for each projector',
+      done: projectors.length > 0 && live.length === projectors.length,
+      why: 'Each projector is driven by its own browser tab, which you drag onto that projector\'s '
+        + 'display. The control tab talks to them through the browser, so they all stay in step.',
+      status: projectors.length
+        ? `${live.length} of ${projectors.length} tab${projectors.length === 1 ? '' : 's'} connected.`
+        : 'Add a projector first.',
+      actions: firstOffline
+        ? [{ label: `Open tab for ${firstOffline.name}`, run: () => app.openProjectorTab(firstOffline.id), primary: true }]
+        : [{ label: 'Check again', run: () => app.rollCall() }],
+    },
+    {
+      id: 'displays',
+      title: 'Put each tab on its own display',
+      /**
+       * Deliberately not gated on fullscreen. A tab that is not fullscreen still
+       * projects — you just get browser chrome on the brickwork — so stalling
+       * the whole checklist on it would be wrong. Two tabs sharing a display is
+       * a real error, though, and that does block.
+       */
+      done: projectors.length > 0 && live.length === projectors.length && clashes.length === 0,
+      why: 'Drag each tab to the display its projector is plugged into, click into it and press F. '
+        + 'This is the one step nothing can do for you — the browser will not move its own window '
+        + 'between screens.',
+      status: (() => {
+        if (!live.length) return 'Waiting for projector tabs.';
+        if (clashes.length) return `${clashes[0][0]} and ${clashes[0][1]} share a display.`;
+        if (fullscreen.length < projectors.length) {
+          return `${fullscreen.length} of ${projectors.length} fullscreen — press F in the rest.`;
+        }
+        return 'All fullscreen.';
+      })(),
+      warn: clashes.length > 0,
+      actions: [{ label: 'Check again', run: () => app.rollCall() }],
+    },
+    {
+      id: 'align',
+      title: 'Align each projector with the camera',
+      done: projectors.length > 0 && aligned.length === projectors.length,
+      why: 'Each projector flashes dots one at a time and the camera works out which projector '
+        + 'pixel hits which part of the house. Do it after dark — the dots have to out-shine '
+        + 'everything else in frame. If the wall turns a corner, set Wall shape to a denser grid '
+        + 'first.',
+      status: projectors.length
+        ? `${aligned.length} of ${projectors.length} aligned.`
+        : 'Add a projector first.',
+      actions: firstUnaligned
+        // Opens the projector rather than firing the alignment straight off:
+        // the Wall shape setting lives there and matters before you start, and
+        // a calibration begun by accident costs a minute of standing in the dark.
+        ? [{ label: `Align ${firstUnaligned.name}…`, run: selectProjector(firstUnaligned), primary: true }]
+        : [{ label: 'Projectors', run: goto('projectors') }],
+    },
+    {
+      id: 'trace',
+      title: 'Trace the windows, the door and the roofline',
+      done: shapes.length > 0,
+      // The reason this step is fifth and not first.
+      why: 'Now, and not before — everything you draw is stored in camera coordinates, so tracing '
+        + 'before aligning is not a different order, it is work you will lose. Use Area for windows '
+        + 'and doors, Path for rooflines and gutters, and tag them (window, door, roof) so one '
+        + 'effect can light all of them.',
+      status: shapes.length ? `${shapes.length} shape${shapes.length === 1 ? '' : 's'} traced.` : 'Nothing traced yet.',
+      actions: [{ label: 'Shapes', run: goto('shapes'), primary: !shapes.length }],
+    },
+    {
+      id: 'effects',
+      title: 'Put light on them',
+      done: layers.length > 0,
+      why: 'The starter presets build a whole look out of whatever you have tagged, grading '
+        + 'included. That is the fastest way to see something on the wall — then take it apart.',
+      status: layers.length ? `${layers.length} effect${layers.length === 1 ? '' : 's'}.` : 'No effects yet.',
+      actions: [{ label: 'Effects', run: goto('layers'), primary: !layers.length }],
+    },
+  ];
+}
+
+export function renderSetupGuide(node, app) {
+  clear(node);
+  const steps = buildSteps(app);
+  const currentIndex = steps.findIndex((s) => !s.done);
+  const complete = currentIndex === -1;
+
+  node.appendChild(el('div', { class: 'setup-progress' }, [
+    el('div', { class: 'setup-bar' }, [
+      el('span', { style: `width:${(steps.filter((s) => s.done).length / steps.length) * 100}%` }),
+    ]),
+    el('p', {
+      class: 'panel-note',
+      text: complete
+        ? 'Everything is set up. Come back to this list any night you move something.'
+        : `Step ${currentIndex + 1} of ${steps.length}.`,
+    }),
+  ]));
+
+  steps.forEach((step, index) => {
+    const isCurrent = index === currentIndex;
+    const item = el('div', {
+      class: `setup-step${step.done ? ' done' : ''}${isCurrent ? ' current' : ''}${step.warn ? ' warn' : ''}`,
+    });
+
+    // Title above status rather than beside it: the panel is narrow, and a
+    // two-column head wraps both halves into an unreadable stack.
+    item.appendChild(el('div', { class: 'setup-head' }, [
+      el('span', { class: 'setup-mark', text: step.done ? '✓' : String(index + 1) }),
+      el('div', { class: 'setup-text' }, [
+        el('span', { class: 'setup-title', text: step.title }),
+        el('span', { class: 'setup-status', text: step.status }),
+      ]),
+    ]));
+
+    // Only the step you are on explains itself. Seven paragraphs of rationale
+    // on screen at once is the thing this replaced.
+    if (isCurrent || step.warn) {
+      item.appendChild(el('p', { class: 'setup-why', text: step.why }));
+      const actions = el('div', { class: 'panel-actions' });
+      for (const action of step.actions) {
+        const btn = el('button', {
+          type: 'button',
+          class: `btn small${action.primary ? ' primary' : ''}`,
+          text: action.label,
+        });
+        btn.addEventListener('click', action.run);
+        actions.appendChild(btn);
+      }
+      item.appendChild(actions);
+    }
+
+    // A finished step is still clickable — you come back here after moving a
+    // projector, and the thing you need is usually one you already ticked off.
+    if (step.done && !isCurrent) {
+      item.addEventListener('click', () => step.actions[0]?.run?.());
+    }
+
+    node.appendChild(item);
+  });
+}

@@ -86,6 +86,14 @@ function announce() {
     cssHeight: window.innerHeight,
     dpr: window.devicePixelRatio || 1,
     fullscreen: !!document.fullscreenElement,
+    // Which physical display this tab is on. Two projector tabs reporting the
+    // same screen origin are sharing a monitor, which means one projector is
+    // showing the other's output — invisible from the control tab, and the
+    // setup checklist calls it out.
+    screenX: window.screenX,
+    screenY: window.screenY,
+    screenW: window.screen?.width,
+    screenH: window.screen?.height,
   });
 }
 

@@ -51,6 +51,12 @@ it maps shapes to projectors and runs programmable effects on them.
 
 ## Quick start
 
+The **Start here** panel is a live checklist of everything below. It reads the
+actual state — whether the camera is running, which projector tabs have checked
+in, what is aligned — ticks off what is done, expands the step you are on, and
+carries the button that does it. If you only read one thing, read that panel
+instead of this list.
+
 1. **Open the [control page](https://paperclipmonkey.github.io/facade-mapper/)**
    on the machine driving the projectors.
 2. **Setup → Start camera.** Point it at the house from roughly where people will
