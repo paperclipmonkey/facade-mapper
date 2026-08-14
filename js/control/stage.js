@@ -75,6 +75,21 @@ export function createStage({ canvas, wrap, app }) {
   /** Distance in world units that corresponds to a screen-pixel radius. */
   const hitTolerance = (px) => px / Math.max(1, cssWidth);
 
+  /**
+   * The body font, read once.
+   *
+   * `getComputedStyle` forces the browser to flush pending style and layout
+   * work before it can answer, and this was being asked two or three times a
+   * frame, in the middle of drawing, for a value that never changes. The
+   * synchronous flush is the expensive part, not the lookup — it is why a
+   * canvas-only render loop was showing style-recalculation time at all.
+   */
+  let bodyFont = null;
+  const labelFont = (px) => {
+    if (!bodyFont) bodyFont = getComputedStyle(document.body).fontFamily;
+    return `${px}px ${bodyFont}`;
+  };
+
   /* ---------------------------------------------------------------- *
    * Hit testing
    * ---------------------------------------------------------------- */
@@ -424,7 +439,7 @@ export function createStage({ canvas, wrap, app }) {
     g.save();
     g.lineWidth = Math.max(1, dpr);
     g.setLineDash([8 * dpr, 6 * dpr]);
-    g.font = `${12 * dpr}px ${getComputedStyle(document.body).fontFamily}`;
+    g.font = labelFont(12 * dpr);
     g.textBaseline = 'top';
 
     app.project.projectors.forEach((projector, index) => {
@@ -459,7 +474,7 @@ export function createStage({ canvas, wrap, app }) {
     const showNames = app.showShapeNames;
     g.save();
     g.lineJoin = 'round';
-    g.font = `${11 * dpr}px ${getComputedStyle(document.body).fontFamily}`;
+    g.font = labelFont(11 * dpr);
     g.textBaseline = 'bottom';
 
     for (const shape of app.project.shapes) {
@@ -579,7 +594,7 @@ export function createStage({ canvas, wrap, app }) {
     g.stroke();
 
     const labels = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
-    g.font = `${11 * dpr}px ${getComputedStyle(document.body).fontFamily}`;
+    g.font = labelFont(11 * dpr);
     g.textBaseline = 'middle';
     quad.forEach((p, i) => {
       const c = { x: p.x * w, y: p.y * h };

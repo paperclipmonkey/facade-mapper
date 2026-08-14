@@ -119,6 +119,8 @@ let lastBroadcast = 0;
 const undoStack = [];
 const redoStack = [];
 const UNDO_LIMIT = 60;
+/** The last plainly-clicked layer row, for shift-click ranges. */
+let layerAnchor = null;
 
 /* ------------------------------------------------------------------ *
  * Preview rendering
@@ -250,8 +252,25 @@ function redo() {
  * Selection
  * ------------------------------------------------------------------ */
 
+/**
+ * Selection is one thing, or several layers.
+ *
+ * `id` stays the primary — it is what the inspector opens and what every
+ * existing caller passes — and `ids` carries the whole set. Keeping both means
+ * nothing that only knew about single selection had to change, while delete,
+ * enable and bypass can act on a group. Only layers are multi-selectable;
+ * shapes, projectors and triggers are edited one at a time and a set would buy
+ * nothing.
+ */
 app.select = (selection) => {
   app.selection = selection || { type: null, id: null };
+  if (!app.selection.ids) {
+    app.selection.ids = app.selection.id ? [app.selection.id] : [];
+  }
+  // The primary follows the set, so deleting the group leaves nothing dangling.
+  if (!app.selection.ids.includes(app.selection.id)) {
+    app.selection.id = app.selection.ids[0] ?? null;
+  }
   if (selection?.type === 'shape') switchPanel('shapes');
   else if (selection?.type === 'layer') switchPanel('layers');
   else if (selection?.type === 'projector') switchPanel('projectors');
@@ -266,6 +285,95 @@ app.selectedProjector = () => {
     return app.project.projectors.find((p) => p.id === app.selection.id) || null;
   }
   return app.project.projectors[0] || null;
+};
+
+/** Currently selected layer ids, in project order. */
+app.selectedLayerIds = () => (app.selection.type === 'layer' ? app.selection.ids || [] : []);
+
+/**
+ * Extend or toggle the layer selection, the way a file list does.
+ *
+ * `range` (shift) selects everything between the anchor and here; `toggle`
+ * (ctrl/cmd) adds or removes one. The anchor is the last plainly-clicked row,
+ * so shift-clicking repeatedly grows and shrinks from the same end rather than
+ * walking the anchor along behind you.
+ */
+app.selectLayer = (id, { toggle = false, range = false } = {}) => {
+  const ordered = [...app.project.layers].sort((a, b) => (a.order || 0) - (b.order || 0)).map((l) => l.id);
+  const current = app.selection.type === 'layer' ? app.selection.ids || [] : [];
+
+  if (range && layerAnchor && ordered.includes(layerAnchor)) {
+    const from = ordered.indexOf(layerAnchor);
+    const to = ordered.indexOf(id);
+    const [lo, hi] = from < to ? [from, to] : [to, from];
+    app.select({ type: 'layer', id, ids: ordered.slice(lo, hi + 1) });
+    return;
+  }
+
+  if (toggle) {
+    const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+    layerAnchor = id;
+    // Deselecting the last one leaves nothing selected rather than snapping
+    // back to a single row you did not ask for.
+    app.select(next.length ? { type: 'layer', id, ids: next } : null);
+    return;
+  }
+
+  layerAnchor = id;
+  app.select({ type: 'layer', id });
+};
+
+/** Bulk action over the selected layers, or over all of them. */
+app.layersBulk = (action) => {
+  const ids = new Set(app.selectedLayerIds());
+  const targets = app.project.layers.filter((l) => ids.has(l.id));
+  if (!targets.length) return;
+  app.pushUndo();
+  if (action === 'enable' || action === 'bypass') {
+    for (const layer of targets) layer.enabled = action === 'enable';
+  }
+  app.commit();
+};
+
+/**
+ * A new layer running `effectId`, pointed at one shape.
+ *
+ * Lives here rather than in the inspector because creating a layer touches
+ * ordering, selection, undo and the panel refresh, and the inspector should not
+ * have to know about any of that.
+ */
+app.addLayerForShape = (effectId, shapeId) => {
+  app.pushUndo();
+  const layer = createLayer(effectId, {
+    params: defaultParams(effectId),
+    order: app.project.layers.length,
+    name: getEffect(effectId)?.name || effectId,
+    targets: [shapeId],
+  });
+  app.project.layers.push(layer);
+  app.select({ type: 'layer', id: layer.id });
+  app.commit();
+  const shape = app.project.shapes.find((s) => s.id === shapeId);
+  toast(`${getEffect(effectId)?.name || effectId} added on ${shape?.name || 'the shape'}.`, 'good');
+};
+
+app.deleteSelection = () => deleteSelection();
+
+app.clearLayers = () => {
+  if (!app.project.layers.length) return;
+  const count = app.project.layers.length;
+  if (!confirm(`Remove all ${count} effect${count === 1 ? '' : 's'}? Scenes that referenced them are kept, and Ctrl+Z puts them back.`)) {
+    return;
+  }
+  app.pushUndo();
+  for (const layer of app.project.layers) {
+    worldRenderer.resetLayer(layer.id);
+    for (const scene of app.project.scenes) delete scene.state?.[layer.id];
+  }
+  app.project.layers = [];
+  app.select(null);
+  app.commit();
+  toast(`Removed ${count} effect${count === 1 ? '' : 's'}. Ctrl+Z to undo.`);
 };
 
 app.resetLayerState = (layerId) => worldRenderer.resetLayer(layerId);
@@ -783,22 +891,42 @@ async function captureStill() {
   toast('Still captured — you can now trace with the camera switched off.', 'good');
 }
 
+/**
+ * Object URL for the current backdrop, so it can be released.
+ *
+ * A blob URL pins its blob for the lifetime of the document. This one is a
+ * multi-megabyte still, and it was re-created on every project switch, every
+ * new photo and every demo load without the previous one ever being revoked —
+ * so an evening of swapping shows quietly accumulated backdrops nothing could
+ * reach and nothing would free.
+ */
+let stillUrl = null;
+
 async function loadStill() {
+  const release = () => {
+    if (stillUrl) URL.revokeObjectURL(stillUrl);
+    stillUrl = null;
+  };
+
   if (!app.project.settings?.hasStill) {
+    release();
     stillImage = null;
     return;
   }
   const blob = await getBlob(`still/${app.project.id}`);
   if (!blob) {
+    release();
     stillImage = null;
     return;
   }
-  const url = URL.createObjectURL(blob);
+
+  release();
+  stillUrl = URL.createObjectURL(blob);
   const image = new Image();
   await new Promise((resolve) => {
     image.onload = resolve;
     image.onerror = resolve;
-    image.src = url;
+    image.src = stillUrl;
   });
   stillImage = image;
   $('stageEmpty').hidden = true;
@@ -873,6 +1001,7 @@ app.loadDemoHouse = async (presetId = 'halloween') => {
   project.worldAspect = DEMO_ASPECT;
   project.shapes = demoShapes();
   project.settings.isDemo = true;
+  project.settings.demoPreset = presetId;
   project.settings.hasStill = true;
 
   // A plausible manual alignment, so coverage outlines, edge blending and the
@@ -1017,8 +1146,41 @@ function toggleBlackout() {
  * Main loop
  * ------------------------------------------------------------------ */
 
+/**
+ * Preview frame rate and render cost, in the status bar.
+ *
+ * A show runs for hours unattended, and "it feels like it is slowing down" is
+ * almost impossible to act on without a number. Two numbers, in fact, because
+ * they mean different things: frames per second says whether the browser is
+ * keeping up, and the millisecond figure says how much of the budget this tab's
+ * own rendering is using. If fps falls while the millisecond figure does not,
+ * the cost is somewhere other than the render — another tab, the compositor, or
+ * the machine.
+ *
+ * Sampled over half a second, because a per-frame readout is unreadable and a
+ * per-frame DOM write is itself a cost.
+ */
+const health = { frames: 0, renderMs: 0, since: performance.now() };
+
+function reportHealth(renderMs) {
+  health.frames++;
+  health.renderMs += renderMs;
+  const now = performance.now();
+  const elapsed = now - health.since;
+  if (elapsed < 500) return;
+  const fps = (health.frames * 1000) / elapsed;
+  const perFrame = health.renderMs / health.frames;
+  const node = $('stageFps');
+  node.textContent = `${fps.toFixed(0)} fps · ${perFrame.toFixed(1)} ms`;
+  node.classList.toggle('warn', fps < 45);
+  health.frames = 0;
+  health.renderMs = 0;
+  health.since = now;
+}
+
 function frame() {
   requestAnimationFrame(frame);
+  const frameStart = performance.now();
 
   const time = clock.tick();
   $('showTime').textContent = formatTime(time.t);
@@ -1041,9 +1203,25 @@ function frame() {
 
   mediaPool.syncPlayback(time.t, time.running);
 
+  /**
+   * The preview renders at its own resolution, capped.
+   *
+   * It was rendering at `cssWidth * devicePixelRatio`, which on a Retina laptop
+   * is 2800×1600 — four and a half megapixels of full 2D scene plus a WebGL
+   * bloom chain, sixty times a second, for a picture displayed at half that
+   * size next to the panels. The projectors are what has to be sharp; this is a
+   * thumbnail of a light show that is soft by construction, and the only thing
+   * the extra pixels bought was heat.
+   *
+   * Capping the long edge cuts the work by about three times on exactly the
+   * machines that need it and changes nothing you can see: the result is scaled
+   * to fit the same box either way, and bloom has already thrown away detail
+   * finer than this.
+   */
   const { cssWidth, cssHeight, dpr } = stage.size;
-  const targetW = Math.max(64, Math.round(cssWidth * dpr));
-  const targetH = Math.max(64, Math.round(cssHeight * dpr));
+  const previewScale = Math.min(dpr, PREVIEW_MAX_EDGE / Math.max(1, cssWidth));
+  const targetW = Math.max(64, Math.round(cssWidth * previewScale));
+  const targetH = Math.max(64, Math.round(cssHeight * previewScale));
   if (previewCanvas.width !== targetW || previewCanvas.height !== targetH) {
     previewCanvas.width = targetW;
     previewCanvas.height = targetH;
@@ -1077,6 +1255,8 @@ function frame() {
 
   const world = stage.pointerWorld;
   $('stageCoords').textContent = world ? `${world.x.toFixed(3)}, ${world.y.toFixed(3)}` : '—';
+
+  reportHealth(performance.now() - frameStart);
 }
 
 /**
@@ -1211,6 +1391,16 @@ function syncScheduleDays() {
  * Falls back to the plain 2D buffer if WebGL is unavailable — the preview loses
  * the glow but editing still works, which is the right trade.
  */
+/** Longest edge the preview buffer is allowed to reach, in device pixels. */
+const PREVIEW_MAX_EDGE = 1400;
+
+const PREVIEW_MESH = Object.freeze({
+  H: null,
+  region: Object.freeze({ x: 0, y: 0, w: 1, h: 1 }),
+  mesh: null,
+  subdivisions: 2,
+});
+
 function renderPreviewPost(width, height) {
   if (previewWarpFailed) return;
 
@@ -1229,12 +1419,10 @@ function renderPreviewPost(width, height) {
     }
   }
 
-  previewWarp.buildMesh({
-    H: null,
-    region: { x: 0, y: 0, w: 1, h: 1 },
-    mesh: null,
-    subdivisions: 2,
-  });
+  // The same object every frame, so `buildMesh` can reject it on identity
+  // rather than by serialising it. The preview always shows the whole frame
+  // unwarped, so there is nothing here that ever changes.
+  previewWarp.buildMesh(PREVIEW_MESH);
   previewWarp.draw(previewCanvas, {
     feather: null,
     gamma: 1,
@@ -1410,6 +1598,7 @@ function wire() {
   });
 
   $('btnDeleteLayer').addEventListener('click', deleteSelection);
+  $('btnClearLayers').addEventListener('click', () => app.clearLayers());
 
   const presetActions = $('presetActions');
   for (const preset of PRESETS) {
@@ -1751,8 +1940,14 @@ function wire() {
 function onAudioLevels(levels) {
   audioLevels = levels;
   bus.post(MSG.AUDIO, levels);
+
+  // Only while somebody can see it. This fires thirty times a second for as
+  // long as the microphone is open — all evening — and there is no reason to
+  // touch the DOM at all when the Setup panel is not the one on screen.
+  const page = document.querySelector('.panel-page[data-page="settings"]');
+  if (!page?.classList.contains('active')) return;
   const meter = $('audioMeter').firstElementChild;
-  if (meter) meter.style.width = `${Math.min(100, levels.level * 100)}%`;
+  if (meter) meter.style.transform = `scaleX(${Math.min(1, levels.level)})`;
 }
 
 function deleteSelection() {
@@ -1768,10 +1963,16 @@ function deleteSelection() {
     app.select(null);
     app.commit();
   } else if (type === 'layer') {
+    // The whole selection, not just the primary — otherwise multi-select would
+    // let you gather ten layers and then delete one of them.
+    const ids = new Set(app.selectedLayerIds());
+    if (!ids.size) return;
     app.pushUndo();
-    app.project.layers = app.project.layers.filter((l) => l.id !== id);
-    for (const scene of app.project.scenes) delete scene.state?.[id];
-    worldRenderer.resetLayer(id);
+    app.project.layers = app.project.layers.filter((l) => !ids.has(l.id));
+    for (const layerId of ids) {
+      for (const scene of app.project.scenes) delete scene.state?.[layerId];
+      worldRenderer.resetLayer(layerId);
+    }
     app.select(null);
     app.commit();
   }
@@ -1952,10 +2153,18 @@ async function boot() {
   updateTransportUI();
 
   // `?demo` opens straight into the demo house, so the app can be linked to
-  // rather than described. It creates its own show, so following such a link
-  // never costs anybody the one they were working on.
-  if (new URLSearchParams(location.search).has('demo') && !app.project.settings?.isDemo) {
-    await app.loadDemoHouse();
+  // rather than described, and `?demo=christmas` picks the look. It creates its
+  // own show, so following such a link never costs anybody the one they were
+  // working on.
+  const params = new URLSearchParams(location.search);
+  if (params.has('demo')) {
+    const asked = params.get('demo');
+    const wanted = PRESETS.some((p) => p.id === asked) ? asked : 'halloween';
+    // A link that names a look has to produce that look. Being already on
+    // *some* demo is not close enough — following `?demo=christmas` from the
+    // Halloween demo and getting Halloween is simply a broken link.
+    const already = app.project.settings?.isDemo && app.project.settings?.demoPreset === wanted;
+    if (!already) await app.loadDemoHouse(wanted);
   }
 
   if (app.project.shapes.length || stillImage) $('stageEmpty').hidden = true;

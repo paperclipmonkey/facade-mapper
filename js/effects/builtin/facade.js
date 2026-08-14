@@ -464,16 +464,32 @@ const vine = {
   init() {
     return { key: '', tips: [], grown: 0 };
   },
-  draw({ g, p, shape, dt, rng, state, shapes }) {
+  draw({ g, p, shape, dt, rng, state, shapes, stable }) {
     const container = shape;
     const { bbox } = container;
     if (bbox.w <= 2 || bbox.h <= 2) return;
 
     const obstacles = collectObstacles(shapes, p.obstacles, container.id);
 
-    // Only geometry and drawing width invalidate what has already been grown;
-    // speed, branching and the rest can change mid-show without starting over.
-    const key = [container.id, Math.round(bbox.w), Math.round(bbox.h), p.color, p.tip, p.thickness.toFixed(1)].join('|');
+    /**
+     * Only geometry and drawing width invalidate what has already been grown;
+     * speed, branching and the rest can change mid-show without starting over.
+     *
+     * Built from `stable` — the parameters *before* modulation — and not from
+     * `p`. Bind thickness to the microphone and `p.thickness` is a different
+     * number every frame, so a key that included it would throw away a
+     * megabyte of grown ivy and start again sixty times a second. That is not a
+     * hypothetical: it is what "the app goes very slowly after linking an
+     * effect to the microphone" turned out to be.
+     */
+    const key = [
+      container.id,
+      Math.round(bbox.w),
+      Math.round(bbox.h),
+      stable.color,
+      stable.tip,
+      Number(stable.thickness).toFixed(1),
+    ].join('|');
     if (state.key !== key) {
       state.key = key;
       const scale = Math.min(1, 900 / Math.max(bbox.w, bbox.h));
@@ -488,7 +504,7 @@ const vine = {
       // Where it has been. Cells are a few vine-widths across — fine enough to
       // tell "covered" from "bare", coarse enough that a whole facade is a few
       // thousand bytes and scanning it for the emptiest spot is free.
-      const cellSize = Math.max(10, p.thickness * 5);
+      const cellSize = Math.max(10, stable.thickness * 5);
       state.cell = cellSize;
       state.cols = Math.max(1, Math.ceil(bbox.w / cellSize));
       state.rows = Math.max(1, Math.ceil(bbox.h / cellSize));
@@ -580,6 +596,12 @@ const vine = {
 
     const wanted = Math.round(clamp(p.tips, 1, 24));
     while (state.grown < budget && state.tips.length < wanted) state.tips.push(spawn());
+
+    // Growth is finished: retire the tips rather than leaving them parked.
+    // A live tip costs a glow gradient and a fill every frame whether or not it
+    // is moving, so a fully-grown wall was paying for up to forty-eight shoots
+    // that would never advance again — for the rest of the evening.
+    if (state.grown >= budget && state.tips.length) state.tips.length = 0;
 
     /* --- grow --- */
     const advance = Math.min(p.speed * Math.min(dt, 1 / 30), stepPx * VINE_STEPS_PER_FRAME);

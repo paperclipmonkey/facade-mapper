@@ -125,9 +125,11 @@ export function renderLayerList(node, app) {
     return;
   }
 
+  const selectedIds = new Set(app.selection.type === 'layer' ? app.selection.ids || [] : []);
+
   layers.forEach((layer, index) => {
     const effect = getEffect(layer.effect);
-    const selected = app.selection.type === 'layer' && app.selection.id === layer.id;
+    const selected = selectedIds.has(layer.id);
 
     const power = el('button', {
       type: 'button',
@@ -195,7 +197,15 @@ export function renderLayerList(node, app) {
       up,
       down,
     ]);
-    item.addEventListener('click', () => app.select({ type: 'layer', id: layer.id }));
+    // Ctrl/Cmd extends, Shift takes a range — the conventions of every file
+    // list, so nobody has to be told. Deleting a whole seasonal look is then
+    // one drag of the eye and one keypress rather than twelve.
+    item.addEventListener('click', (ev) => {
+      app.selectLayer(layer.id, {
+        toggle: ev.ctrlKey || ev.metaKey,
+        range: ev.shiftKey,
+      });
+    });
     // Hovering a layer lights up the shapes it draws into, which is the fastest
     // way to answer "which one is Area 3?" without reading any labels.
     item.addEventListener('mouseenter', () => app.highlightShapes?.(targetedShapeIds(app, layer)));
@@ -370,16 +380,36 @@ export function renderMediaList(node, app) {
   }
 }
 
+/**
+ * Disk usage, refreshed at most every ten seconds.
+ *
+ * `navigator.storage.estimate()` walks the origin's stored data to answer, and
+ * this runs from `refreshPanels()` — which means it fired on every commit: every
+ * shape dragged, every slider released, every trigger. A quota figure that is
+ * ten seconds stale has never mattered to anybody; asking the browser to total
+ * up its disk usage in the middle of a drag has.
+ */
+const QUOTA_MAX_AGE = 10000;
+let quotaCache = { at: -Infinity, text: '' };
+
 export async function renderStorageInfo(node, app) {
   const local = storageUsage();
-  let quotaText = '';
+
+  const write = () => {
+    node.innerHTML =
+      `Show data in local storage: <strong>${escapeHtml(formatBytes(local))}</strong>.${escapeHtml(quotaCache.text)}`
+      + ' Media and camera stills live in a separate, much larger store.';
+  };
+
+  write();
+  if (Date.now() - quotaCache.at < QUOTA_MAX_AGE) return;
+  quotaCache.at = Date.now();
+
   const estimate = await app.estimateQuota();
-  if (estimate?.quota) {
-    quotaText = ` Browser storage in use: ${formatBytes(estimate.usage)} of about ${formatBytes(estimate.quota)}.`;
-  }
-  node.innerHTML =
-    `Show data in local storage: <strong>${escapeHtml(formatBytes(local))}</strong>.${escapeHtml(quotaText)}` +
-    ' Media and camera stills live in a separate, much larger store.';
+  quotaCache.text = estimate?.quota
+    ? ` Browser storage in use: ${formatBytes(estimate.usage)} of about ${formatBytes(estimate.quota)}.`
+    : '';
+  write();
 }
 
 /* ------------------------------------------------------------------ *

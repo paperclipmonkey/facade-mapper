@@ -15,7 +15,7 @@
 import { boundingBox, buildPathSampler, smoothPolyline, polygonCentroid, makeRng } from '../core/math.js';
 import { worldSize, resolveTargets } from '../core/state.js';
 import { createNoise } from '../core/noise.js';
-import { resolveParams } from '../core/modulators.js';
+import { resolveParams, baseParams } from '../core/modulators.js';
 import { getEffect } from '../effects/registry.js';
 import { effectiveLayers } from '../core/scenes.js';
 
@@ -131,13 +131,23 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
     return scratchCtx;
   }
 
-  const instanceState = new Map(); // "layerId:shapeId" -> { state, rng, noise }
+  const instanceState = new Map(); // "layerId:effectId:shapeId" -> { state, rng, noise }
   const reportedErrors = new Set();
   let frameShapeCache = null;
   let frameShapeKey = '';
 
-  function getInstance(layerId, shapeId) {
-    const key = `${layerId}:${shapeId}`;
+  /**
+   * Per-instance state, keyed by the layer, the effect *and* the shape.
+   *
+   * The effect id belongs in the key. Without it, switching a layer from Snow
+   * to Fire hands Fire the pile of flakes Snow left behind — the control tab
+   * calls `resetLayer` to paper over that, but a projector tab only ever
+   * receives the new project and has nothing to call. Including the effect
+   * makes the state unreachable the moment the effect changes, in every tab,
+   * with no bookkeeping.
+   */
+  function getInstance(layerId, shapeId, effectId) {
+    const key = `${layerId}:${effectId}:${shapeId}`;
     let inst = instanceState.get(key);
     if (!inst) {
       // Seeded from the identity of the pairing, so the same window shows the
@@ -145,6 +155,7 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
       inst = { state: {}, rng: makeRng(key), noise: createNoise(key), initialised: false };
       instanceState.set(key, inst);
     }
+    inst.usedAt = generation;
     return inst;
   }
 
@@ -155,9 +166,41 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
     }
   }
 
+  /**
+   * Frames rendered, used to age out instance state.
+   *
+   * The control tab prunes explicitly when the project changes, but a projector
+   * tab has no such hook — it is handed a new project several times a second
+   * and renders it. Every layer you delete, every effect you swap, every shape
+   * you retrace leaves its instance behind, holding whatever that effect
+   * allocated: particle arrays, a frost bitmap, an ivy canvas. Over an evening
+   * of tweaking that is the one thing here that grows without limit and never
+   * comes back. Anything untouched for a few seconds of frames is gone.
+   */
+  let generation = 0;
+  const STALE_AFTER = 600;
+
+  function sweepInstances() {
+    if (generation % 300 !== 0) return;
+    for (const [key, inst] of instanceState) {
+      if (generation - (inst.usedAt ?? 0) > STALE_AFTER) instanceState.delete(key);
+    }
+  }
+
+  /**
+   * Report an effect that threw, once.
+   *
+   * Bounded, and deliberately so. The dedupe key includes the message, and an
+   * effect whose message varies — anything interpolating a number — would
+   * otherwise add an entry, log to the console and raise a notification on
+   * *every frame*, which turns one broken effect into a tab that grinds to a
+   * halt. The cap is what stops a slow leak becoming a fast one; the trim used
+   * to live in `gc()`, which a running show never calls.
+   */
   function reportError(layerId, effectId, err) {
     const key = `${layerId}:${err.message}`;
     if (reportedErrors.has(key)) return;
+    if (reportedErrors.size > 200) reportedErrors.clear();
     reportedErrors.add(key);
     console.error(`[effect ${effectId}]`, err);
     onEffectError?.({ layerId, effectId, message: err.message });
@@ -176,6 +219,8 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
   function render(g, { project, time, audio, region, pixelSize, preview = false }) {
     const world = worldSize(project);
     const settings = project.settings || {};
+    generation++;
+    sweepInstances();
 
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.globalAlpha = 1;
@@ -243,10 +288,59 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
         return exclude ? list.filter((geo) => geo.id !== exclude) : list;
       };
 
+      /**
+       * Opacity, blend and softness are *layer* properties, so they have to
+       * survive whatever the effect does to the context.
+       *
+       * Setting `globalAlpha` before calling draw() only works for effects that
+       * multiply into it. Most do not — they assign, because that is the
+       * obvious thing to write — and the moment one does, the layer's Opacity
+       * slider stops doing anything at all. Same for Blend against any effect
+       * that sets its own composite operation, which every additive effect
+       * does. Both controls looked broken, and were.
+       *
+       * The fix is to composite the layer as a *group*: draw it into a scratch
+       * buffer where it can do as it likes, then blit that once with the
+       * layer's alpha and blend. Canvas has no group opacity, so the buffer is
+       * the mechanism.
+       *
+       * Once per *layer*, emphatically not once per target. Clearing and
+       * blitting inside the target loop is the same picture and a completely
+       * different cost: a Cobwebs layer pointed at five windows paid five
+       * full-canvas clears and five full-canvas blits a frame instead of one,
+       * and the bill grew every time you traced another window. On a facade
+       * with a dozen windows and three such layers that is over sixty
+       * full-frame operations a frame, for nothing. It is also *wrong* per
+       * target when the blend is additive: five separate blits let the
+       * overlapping parts of one layer add to themselves.
+       */
+      const softness = layer.softness || 0;
+      const opacity = layer.opacity ?? 1;
+      const blend = layer.blend || 'source-over';
+      const useScratch = softness > 0 || opacity < 1 || blend !== 'source-over';
+      let target = g;
+
+      if (useScratch) {
+        const sg = getScratch(pixelSize.w, pixelSize.h);
+        sg.setTransform(1, 0, 0, 1, 0, 0);
+        sg.clearRect(0, 0, pixelSize.w, pixelSize.h);
+        sg.setTransform(...worldTransform);
+        target = sg;
+      }
+
+      /**
+       * The layer's parameters before modulation, for cache keys.
+       *
+       * Identical for every target and unchanged between frames unless somebody
+       * moves a slider, so it is resolved once per layer rather than per shape.
+       * See `baseParams` for why an effect must never key a cache on `p`.
+       */
+      const stable = baseParams(effect, layer);
+
       const n = targets.length;
       for (let i = 0; i < n; i++) {
         const shape = targets[i];
-        const inst = getInstance(layer.id, shape.id);
+        const inst = getInstance(layer.id, shape.id, effect.id);
 
         // Stagger shifts each instance back in time, so a row of windows pulses
         // in sequence instead of together.
@@ -255,7 +349,7 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
         const beat = time.beat - (stagger * (time.bpm || 120)) / 60;
 
         const ctx = {
-          g,
+          g: target,
           t,
           dt: time.dt,
           beat,
@@ -277,6 +371,8 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
           // with the thing it is being drawn into.
           shapes: (tag, exclude) => sceneShapes(tag, exclude),
           preview,
+          /** Parameters *without* modulation. Key caches on this, never on `p`. */
+          stable,
         };
 
         ctx.p = resolveParams(effect, layer, ctx);
@@ -292,38 +388,6 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
               continue;
             }
           }
-        }
-
-        /**
-         * Opacity, blend and softness are *layer* properties, so they have to
-         * survive whatever the effect does to the context.
-         *
-         * Setting `globalAlpha` before calling draw() only works for effects
-         * that multiply into it. Most do not — they assign, because that is the
-         * obvious thing to write — and the moment one does, the layer's Opacity
-         * slider stops doing anything at all. Same for Blend against any effect
-         * that sets its own composite operation, which every additive effect
-         * does. Both controls looked broken, and were.
-         *
-         * The fix is to composite the layer as a *group*: draw it into a scratch
-         * buffer where it can do as it likes, then blit that once with the
-         * layer's alpha and blend. Canvas has no group opacity, so the buffer is
-         * the mechanism. It costs one full-frame blit, paid only by layers that
-         * actually use one of these controls.
-         */
-        const softness = layer.softness || 0;
-        const opacity = layer.opacity ?? 1;
-        const blend = layer.blend || 'source-over';
-        const useScratch = softness > 0 || opacity < 1 || blend !== 'source-over';
-        let target = g;
-
-        if (useScratch) {
-          const sg = getScratch(pixelSize.w, pixelSize.h);
-          sg.setTransform(1, 0, 0, 1, 0, 0);
-          sg.clearRect(0, 0, pixelSize.w, pixelSize.h);
-          sg.setTransform(...worldTransform);
-          target = sg;
-          ctx.g = sg;
         }
 
         target.save();
@@ -347,38 +411,47 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
           reportError(layer.id, effect.id, err);
         }
         target.restore();
+      }
 
-        if (useScratch) {
-          ctx.g = g;
-          g.save();
-          g.setTransform(1, 0, 0, 1, 0, 0);
-          g.globalAlpha = opacity * master;
-          g.globalCompositeOperation = blend;
-          // Softness is authored in world pixels so it means the same thing
-          // regardless of the projector's buffer resolution.
-          if (softness > 0 && 'filter' in g) {
-            g.filter = `blur(${(softness * pixelSize.w) / (roi.w * world.w)}px)`;
-          }
-          g.drawImage(scratch, 0, 0);
-          if ('filter' in g) g.filter = 'none';
-          g.restore();
+      if (useScratch) {
+        g.save();
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.globalAlpha = opacity * master;
+        g.globalCompositeOperation = blend;
+        // Softness is authored in world pixels so it means the same thing
+        // regardless of the projector's buffer resolution.
+        if (softness > 0 && 'filter' in g) {
+          g.filter = `blur(${(softness * pixelSize.w) / (roi.w * world.w)}px)`;
         }
+        g.drawImage(scratch, 0, 0);
+        if ('filter' in g) g.filter = 'none';
+        g.restore();
       }
     }
 
     g.setTransform(1, 0, 0, 1, 0, 0);
   }
 
-  /** Drop cached state for layers and shapes that no longer exist. */
+  /**
+   * Drop cached state for layers and shapes that no longer exist.
+   *
+   * Called by the control tab when it swaps the whole project. The per-frame
+   * sweep above covers the projector tabs, which have no such moment; this is
+   * the immediate version for the tab that knows something changed.
+   */
   function gc(project) {
     const layerIds = new Set(project.layers.map((l) => l.id));
     const shapeIds = new Set(project.shapes.map((s) => s.id));
     shapeIds.add('__frame__');
     for (const key of [...instanceState.keys()]) {
-      const [layerId, shapeId] = key.split(':');
+      // "layerId:effectId:shapeId" — the shape is the last field, and ids
+      // never contain a colon (see `uid` in core/state.js).
+      const parts = key.split(':');
+      const layerId = parts[0];
+      const shapeId = parts[parts.length - 1];
       if (!layerIds.has(layerId) || !shapeIds.has(shapeId)) instanceState.delete(key);
     }
-    if (reportedErrors.size > 200) reportedErrors.clear();
+    reportedErrors.clear();
   }
 
   return { render, gc, resetLayer, geometry, clearErrors: () => reportedErrors.clear() };

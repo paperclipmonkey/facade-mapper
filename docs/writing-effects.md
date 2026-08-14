@@ -38,6 +38,7 @@ export default {
 | `audio` | `{ level, low, mid, high }` from the microphone. |
 | `i`, `n` | This target's index, and how many targets the layer has. |
 | `state` | Yours, between frames. |
+| `stable` | Your parameters **without** modulation. Build cache keys from this. |
 | `rng`, `noise` | Seeded generators — identical in every tab. |
 | `media(id)` | A decoded video or image element from the library, or null. |
 | `world` | `{ w, h }` of the virtual frame. |
@@ -90,6 +91,13 @@ the facade and should treat the windows as solid.
 > **Never allocate per frame.** Put buffers, sprite ladders and accumulation
 > canvases in `state` and reuse them; `fx.ensureField` and `fx.ensureSurfaces`
 > exist to make that the easy path.
+
+> **Never build a cache key from `p`.** Use `stable`. Any parameter can be bound
+> to an LFO or the microphone, and a bound parameter is a different number every
+> frame by definition — so a key built from `p.thickness` misses on every frame
+> the moment somebody modulates it, and your carefully cached structure is
+> rebuilt sixty times a second. `stable` holds the same values before
+> modulation: identical every frame until a slider actually moves.
 
 ## Accumulating rather than redrawing
 

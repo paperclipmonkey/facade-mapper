@@ -110,6 +110,7 @@ different order, it is work you will lose.
 | <kbd>Backspace</kbd> | Remove last point while drawing; delete the selection otherwise |
 | <kbd>Alt</kbd>-click | On an edge adds a point, on a point removes it |
 | <kbd>Shift</kbd>-drag | Line a point up with its neighbour |
+| <kbd>Ctrl</kbd>/<kbd>Shift</kbd>-click | In the effect list: add to, or extend, the selection |
 | <kbd>Space</kbd> | Play / pause |
 | <kbd>B</kbd> | Blackout |
 | <kbd>1</kbd>–<kbd>9</kbd> | Jump to a scene |

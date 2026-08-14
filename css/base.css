@@ -285,6 +285,14 @@ input[type="checkbox"] {
 
 .select-full { margin-bottom: 8px; }
 
+/* A select that sits in a row of buttons and matches their height. */
+.select-inline {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
 /* ------------------------------------------------------------------ */
 /* Lists                                                               */
 /* ------------------------------------------------------------------ */
@@ -423,12 +431,24 @@ input[type="checkbox"] {
   margin-bottom: 10px;
 }
 
+/*
+ * Driven by transform, not width.
+ *
+ * The microphone updates this thirty times a second, and animating `width`
+ * makes each of those a layout of the whole panel. `scaleX` is handled by the
+ * compositor and touches neither layout nor paint — the same bar, for none of
+ * the cost, on the one screen you are most likely to be watching while you set
+ * an audio-reactive effect up.
+ */
 .meter > span {
   display: block;
   height: 100%;
-  width: 0;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
   background: linear-gradient(90deg, var(--good), var(--warn), var(--bad));
-  transition: width 0.06s linear;
+  transition: transform 0.06s linear;
+  will-change: transform;
 }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }

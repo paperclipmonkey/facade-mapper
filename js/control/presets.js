@@ -17,9 +17,18 @@ import { defaultParams } from '../effects/registry.js';
 import { captureScene } from '../core/scenes.js';
 import { GRADE_PRESETS } from '../render/postfx.js';
 
-/** Build a layer with sensible defaults filled in for anything unspecified. */
-function layer(effect, { name, targets = [], tags = [], params = {}, bindings = {}, ...rest }) {
-  return createLayer(effect, {
+/**
+ * Build a layer with sensible defaults filled in for anything unspecified.
+ *
+ * `needsTag` marks a layer that is pointless without a particular tag, and
+ * `applyPreset` drops it when the project has none. Most layers do not want
+ * that — a Candle Flicker with no `window` traced is a layer waiting for you to
+ * trace one, and dropping it would be unhelpful. But an effect whose no-targets
+ * fallback is "cover the whole frame" turns actively wrong: text laid along a
+ * path with nothing to lay it along wraps itself round the edge of the picture.
+ */
+function layer(effect, { name, targets = [], tags = [], params = {}, bindings = {}, needsTag, ...rest }) {
+  const built = createLayer(effect, {
     name,
     targets,
     targetTags: tags,
@@ -27,6 +36,8 @@ function layer(effect, { name, targets = [], tags = [], params = {}, bindings = 
     bindings,
     ...rest,
   });
+  if (needsTag) built.__needsTag = needsTag;
+  return built;
 }
 
 const HALLOWEEN = () => [
@@ -37,12 +48,14 @@ const HALLOWEEN = () => [
   layer('fog', {
     name: 'Ground fog',
     softness: 6,
-    params: { color: '#7a8ba0', density: 0.22, scale: 2.4, speed: 0.04, layers: 3, height: 0.45 },
+    params: { color: '#7a8ba0', density: 0.22, scale: 2.4, speed: 0.04, swirl: 0.6, height: 0.45 },
   }),
+  // Embers, candles and lightning take a blackbody temperature rather than a
+  // colour — see docs/effects.md. 2200 K is a bright ember, 1050 K a dying one.
   layer('embers', {
     name: 'Drifting embers',
     opacity: 0.7,
-    params: { color: '#ffb257', color2: '#ff3a1f', count: 70, rise: 30, drift: 18, turbulence: 24, size: 3, twinkle: 0.6, opacity: 0.7 },
+    params: { hotTemp: 2200, coolTemp: 1050, count: 70, rise: 30, drift: 18, turbulence: 24, size: 3, twinkle: 0.6, opacity: 0.7 },
   }),
   layer('candle', {
     name: 'Candlelit windows',
@@ -50,7 +63,7 @@ const HALLOWEEN = () => [
     // A little stagger stops every window flickering on the same beat, which is
     // the single biggest giveaway that it is a projection.
     stagger: 0.7,
-    params: { color: '#ff9d3c', shadow: '#25060a', level: 0.8, jitter: 0.45, rate: 3.2, gust: 0.35, hotspot: 0.65 },
+    params: { temperature: 1850, shadow: '#25060a', level: 0.8, jitter: 0.45, rate: 3.2, gust: 0.35, hotspot: 0.65 },
   }),
   layer('eyes', {
     name: 'Something watching',
@@ -101,9 +114,19 @@ const HALLOWEEN = () => [
     name: 'Bats',
     params: { color: '#12040f', silhouette: false, count: 12, size: 0.07, speed: 0.16, flap: 7, spread: 0.6, wander: 0.4, direction: 'right', interval: 70, crossing: 9 },
   }),
+  layer('text', {
+    name: 'Sign over the door',
+    tags: ['sign'],
+    needsTag: 'sign',
+    params: {
+      content: 'TRICK OR TREAT', mode: 'path', font: 'impact', weight: '900', size: 1.05,
+      tracking: 0.06, color: '#ff7a18', stroke: '#1a0500', strokeWidth: 3, glow: 22,
+      align: 'centre', animation: 'flicker', speed: 1.1, amount: 0.6, pathOffset: 0,
+    },
+  }),
   layer('lightning', {
     name: 'Storm',
-    params: { color: '#dbe9ff', rate: 5, flash: 0.5, bolt: true, thickness: 5, branches: 4, flickers: 3, duration: 0.5 },
+    params: { temperature: 9000, rate: 5, flash: 0.5, bolt: true, thickness: 5, branches: 4, flickers: 3, duration: 0.5 },
   }),
 ];
 
@@ -165,9 +188,41 @@ const CHRISTMAS = () => [
       branch: 0.6, sharpness: 0.5, thickness: 2, bloom: 0.4, sparkle: 0.5,
     },
   }),
+  // Settling is stated rather than left to the defaults. This layer used to
+  // carry `settle: 0`, which is not a parameter snow has, so it did nothing and
+  // the effect ran with collision on regardless — the right look, arrived at by
+  // accident. `buildUp` and `maxDepth` are what actually control it.
   layer('snow', {
     name: 'Snowfall',
-    params: { color: '#ffffff', count: 420, speed: 80, wind: 24, gust: 0.6, size: 5, depth: 0.75, sparkle: 0.25, settle: 0 },
+    params: {
+      color: '#ffffff', count: 420, speed: 80, wind: 24, gust: 0.6, size: 5, depth: 0.75,
+      blur: 0.7, flutter: 0.6, collide: true, buildUp: 2.2, maxDepth: 20, shed: 0.35,
+    },
+  }),
+  /**
+   * "MERRY CHRISTMAS" arched over the door, with a white outline that thickens
+   * with the room.
+   *
+   * The outline width is bound to the microphone rather than the fill: a
+   * brightness that pumps reads as a fault in the projector, whereas an edge
+   * that thickens reads as the lettering catching more light. And the binding
+   * degrades correctly — with no microphone the audio bands sit at zero, so
+   * what is left is the base width, a clean 2px white edge, rather than
+   * nothing at all.
+   */
+  layer('text', {
+    name: 'Merry Christmas',
+    tags: ['sign'],
+    needsTag: 'sign',
+    params: {
+      content: 'MERRY CHRISTMAS', mode: 'path', font: 'serif', weight: '700', size: 0.95,
+      tracking: 0.1, color: '#ffe9b0', stroke: '#ffffff', strokeWidth: 2, glow: 16,
+      align: 'centre', animation: 'wave', speed: 0.5, amount: 0.25, pathOffset: 0,
+    },
+    bindings: {
+      strokeWidth: { type: 'audio', band: 'level', depth: 9 },
+      glow: { type: 'audio', band: 'high', depth: 26 },
+    },
   }),
   layer('santa', {
     name: 'Santa fly-past',
@@ -207,8 +262,13 @@ export function applyPreset(project, presetId) {
   const preset = PRESETS.find((p) => p.id === presetId);
   if (!preset) return null;
 
+  const present = new Set(project.shapes.flatMap((s) => s.tags || []));
   const maxOrder = project.layers.reduce((max, l) => Math.max(max, l.order || 0), -1);
-  const layers = preset.build();
+  const layers = preset.build().filter((l) => {
+    const needed = l.__needsTag;
+    delete l.__needsTag;
+    return !needed || present.has(needed);
+  });
   layers.forEach((l, i) => {
     l.order = maxOrder + 1 + i;
   });
@@ -222,7 +282,6 @@ export function applyPreset(project, presetId) {
     project.settings.grade = { ...project.settings.grade, ...look.values };
   }
 
-  const present = new Set(project.shapes.flatMap((s) => s.tags || []));
   const missing = preset.tagsUsed.filter((t) => !present.has(t));
 
   const scene = createScene({

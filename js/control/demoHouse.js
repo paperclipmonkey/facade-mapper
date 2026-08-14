@@ -111,6 +111,32 @@ export function demoShapes() {
 
   add(rect(L.door.x, L.door.top, L.door.w, L.ground - L.door.top), 'Front door', ['door']);
 
+  /**
+   * A shallow arch over the door, as an open path.
+   *
+   * Text laid along it reads as a sign hung over the porch rather than as a
+   * caption floating on brickwork, and it is the one shape here whose whole
+   * purpose is to be written on — hence its own tag.
+   *
+   * Deliberately wider than the door. A sign has to hold a phrase, and the
+   * text effect sizes itself from the shape it is given: an arch only as wide
+   * as the door forces "MERRY CHRISTMAS" down to something you could not read
+   * from the pavement, which is the one place it will ever be read from.
+   */
+  const archPad = 0.085;
+  add(
+    Array.from({ length: 11 }, (_, i) => {
+      const u = i / 10;
+      return {
+        x: L.door.x - archPad + u * (L.door.w + archPad * 2),
+        y: L.door.top - 0.03 - Math.sin(u * Math.PI) * 0.055,
+      };
+    }),
+    'Door arch',
+    ['sign', 'trim'],
+    { type: 'path', closed: false, smooth: true }
+  );
+
   // The path is where you point a motion trigger, and where the leaves gather.
   add(
     [

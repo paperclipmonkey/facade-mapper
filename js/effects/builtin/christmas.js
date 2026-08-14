@@ -93,7 +93,7 @@ const snow = {
   init() {
     return { flakes: [], count: 0, sprites: null, spriteKey: null };
   },
-  draw({ g, p, shape, shapes, world, t, dt, rng, state, noise }) {
+  draw({ g, p, shape, shapes, world, t, dt, rng, state, noise, stable }) {
     const { bbox } = shape;
     if (bbox.w <= 0 || bbox.h <= 0) return;
     const target = Math.round(p.count);
@@ -127,7 +127,7 @@ const snow = {
     if (state.flakes.length > target) state.flakes.length = target;
 
     const gust = p.gust > 0 ? noise.noise2(t * 0.12, 0) * p.gust : 0;
-    const sprites = ensureFlakeSprites(state, p.color);
+    const sprites = ensureFlakeSprites(state, stable.color);
 
     g.save();
     g.clip(shape.path);
@@ -852,8 +852,22 @@ const candyStripe = {
     const sin = Math.sin(a);
     const diag = Math.hypot(bbox.w, bbox.h) * 1.2;
     const period = diag / Math.max(2, Math.round(p.stripes));
-    const shift = frac(t * p.speed);
-    const bands = Math.ceil(diag / period) + 2;
+    /**
+     * Wrapped over *two* periods, not one.
+     *
+     * The obvious `frac(t * speed)` slides the bands along by one period and
+     * then jumps back — and since a band's colour is its index's parity, and
+     * the indices do not shift with it, every stripe swapped red for white at
+     * the wrap. On a door at the default speed that is a visible flip roughly
+     * every five seconds, which is exactly what a barber's pole must never do.
+     *
+     * A candy stripe repeats every two periods, so wrapping on two is the
+     * period of the actual pattern: band `i` at the end of the cycle lands
+     * where band `i + 2` sat at the start, same parity, same colour, no seam.
+     * The rate is unchanged — two periods in twice the time.
+     */
+    const shift = frac(t * p.speed * 0.5) * 2;
+    const bands = Math.ceil(diag / period) + 3;
 
     // Stripe corners are computed in world coordinates rather than by rotating
     // the context, so the same band can clip a stroke of the untransformed path.
@@ -1035,27 +1049,35 @@ const frost = {
   init() {
     return { key: '', drawn: -1, cursor: 0 };
   },
-  draw({ g, p, shape, t, state }) {
+  draw({ g, p, shape, t, state, stable }) {
     const { bbox } = shape;
     if (bbox.w <= 1 || bbox.h <= 1) return;
 
-    // Rebuild only when something structural moves. Colour, coverage and
-    // thickness all repaint; fronds and branching regrow.
+    /**
+     * Rebuild only when something structural moves.
+     *
+     * From `stable`, the unmodulated parameters — binding any of these to an
+     * LFO or the microphone would otherwise regenerate seven thousand segments
+     * and repaint the whole pane every frame. Coverage and sparkle are
+     * deliberately absent from the key: those are the ones worth modulating,
+     * and they cost nothing because they only change how much of the existing
+     * structure is revealed.
+     */
     const key = [
       shape.id,
       Math.round(bbox.w),
       Math.round(bbox.h),
-      Math.round(p.fronds),
-      p.branch.toFixed(2),
-      p.sharpness.toFixed(2),
-      p.color,
-      p.tip,
-      p.thickness.toFixed(2),
+      Math.round(stable.fronds),
+      Number(stable.branch).toFixed(2),
+      Number(stable.sharpness).toFixed(2),
+      stable.color,
+      stable.tip,
+      Number(stable.thickness).toFixed(2),
     ].join('|');
 
     if (state.key !== key) {
       state.key = key;
-      state.built = buildFrost(shape, p.fronds, p.branch, p.sharpness);
+      state.built = buildFrost(shape, stable.fronds, stable.branch, stable.sharpness);
       // A pane on a facade is at most a few hundred pixels of projector; there
       // is no value in a frost bitmap finer than the thing it lands on.
       const scale = Math.min(1, 320 / Math.max(bbox.w, bbox.h));
@@ -1088,8 +1110,8 @@ const frost = {
       c.globalCompositeOperation = 'lighter';
       while (state.cursor < segments.length && segments[state.cursor].order <= target) {
         const seg = segments[state.cursor++];
-        c.strokeStyle = mixHex(p.color, p.tip, Math.min(1, seg.order * 1.3));
-        c.lineWidth = Math.max(0.3, p.thickness * seg.width);
+        c.strokeStyle = mixHex(stable.color, stable.tip, Math.min(1, seg.order * 1.3));
+        c.lineWidth = Math.max(0.3, stable.thickness * seg.width);
         // Fine branches are faint as well as thin. Without this the whole
         // structure reaches full brightness and the pane reads as a lattice of
         // wires rather than as something with depth in it.

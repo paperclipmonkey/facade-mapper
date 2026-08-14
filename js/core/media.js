@@ -214,9 +214,23 @@ export function createMediaPool({ onError } = {}) {
       const drift = target - v.currentTime;
       const wrapped = Math.abs(drift) > duration / 2;
 
-      if (wrapped || Math.abs(drift) > 0.35) {
+      /**
+       * A seek is only issued when the last one has landed.
+       *
+       * `v.currentTime = x` starts an asynchronous seek, and the reported
+       * `currentTime` does not reach `x` until the decoder gets there. Without
+       * the `v.seeking` guard, a video that fell behind was told to seek on
+       * *every* frame, each request cancelling the last, so it never arrived —
+       * and the decoder spent the whole evening thrashing on seeks it would
+       * never complete. That is a genuinely self-reinforcing failure: the more
+       * work the seeks cost, the further behind the video falls, the harder it
+       * tries to catch up.
+       */
+      if ((wrapped || Math.abs(drift) > 0.35) && !v.seeking) {
         v.currentTime = target;
         v.playbackRate = 1;
+      } else if (v.seeking) {
+        // Leave it alone until it lands; nudging the rate mid-seek is noise.
       } else if (Math.abs(drift) > 0.03) {
         v.playbackRate = Math.max(0.85, Math.min(1.15, 1 + drift * 0.5));
       } else if (v.playbackRate !== 1) {

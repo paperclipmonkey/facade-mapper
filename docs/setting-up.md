@@ -182,9 +182,10 @@ As each shape closes you are asked to name it, and clicking a tag both tags
 `window`. Worth doing: an effect pointed at the `window` tag lights every
 window, and keeps working as you trace more.
 
-The tags the starter presets look for are `window`, `door`, `roof`, `trim` and
-`wall`. The facade-aware effects treat `window` and `door` as solid by default,
-so tagging is also what tells a bouncing ball where the glass is.
+The tags the starter presets look for are `window`, `door`, `roof`, `trim`,
+`wall` and `sign`. The facade-aware effects treat `window` and `door` as solid
+by default, so tagging is also what tells a bouncing ball where the glass is;
+`sign` marks an open path meant to be written along, like an arch over the door.
 
 While drawing: <kbd>Enter</kbd> finishes, <kbd>Esc</kbd> cancels,
 <kbd>Backspace</kbd> removes the last point. Afterwards, <kbd>Alt</kbd>-click an

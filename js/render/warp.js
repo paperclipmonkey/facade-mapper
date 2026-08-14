@@ -413,6 +413,8 @@ export function createWarpRenderer(canvas, { preserveDrawingBuffer = false } = {
 
   let indexCount = 0;
   let meshKey = '';
+  /** The last descriptor, by identity, so the usual no-op costs one compare. */
+  let lastMeshArgs = { H: undefined, region: undefined, mesh: undefined, subdivisions: undefined };
   let textureSize = { w: 0, h: 0 };
 
   /**
@@ -548,9 +550,32 @@ export function createWarpRenderer(canvas, { preserveDrawingBuffer = false } = {
    * far too expensive to call per frame — hence the key check.
    */
   function buildMesh({ H, region, mesh, subdivisions = DEFAULT_SUBDIVISIONS, force = false }) {
+    /**
+     * Cheap identity check before the expensive one.
+     *
+     * This is called every frame by the control preview with the same arguments
+     * every time, and `JSON.stringify` of the whole descriptor — a nine-element
+     * matrix, a region, and a warp mesh that can carry ninety-eight offsets —
+     * ran *before* the cache could reject it. Comparing the object identities
+     * first settles the common case without building a string at all; the
+     * stringify is only reached when something genuinely changed, or when a
+     * caller passes fresh objects with equal contents.
+     */
+    if (!force
+      && H === lastMeshArgs.H
+      && region === lastMeshArgs.region
+      && mesh === lastMeshArgs.mesh
+      && subdivisions === lastMeshArgs.subdivisions) {
+      return;
+    }
+
     const key = JSON.stringify({ H, region, mesh, subdivisions });
-    if (!force && key === meshKey) return;
+    if (!force && key === meshKey) {
+      lastMeshArgs = { H, region, mesh, subdivisions };
+      return;
+    }
     meshKey = key;
+    lastMeshArgs = { H, region, mesh, subdivisions };
 
     const matrix = H || IDENTITY3;
     const n = mesh?.enabled ? Math.max(subdivisions, 32) : subdivisions;

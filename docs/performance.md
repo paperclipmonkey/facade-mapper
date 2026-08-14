@@ -72,6 +72,70 @@ all paid it, for nothing visible: the whole design is a coarse grid relying on
 linear interpolation, and there is nothing in a smoke plume for a sharper filter
 to preserve.
 
+## The one that cost the most
+
+Everything above is about a single effect. The largest win by far was in the
+renderer, and it was not an effect at all.
+
+Opacity, blend and softness are *layer* properties, so a layer that uses any of
+them is drawn into a scratch buffer and blitted once — Canvas has no group
+opacity, so the buffer is the mechanism. The comment saying so was correct. The
+code was not: the clear and the blit were both inside the loop over the layer's
+*targets*, so a Cobwebs layer pointed at five windows cleared and blitted the
+whole canvas five times a frame instead of once.
+
+The presets set opacity on nearly every layer, so this was the normal case, and
+the bill grew every time you traced another window.
+
+The other half of the same story is resolution. The control preview rendered at
+`cssWidth × devicePixelRatio` — four and a half megapixels on a Retina laptop —
+for a picture shown at half that size beside the panels. The projectors are
+what has to be sharp; the preview is a thumbnail of a light show that is soft by
+construction. It is capped now.
+
+Measured on the demo house with the Halloween starter, one control-tab frame:
+
+| | ms per frame | fps |
+| --- | --- | --- |
+| Before | 60.0 | 17 |
+| Group composite hoisted out of the target loop | 34.7 | 29 |
+| Preview buffer capped as well | 15.1 | 66 |
+
+The last two rows are rendering *more* than the first — a layer and a shape
+were added in between. Each open tab paid the first row separately, which is
+why a laptop driving a projector alongside the control tab could feel like the
+whole machine had slowed down. It had.
+
+The compositing bug was also a *correctness* bug. Compositing per target
+instead of per layer means an additive layer's overlapping targets add to
+themselves, which is precisely what group opacity exists to prevent.
+
+## Modulation, and the microphone
+
+Binding parameters is cheap; opening the microphone is not free. Measured on the
+demo house with the Halloween starter, with **every** numeric parameter on every
+layer bound to the audio level — ninety-three of them, far more than any real
+show:
+
+| | CPU | render |
+| --- | --- | --- |
+| Microphone off | 16.4% | 1.4 ms |
+| Microphone on | 24.6% | 3.2 ms |
+
+Both hold 60 fps. The extra is the analyser, thirty band measurements a second
+broadcast to the projector tabs, and the bindings themselves being evaluated per
+parameter per target per frame. That is inherent, and at three milliseconds it
+is affordable — but it is real, and if a show is already at the edge, turning
+the microphone on is what tips it over.
+
+What is *not* affordable, and used to happen, is a bound parameter invalidating
+a cache. Effects receive `stable` — their parameters before modulation —
+precisely so a key can never be built from a number that changes every frame.
+Frost and Creeping Vine both cache large bitmaps; keyed on the resolved value, a
+single audio binding would have thrown away a megabyte of grown ivy and
+regenerated it sixty times a second. `docs/writing-effects.md` states the rule;
+`test/effects.test.mjs` enforces it.
+
 ## The one rule
 
 **Never set `ctx.filter` or `ctx.shadowBlur` per particle or per glyph.**
@@ -95,17 +159,34 @@ identical: the cell *is* the pixel. Not dramatic — most of what is left is
 generating the noise — but it is the difference between a quarter of the frame
 budget and a sixth.
 
-## If a projector tab still struggles
+## If it still struggles
 
-- Drop **Render detail** in that projector's inspector. It supersamples the
-  world buffer by default; 1.0 is noticeably cheaper than 1.25.
-- Turn bloom down in **Look**. The mip chain is the most expensive thing in the
+The control tab shows its own frame rate and render cost in the status bar
+under the stage, and the projector tab shows the same behind <kbd>I</kbd>. Two
+numbers, because they answer different questions: frames per second says
+whether the browser is keeping up, and the millisecond figure says how much of
+the budget that tab's own rendering is using. If the frame rate falls while the
+millisecond figure does not, the cost is somewhere other than the render —
+another tab, the compositor, or the machine.
+
+In rough order of how much they buy:
+
+- **Turn off "Show effects in preview"** in Setup once the projectors are
+  running. The control tab is then drawing the camera view and your shapes and
+  nothing else. On a laptop driving two projectors this is the single largest
+  saving available, because it removes a whole renderer.
+- **Drop Render detail** in a projector's inspector. It supersamples the world
+  buffer by 1.25 by default; 1.0 is 1.6× fewer pixels and, after bloom, close
+  to indistinguishable.
+- **Turn bloom down** in Look. The mip chain is the most expensive thing in the
   post stage.
-- Press <kbd>I</kbd> in the projector tab for a live frame rate and buffer size.
+- **Trace fewer, bigger shapes.** Cost scales with targeted shapes, not with
+  wall area.
 - If the driver refuses the bloom render targets, bloom is skipped and
   everything else carries on.
 
-Each projector only renders the slice of world space its lens can reach, so a
-projector covering the front door does far less work than one covering the whole
-elevation. Two projectors each doing half the house is cheaper per tab than one
-doing all of it.
+Each projector only renders the slice of world space its lens can reach, so two
+projectors each doing half the house is cheaper *per tab* than one doing all of
+it — but it is two tabs, so the machine does more work overall. A laptop driving
+several projectors is doing several full renders at once, and that is the
+budget to think in.

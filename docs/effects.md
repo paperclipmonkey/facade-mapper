@@ -27,6 +27,21 @@ Pulse layer at the `window` tag, add half a second of stagger, and the windows
 light in sequence rather than together. It is the single cheapest way to stop a
 row of windows looking like one rectangle.
 
+### Working with the list
+
+Click an effect to select it, <kbd>Ctrl</kbd>-click (or <kbd>Cmd</kbd>-click) to
+add one to the selection, <kbd>Shift</kbd>-click to take a range —
+the conventions of any file list. <kbd>Backspace</kbd> deletes everything
+selected, and the inspector offers **Enable all** and **Bypass all** for the
+group. **Clear all** empties the list in one go, which is what you want when
+swapping a Halloween look for a Christmas one. <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts
+any of it back.
+
+Selecting a *shape* is the other way in. The inspector lists what is currently
+lighting it, adds a new effect straight onto it from the gallery, or points one
+you already have at it — so tracing a window and lighting it is one panel rather
+than three.
+
 ## Effects that know where the windows are
 
 Most effects are handed a shape and fill it. The **facade** category is given a
@@ -58,7 +73,12 @@ Lights, Comet, Trace and Sparks all walk it, which is why a chase takes as long
 crossing a short edge as a long one.
 
 Text can follow it too: set Placement to `path` and the lettering wraps round an
-arch or along a roofline.
+arch or along a roofline. Trace a shallow arch over the door, tag it `sign`, and
+the starter presets will hang a lit sign on it — "MERRY CHRISTMAS" with a white
+outline that thickens with the room, or "TRICK OR TREAT" guttering like a bad
+neon tube. Text longer than its path is shrunk to fit rather than running off
+the end; turn **Shrink to fit path** off if you meant to scroll it along with
+**Position on path**.
 
 ## The look
 

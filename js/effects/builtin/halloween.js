@@ -1156,6 +1156,19 @@ const smoke = {
 
     const climb = t * p.rise;
 
+    // The same trick caustics uses: build the density-to-colour ramp once per
+    // frame rather than once per cell. The old version called `mixLinear` per
+    // cell — which assembles a CSS hex string — and then immediately parsed
+    // that string back into the three bytes it had just formatted. Thousands of
+    // times a frame, to arrive where it started.
+    const RAMP_STEPS = 24;
+    const ramp = [];
+    for (let i = 0; i < RAMP_STEPS; i++) {
+      const hex = mixLinear(p.color, p.shadow, i / (RAMP_STEPS - 1)).replace('#', '');
+      const n = parseInt(hex, 16) || 0;
+      ramp.push([(n >> 16) & 255, (n >> 8) & 255, n & 255]);
+    }
+
     for (let y = 0; y < rows; y++) {
       const v = (y + 0.5) / rows;
       const hh = 1 - v; // 0 at the source, 1 at the top
@@ -1185,10 +1198,8 @@ const smoke = {
 
         // Denser smoke is darker, because it blocks more of what is behind it.
         // Interpolating that in linear light keeps the mid-tones from going flat.
-        const shade = mixLinear(p.color, p.shadow, clamp(density * 1.1, 0, 1));
-        const h = shade.replace('#', '');
-        const n = parseInt(h, 16) || 0;
-        field.set(x, y, (n >> 16) & 255, (n >> 8) & 255, n & 255, density);
+        const shade = ramp[Math.min(RAMP_STEPS - 1, (clamp(density * 1.1, 0, 1) * (RAMP_STEPS - 1)) | 0)];
+        field.set(x, y, shade[0], shade[1], shade[2], density);
       }
     }
 

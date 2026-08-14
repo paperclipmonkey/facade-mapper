@@ -236,6 +236,8 @@
   pointer-events: auto;
 }
 
+.stage-status .warn { color: var(--warn); }
+
 .stage-status {
   display: flex;
   align-items: center;

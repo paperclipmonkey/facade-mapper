@@ -110,8 +110,15 @@ const outline = {
     g.strokeStyle = p.color;
 
     if (p.dash > 0) {
+      const period = Math.max(0.01, p.dash + p.gap);
       g.setLineDash([p.dash, p.gap]);
-      g.lineDashOffset = -t * p.scroll;
+      // Wrapped to one dash period. The pattern repeats every `period` pixels,
+      // so the offset only ever needs to live in [0, period) — and feeding a
+      // number that grows without bound into it means that four hours into a
+      // show the browser is asked to offset a dash pattern by a few million
+      // pixels, which is both slower and, once the float loses precision,
+      // visibly jerky.
+      g.lineDashOffset = -((t * p.scroll) % period);
     }
 
     if (p.glow > 0) {

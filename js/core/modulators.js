@@ -42,6 +42,16 @@ function waveform(kind, phase, shapeAmt = 0.5) {
  * ------------------------------------------------------------------ */
 
 const exprCache = new Map();
+/**
+ * Bounded because the key is the expression *text*, and text is typed.
+ *
+ * Every keystroke in an expression field compiles and caches a new, distinct,
+ * usually-broken fragment: typing `sin(t * 2)` leaves eleven compiled functions
+ * behind, ten of them syntax errors nobody will ask for again. Nothing evicts
+ * them and nothing owns the map. A few hundred entries is far more than any
+ * show has distinct expressions.
+ */
+const EXPR_LIMIT = 500;
 
 /**
  * Compile an expression into a function of a scope object.
@@ -53,6 +63,7 @@ const exprCache = new Map();
 export function compileExpression(code) {
   const key = String(code);
   if (exprCache.has(key)) return exprCache.get(key);
+  if (exprCache.size >= EXPR_LIMIT) exprCache.clear();
 
   let fn;
   try {
@@ -145,9 +156,34 @@ function expressionScope(ctx, base, def) {
 
 const holdState = new Map();
 
+/**
+ * Bounded, because the keys outlive the things they describe.
+ *
+ * A key is `layerId|paramKey|targetIndex`, so every layer you delete, every
+ * binding you remove and every shape you stop targeting leaves an entry that
+ * nothing will ever look up again. This map is module-level — one per tab, not
+ * one per renderer — so nothing owns it and nothing can be told to clear it.
+ * Over an evening of editing that is a slow leak of small objects, each holding
+ * its own seeded generator.
+ *
+ * Dropping the oldest quarter when it gets large is enough: entries are only
+ * worth keeping between consecutive frames, and a show large enough to hold two
+ * thousand live bindings at once does not exist.
+ */
+const HOLD_LIMIT = 2000;
+
 function getHold(key) {
   let s = holdState.get(key);
   if (!s) {
+    if (holdState.size >= HOLD_LIMIT) {
+      // Map iterates in insertion order, so this drops the least recently
+      // created rather than an arbitrary quarter.
+      let drop = Math.floor(HOLD_LIMIT / 4);
+      for (const k of holdState.keys()) {
+        holdState.delete(k);
+        if (--drop <= 0) break;
+      }
+    }
     s = { value: 0, target: 0, nextAt: -1, rng: makeRng(key), env: 0, lastTrig: -1 };
     holdState.set(key, s);
   }
@@ -166,8 +202,9 @@ function getHold(key) {
  * @param {object} def      the effect's param definition (for min/max/type)
  * @param {object} ctx      { t, dt, beat, beatPhase, bpm, audio, i, n, shape, key }
  */
-export function evaluateBinding(binding, base, def, ctx) {
+export function evaluateBinding(binding, base, def, ctx, bindingKey) {
   if (!binding || binding.type === 'const' || !binding.type) return base;
+  const stateKey = bindingKey ?? ctx.key;
 
   const numericBase = typeof base === 'number' ? base : 0;
   const depth = binding.depth ?? 1;
@@ -193,7 +230,7 @@ export function evaluateBinding(binding, base, def, ctx) {
     }
 
     case 'random': {
-      const key = `${ctx.key}|${ctx.i ?? 0}`;
+      const key = `${stateKey}|${ctx.i ?? 0}`;
       const s = getHold(key);
       const rate = Math.max(0.01, binding.rate ?? 2);
       if (s.nextAt < 0 || ctx.t < s.nextAt - 1 / rate - 0.001 || ctx.t >= s.nextAt) {
@@ -207,7 +244,7 @@ export function evaluateBinding(binding, base, def, ctx) {
     }
 
     case 'env': {
-      const key = `${ctx.key}|${ctx.i ?? 0}`;
+      const key = `${stateKey}|${ctx.i ?? 0}`;
       const s = getHold(key);
       const div = Math.max(0.0625, binding.division ?? 1);
       const trig = Math.floor(ctx.beat / div);
@@ -251,14 +288,38 @@ export function evaluateBinding(binding, base, def, ctx) {
  * @param {object} ctx       evaluation context
  * @returns {object} plain params object ready to hand to the effect
  */
+/**
+ * The layer's parameters with no modulation applied.
+ *
+ * This is what an effect should build a cache key from. A bound parameter is,
+ * by definition, a different number every frame, so any structure cached
+ * against the *resolved* value is rebuilt every frame the moment somebody
+ * points a microphone at it — which is how binding a slider to audio could take
+ * a wall of ivy from one `drawImage` a frame to regrowing itself sixty times a
+ * second, and the machine with it.
+ *
+ * It is the same for every target of a layer and changes only when somebody
+ * moves a slider, so callers should resolve it once per layer per frame.
+ */
+export function baseParams(effectDef, layer) {
+  const out = {};
+  for (const def of effectDef?.params || []) {
+    out[def.key] = layer.params?.[def.key] !== undefined ? layer.params[def.key] : def.default;
+  }
+  return out;
+}
+
 export function resolveParams(effectDef, layer, ctx) {
   const out = {};
   const defs = effectDef?.params || [];
   for (const def of defs) {
     const base = layer.params?.[def.key] !== undefined ? layer.params[def.key] : def.default;
     const binding = layer.bindings?.[def.key];
+    // The key is passed alongside rather than spread into a copy of ctx: this
+    // runs once per bound parameter per target per frame, and cloning a
+    // twenty-key context object each time is pure waste.
     let value = binding
-      ? evaluateBinding(binding, base, def, { ...ctx, key: `${layer.id}:${def.key}` })
+      ? evaluateBinding(binding, base, def, ctx, `${layer.id}:${def.key}`)
       : base;
 
     if (def.type === 'range' || def.type === 'number') {
@@ -267,6 +328,13 @@ export function resolveParams(effectDef, layer, ctx) {
       if (def.max !== undefined) value = Math.min(def.max, value);
     } else if (def.type === 'bool') {
       value = typeof value === 'number' ? value > 0.5 : !!value;
+    } else if (binding && typeof base === 'string') {
+      // Modulation is arithmetic, and there is no arithmetic on a colour or a
+      // string. The UI only offers bindings on numeric parameters, but an
+      // imported project or a hand-edited one can carry a stray one — and the
+      // result was a colour that evaluated to a bare number, which every
+      // consumer then failed to parse into something different every frame.
+      value = base;
     }
     out[def.key] = value;
   }

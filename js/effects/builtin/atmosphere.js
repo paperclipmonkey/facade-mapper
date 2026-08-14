@@ -62,6 +62,25 @@ const rain = {
     g.clip(shape.path);
     g.lineCap = 'round';
 
+    /**
+     * One gradient for the whole shower, not one per drop.
+     *
+     * Every streak is the same fade along the same direction — only its
+     * position, length and brightness differ — so the gradient can be built
+     * once at the origin and each drop drawn through a translate and a scale.
+     * Depth then rides on the transform (length and thickness) and on
+     * `globalAlpha` (brightness), which is what it meant anyway.
+     *
+     * At the default four hundred and fifty drops the old version allocated
+     * four hundred and fifty `CanvasGradient` objects sixty times a second —
+     * twenty-seven thousand a second, thrown away immediately. Rain was the
+     * most expensive effect in the library and this was most of the reason.
+     */
+    const unit = p.length;
+    const streak = g.createLinearGradient(0, 0, -dirX * unit, -dirY * unit);
+    streak.addColorStop(0, rgba(p.color, 1));
+    streak.addColorStop(1, rgba(p.color, 0));
+
     for (const drop of state.drops) {
       const z = drop.z;
       const fall = p.speed * z * dt;
@@ -82,17 +101,25 @@ const rain = {
 
       // Nearer drops are longer, thicker and brighter — the whole illusion of
       // depth in a rain effect comes from covarying those three.
-      const len = p.length * z;
-      const grad = g.createLinearGradient(drop.x, drop.y, drop.x - dirX * len, drop.y - dirY * len);
-      grad.addColorStop(0, rgba(p.color, p.opacity * z));
-      grad.addColorStop(1, rgba(p.color, 0));
-      g.strokeStyle = grad;
-      g.lineWidth = Math.max(0.3, p.width * z);
+      g.save();
+      g.translate(drop.x, drop.y);
+      g.scale(z, z);
+      g.globalAlpha = p.opacity * z;
+      g.strokeStyle = streak;
+      g.lineWidth = Math.max(0.3 / z, p.width);
       g.beginPath();
-      g.moveTo(drop.x, drop.y);
-      g.lineTo(drop.x - dirX * len, drop.y - dirY * len);
+      g.moveTo(0, 0);
+      g.lineTo(-dirX * unit, -dirY * unit);
       g.stroke();
+      g.restore();
     }
+    g.globalAlpha = 1;
+
+    // Splashes still in flight are aged out even when the control is turned
+    // down to zero. Skipping the whole block on `p.splash > 0` — as this used
+    // to — left up to four hundred of them frozen in the array for the life of
+    // the layer, walked by nothing and freed by nothing.
+    if (!(p.splash > 0)) state.splashes.length = 0;
 
     if (p.splash > 0 && state.splashes.length) {
       g.globalCompositeOperation = 'lighter';

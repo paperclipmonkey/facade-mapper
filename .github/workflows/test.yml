@@ -46,5 +46,11 @@ jobs:
       - name: Facade collision and edge-blending tests
         run: node test/obstacles.test.mjs
 
+      - name: Effect behaviour tests
+        run: node test/effects.test.mjs
+
+      - name: Starter preset tests
+        run: node test/presets.test.mjs
+
       - name: Figure orientation tests
         run: node test/figures.test.mjs

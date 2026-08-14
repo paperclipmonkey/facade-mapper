@@ -121,7 +121,16 @@ export function createCamera() {
   /**
    * Grab a downscaled greyscale frame for analysis.
    * Returns a Float32Array of luma in 0..255, plus its dimensions.
+   *
+   * The buffer is reused between calls. This runs about eight times a second
+   * for as long as a motion trigger is armed — all evening — and a fresh
+   * Float32Array plus a fresh ImageData each time is close to a megabyte of
+   * garbage a second, produced forever, for a result that is consumed
+   * immediately and never kept. The caller must not hold on to `luma` past the
+   * next call, which is exactly how the motion detector already uses it.
    */
+  let lumaBuffer = null;
+
   function captureLuma() {
     if (!isRunning()) return null;
     const w = ANALYSIS_WIDTH;
@@ -129,15 +138,16 @@ export function createCamera() {
     if (analysisCanvas.width !== w || analysisCanvas.height !== h) {
       analysisCanvas.width = w;
       analysisCanvas.height = h;
+      lumaBuffer = null;
     }
     analysisCtx.drawImage(video, 0, 0, w, h);
     const { data } = analysisCtx.getImageData(0, 0, w, h);
-    const luma = new Float32Array(w * h);
+    if (!lumaBuffer || lumaBuffer.length !== w * h) lumaBuffer = new Float32Array(w * h);
     for (let i = 0, p = 0; i < data.length; i += 4, p++) {
       // Rec. 601 luma; the exact coefficients matter less than consistency.
-      luma[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      lumaBuffer[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
     }
-    return { luma, width: w, height: h };
+    return { luma: lumaBuffer, width: w, height: h };
   }
 
   /** A still for tracing over, downscaled and JPEG-compressed to fit in storage. */

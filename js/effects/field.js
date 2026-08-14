@@ -22,10 +22,13 @@
  * Kept in an effect's `state` so the allocation happens once, not per frame.
  * Resolution changes reallocate; that only happens when a slider moves.
  */
+/** The size a field will actually be, given what was asked for. */
+const clampDim = (v) => Math.max(2, v | 0);
+
 export function createField(width, height) {
   const canvas = document.createElement('canvas');
-  canvas.width = Math.max(2, width | 0);
-  canvas.height = Math.max(2, height | 0);
+  canvas.width = clampDim(width);
+  canvas.height = clampDim(height);
   const ctx = canvas.getContext('2d', { willReadFrequently: false });
   const image = ctx.createImageData(canvas.width, canvas.height);
 
@@ -105,13 +108,23 @@ export function createField(width, height) {
 /**
  * Fetch a correctly-sized field from an effect's state, reallocating only when
  * the requested resolution actually changes.
+ *
+ * The comparison is against the *clamped* size, because that is what the field
+ * will report back. Comparing against the raw request meant any ask below the
+ * two-pixel floor — a sliver of a shape, a degenerate trace — could never match
+ * the two-pixel canvas it got, so the cache missed every frame and rebuilt a
+ * canvas, a 2D context and an ImageData sixty times a second, forever. A cache
+ * that never hits is worse than no cache: it does the allocation *and* the
+ * lookup.
  */
 export function ensureField(state, key, width, height) {
+  const w = clampDim(width);
+  const h = clampDim(height);
   const existing = state[key];
-  if (existing && existing.width === (width | 0) && existing.height === (height | 0)) {
+  if (existing && existing.width === w && existing.height === h) {
     return existing;
   }
-  const field = createField(width, height);
+  const field = createField(w, h);
   state[key] = field;
   return field;
 }

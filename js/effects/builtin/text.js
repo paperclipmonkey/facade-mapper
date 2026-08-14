@@ -49,6 +49,7 @@ const TEXT_PARAMS = [
   { key: 'amount', type: 'range', label: 'Animation amount', default: 0.5, min: 0, max: 2, step: 0.01 },
   { key: 'pathOffset', type: 'range', label: 'Position on path', default: 0, min: -1, max: 1, step: 0.002 },
   { key: 'flip', type: 'bool', label: 'Flip on path', default: false },
+  { key: 'fit', type: 'bool', label: 'Shrink to fit path', default: true },
 ];
 
 /** Set up font/colour once, then hand back the pixel size chosen for this shape. */
@@ -228,9 +229,31 @@ const text = {
 /** Lay glyphs along the arc-length parameter, each rotated to the local tangent. */
 function drawOnPath(g, content, p, shape, t, px, tracking) {
   const chars = [...content];
-  const widths = chars.map((c) => g.measureText(c).width);
-  const total = widths.reduce((a, b) => a + b, 0) + tracking * (chars.length - 1);
+  let widths = chars.map((c) => g.measureText(c).width);
+  let total = widths.reduce((a, b) => a + b, 0) + tracking * (chars.length - 1);
   const pathLen = shape.sampler.length;
+
+  /**
+   * Shrink to fit the path it was given.
+   *
+   * A phrase longer than its arch used to run off both ends: `sampler.at`
+   * clamps at the ends of an open path, so the overflowing glyphs stack up on
+   * the last point and "MERRY CHRISTMAS" over a door reads "ERRY CHRISTM".
+   * Silently losing the first and last letters of a sign is the worst of the
+   * available behaviours, and the size that would fit is knowable — so use it.
+   *
+   * Off by default it is not, but it *is* switchable: laying text longer than
+   * the path and scrolling it along with `pathOffset` is a legitimate thing to
+   * want, and that needs the overflow.
+   */
+  if (p.fit !== false && total > pathLen && pathLen > 0) {
+    const scale = pathLen / total;
+    px *= scale;
+    tracking *= scale;
+    g.font = `${p.weight} ${Math.max(4, px)}px ${FONT_STACKS[p.font] || FONT_STACKS.system}`;
+    widths = chars.map((c) => g.measureText(c).width);
+    total = widths.reduce((a, b) => a + b, 0) + tracking * (chars.length - 1);
+  }
 
   let startDist;
   if (p.align === 'left') startDist = 0;

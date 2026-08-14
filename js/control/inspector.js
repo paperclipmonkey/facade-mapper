@@ -14,8 +14,10 @@ import { openEffectPicker } from './effectPicker.js';
 export function renderInspector(container, app) {
   clear(container);
   const { type, id } = app.selection;
+  const multi = type === 'layer' && (app.selection.ids || []).length > 1;
 
   if (type === 'shape') renderShape(container, app, id);
+  else if (multi) renderLayerSelection(container, app);
   else if (type === 'layer') renderLayer(container, app, id);
   else if (type === 'projector') renderProjector(container, app, id);
   else if (type === 'scene') renderScene(container, app, id);
@@ -141,23 +143,142 @@ function renderShape(container, app, id) {
   });
   container.appendChild(customTag);
 
-  container.appendChild(heading('Effects using this shape'));
-  const users = app.project.layers.filter(
-    (l) => l.targets?.includes(shape.id) || l.targetTags?.some((t) => shape.tags?.includes(t))
-  );
+  renderShapeEffects(container, app, shape);
+}
+
+/**
+ * The effects on this shape, and the two ways to add one.
+ *
+ * "None yet." was a dead end. You had traced a window, you were looking at it,
+ * you wanted to light it — and the panel told you nothing was pointed at it and
+ * left you to go to another panel, add a layer, and find your way back to this
+ * shape in a target list. Both routes now start here: pick a new effect from
+ * the gallery, or point one you already have at it.
+ */
+function renderShapeEffects(container, app, shape) {
+  const isUser = (l) => l.targets?.includes(shape.id) || l.targetTags?.some((t) => shape.tags?.includes(t));
+  const users = app.project.layers.filter(isUser);
+
+  container.appendChild(heading('Effects on this shape'));
+
   if (!users.length) {
-    container.appendChild(el('p', { class: 'panel-note', text: 'None yet.' }));
+    container.appendChild(el('p', { class: 'panel-note', text: 'Nothing is lighting this yet.' }));
   } else {
     const list = el('div', { class: 'list compact' });
     for (const layer of users) {
-      const item = el('div', { class: 'list-item' }, [
+      // Tag-targeted layers are not "on" this shape so much as on everything
+      // like it, and unpicking one from here would silently change the others.
+      const viaTag = !layer.targets?.includes(shape.id);
+      const row = [
         el('span', { class: 'item-title', text: layer.name || getEffect(layer.effect)?.name || layer.effect }),
-      ]);
+      ];
+      if (viaTag) {
+        const tags = (layer.targetTags || []).filter((t) => shape.tags?.includes(t));
+        row.push(el('span', { class: 'item-sub', text: `via ${tags.map((t) => `#${t}`).join(', ')}` }));
+      } else {
+        const remove = el('button', { type: 'button', class: 'icon-btn', title: 'Take this effect off this shape', text: '×' });
+        remove.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          app.pushUndo();
+          layer.targets = (layer.targets || []).filter((t) => t !== shape.id);
+          app.commit();
+          app.refreshInspector();
+        });
+        row.push(remove);
+      }
+      const item = el('div', { class: 'list-item' }, row);
       item.addEventListener('click', () => app.select({ type: 'layer', id: layer.id }));
       list.appendChild(item);
     }
     container.appendChild(list);
   }
+
+  const actions = el('div', { class: 'panel-actions' });
+
+  const add = el('button', { type: 'button', class: 'btn small primary', text: 'Add an effect here…' });
+  add.addEventListener('click', () => {
+    openEffectPicker({
+      current: null,
+      closed: shape.closed !== false,
+      onPick: (effectId) => app.addLayerForShape(effectId, shape.id),
+    });
+  });
+  actions.appendChild(add);
+
+  // Only offered when there is something to point: a dropdown listing nothing
+  // is worse than no dropdown.
+  const spare = app.project.layers.filter((l) => !isUser(l));
+  if (spare.length) {
+    const link = el('select', { class: 'select-inline' });
+    link.appendChild(el('option', { value: '', text: 'Point an existing effect here…' }));
+    for (const layer of spare) {
+      link.appendChild(el('option', {
+        value: layer.id,
+        text: layer.name || getEffect(layer.effect)?.name || layer.effect,
+      }));
+    }
+    link.addEventListener('change', () => {
+      const layer = app.project.layers.find((l) => l.id === link.value);
+      if (!layer) return;
+      app.pushUndo();
+      layer.targets = [...new Set([...(layer.targets || []), shape.id])];
+      app.commit();
+      app.refreshInspector();
+      toast(`"${layer.name || getEffect(layer.effect)?.name}" now draws into ${shape.name}.`, 'good');
+    });
+    actions.appendChild(link);
+  }
+
+  container.appendChild(actions);
+
+  if (shape.tags?.length) {
+    container.appendChild(el('p', {
+      class: 'panel-note',
+      html: `Or point a layer at <strong>#${shape.tags[0]}</strong> and it lights every shape tagged that way, `
+        + 'including ones you trace later.',
+    }));
+  }
+}
+
+/**
+ * Several layers at once.
+ *
+ * No parameters — they belong to different effects and merging them would mean
+ * inventing a "mixed" state for every control. What is genuinely shared is
+ * whether they are on and whether they exist, and those are exactly the two
+ * things you want when swapping one seasonal look for another.
+ */
+function renderLayerSelection(container, app) {
+  const ids = new Set(app.selection.ids || []);
+  const layers = app.project.layers.filter((l) => ids.has(l.id));
+
+  container.appendChild(el('div', { class: 'inspector-title' }, [
+    el('strong', { text: `${layers.length} effects selected` }),
+  ]));
+
+  const list = el('div', { class: 'list compact' });
+  for (const layer of layers) {
+    list.appendChild(el('div', { class: 'list-item' }, [
+      el('span', { class: 'item-title', text: layer.name || getEffect(layer.effect)?.name || layer.effect }),
+    ]));
+  }
+  container.appendChild(list);
+
+  const actions = el('div', { class: 'panel-actions' });
+  for (const [label, action] of [['Enable all', 'enable'], ['Bypass all', 'bypass']]) {
+    const button = el('button', { type: 'button', class: 'btn small', text: label });
+    button.addEventListener('click', () => app.layersBulk(action));
+    actions.appendChild(button);
+  }
+  const remove = el('button', { type: 'button', class: 'btn small danger', text: `Delete ${layers.length}` });
+  remove.addEventListener('click', () => app.deleteSelection());
+  actions.appendChild(remove);
+  container.appendChild(actions);
+
+  container.appendChild(el('p', {
+    class: 'panel-note',
+    text: 'Click a single effect to edit its parameters.',
+  }));
 }
 
 function checkbox(label, checked, onChange) {

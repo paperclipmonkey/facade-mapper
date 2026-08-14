@@ -112,7 +112,12 @@ export function createTriggerRuntime({ app, sound, onFired } = {}) {
           continue;
         }
         if (now >= timerNext.get(trigger.id)) {
+          // Reschedule whether or not it fired. `fire` returns false when the
+          // scene has been deleted, and without this the due time stays in the
+          // past — so a timer pointing at a missing scene re-enters `fire` on
+          // every frame, for ever, building a scene map each time.
           if (fire(trigger)) changed = true;
+          else scheduleTimer(trigger);
         }
         continue;
       }

@@ -31,6 +31,8 @@ export const SHAPE_TAGS = [
   'garage',
   'path',
   'trim',
+  /** An open path meant to be written along — an arch over the door, a banner. */
+  'sign',
   'mask',
 ];
 
@@ -226,6 +228,8 @@ export function createProject(name = 'Untitled show') {
       hasStill: false,
       /** This show is the built-in demo house rather than somebody's building. */
       isDemo: false,
+      /** Which starter look the demo was built with, so ?demo=x can switch. */
+      demoPreset: null,
       showSafeArea: true,
       previewFps: 60,
       /** Bloom and colour grading, applied identically by every projector. */

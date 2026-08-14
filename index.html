@@ -85,8 +85,13 @@
               <button type="button" class="btn small primary" id="btnAddLayer">Add effect</button>
               <button type="button" class="btn small" id="btnDuplicateLayer">Duplicate</button>
               <button type="button" class="btn small danger" id="btnDeleteLayer">Delete</button>
+              <button type="button" class="btn small danger" id="btnClearLayers">Clear all</button>
             </div>
             <div class="panel-actions" id="presetActions"></div>
+            <p class="panel-note">
+              Click to select, <kbd>Ctrl</kbd>-click to add, <kbd>Shift</kbd>-click for a range,
+              <kbd>Backspace</kbd> to delete them.
+            </p>
             <div id="layerList" class="list"></div>
           </section>
 
@@ -261,6 +266,7 @@
           <span id="stageCoords">—</span>
           <span id="stageSelection">Nothing selected</span>
           <span id="stagePeers">0 projector tabs</span>
+          <span id="stageFps" title="Preview frame rate and the time the render itself takes">—</span>
         </div>
       </section>
 
