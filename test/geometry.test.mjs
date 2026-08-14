@@ -233,54 +233,135 @@ async function calibrateAgainst(Hgt, opts = {}) {
 /* ------------------------------------------------------------------ *
  * Non-planar correction
  *
- * A homography is the right model for a flat wall and the wrong one for a
- * corner. These check that the leftover error after the solve is turned into a
- * correction with the right sign and the right magnitude — a mesh applied
- * backwards doubles the misalignment instead of removing it, and looks
- * plausible right up until you point it at a real wall.
+ * These drive the correction end to end through the renderer's own sampleMesh,
+ * against a *non-identity* homography. Both parts matter.
+ *
+ * The offsets are valued in projector space but addressed by world position, and
+ * an earlier version built them addressed by projector position instead — which
+ * scatters every correction to the wrong part of the wall. It shipped because
+ * the test used an identity homography, and under identity the two spaces are
+ * the same, so nothing could tell them apart. A test that cannot distinguish the
+ * two spaces cannot catch a bug about confusing them.
  * ------------------------------------------------------------------ */
 
 {
   console.log('\n— residual mesh —');
 
   const { gridAxis, residualMesh } = await import('../js/control/calibration.js');
+  const { computeRegion, sampleMesh } = await import('../js/render/warp.js');
 
   const axis = gridAxis(5);
   ok('a denser grid spans the output', axis.length === 5 && axis[0] > 0 && axis[4] < 1,
      axis.map((v) => v.toFixed(2)).join(' '));
   ok('3 keeps the original marker positions', gridAxis(3).join() === [0.12, 0.5, 0.88].join());
 
-  // A camera that sees the projector output exactly: H is the identity, so a
-  // perfectly flat wall leaves no residual at all.
-  const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1];
-  const flat = [];
-  for (const t of axis) for (const s of axis) flat.push({ projector: [s, t], camera: [s, t] });
-  ok('a flat wall produces no mesh', residualMesh(flat, identity, axis) === null);
+  /**
+   * A camera→projector mapping that is strongly rotated, so the two coordinate
+   * spaces are genuinely different rather than merely scaled. A mild keystone is
+   * not enough: under it, normalised camera position and projector position stay
+   * close enough that addressing the mesh by the wrong one still lands roughly
+   * right, and the test passes on broken code. The projector's output quad is
+   * seen by the camera as a diamond — projector x now runs diagonally across the
+   * camera image, so confusing the two spaces cannot go unnoticed.
+   */
+  const H = solveHomography(
+    [{ x: 0.5, y: 0.1 }, { x: 0.9, y: 0.5 }, { x: 0.5, y: 0.9 }, { x: 0.1, y: 0.5 }],
+    [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]
+  );
+  const inv = mat3Inverse(H);
+  const region = computeRegion(H);
 
-  // Now bend it: everything right of centre is seen 3% further right than a
-  // plane would put it, as a face angled away from the camera would be.
-  const bent = flat.map(({ projector, camera }) => ({
-    projector,
-    camera: [camera[0] > 0.5 ? camera[0] + 0.03 : camera[0], camera[1]],
-  }));
-  const mesh = residualMesh(bent, identity, axis);
+  /** Where a projector dot lands on a perfectly flat wall. */
+  const flatSighting = (s, t) => {
+    const c = applyH(inv, s, t);
+    return { projector: [s, t], camera: [c.x, c.y] };
+  };
+
+  const flat = [];
+  for (const t of axis) for (const s of axis) flat.push(flatSighting(s, t));
+  ok('a flat wall produces no mesh', residualMesh(flat, H, axis, region) === null);
+
+  /**
+   * Bend it: the right-hand half of the wall turns away from the camera.
+   *
+   * Modelled as a *kink*, not a step — the displacement is zero at the seam and
+   * grows with distance from it. That is what a corner is: two faces meeting
+   * along a shared edge, continuous in position and discontinuous only in slope.
+   * An abrupt step would mean the wall has a gap in it, and no smooth mesh can
+   * represent one, so testing against a step measures the interpolator's
+   * inability to do something impossible rather than whether the correction is
+   * right.
+   */
+  const BEND = 0.04;
+  const shift = (x) => (x > 0.5 ? BEND * ((x - 0.5) / 0.5) : 0);
+  const bent = flat.map((d) => ({ ...d, camera: [d.camera[0] + shift(d.camera[0]), d.camera[1]] }));
+  const mesh = residualMesh(bent, H, axis, region);
   ok('a bent wall produces a mesh', mesh !== null && mesh.enabled);
   ok('the mesh matches the grid', mesh.cols === 5 && mesh.rows === 5 && mesh.offsets.length === 50);
 
-  // The correction has to oppose the error, not repeat it: the camera saw those
-  // points shifted +x, so the output must move -x to land back on target.
-  const dxAt = (col, row) => mesh.offsets[(row * 5 + col) * 2];
-  ok('the correction opposes the measured error', dxAt(4, 2) < -0.01,
-     `right-hand offset ${dxAt(4, 2).toFixed(4)}`);
-  ok('and is roughly the size of it', Math.abs(dxAt(4, 2) + 0.03) < 0.012,
-     `${dxAt(4, 2).toFixed(4)} vs the -0.03 needed`);
-  ok('the unbent side is left alone', Math.abs(dxAt(0, 2)) < 0.005,
-     `left-hand offset ${dxAt(0, 2).toFixed(4)}`);
+  /**
+   * The end-to-end check: run the renderer's own maths, over the whole coverage.
+   *
+   * Sampling only the bent half is not enough. The bug this replaced applied
+   * roughly the right *magnitude* of correction in roughly the wrong *place*, so
+   * a test looking only where correction is wanted still sees it arrive. What
+   * that bug cannot do is leave the flat half alone — it drags parts of the wall
+   * that were already aligned out of alignment. So: sample everywhere, and
+   * require that nothing gets worse.
+   */
+  const errorAt = (sourceX, sourceY, withMesh) => {
+    // A point on the flat wall at sourceX is *seen* here once the wall bends…
+    const observedX = sourceX + shift(sourceX);
+    // …and the projector pixel that lights it is the one aimed at the flat spot.
+    const trueProjector = applyH(H, sourceX, sourceY);
+    const p = applyH(H, observedX, sourceY);
+    let { x, y } = p;
+    if (withMesh) {
+      const [dx, dy] = sampleMesh(mesh, (observedX - region.x) / region.w, (sourceY - region.y) / region.h);
+      x += dx;
+      y += dy;
+    }
+    return Math.hypot(x - trueProjector.x, y - trueProjector.y);
+  };
 
-  // A dot the camera never found must not punch a hole in the correction.
+  let worsened = 0;
+  let worstRegression = 0;
+  let worstBare = 0;
+  let before = 0;
+  let after = 0;
+  let samples = 0;
+  for (let i = 0; i <= 6; i++) {
+    for (let j = 0; j <= 6; j++) {
+      // Walk the region the projector covers, inset from the very edge where
+      // there is nothing left to interpolate between.
+      const cx = region.x + region.w * (0.15 + 0.7 * (i / 6));
+      const cy = region.y + region.h * (0.15 + 0.7 * (j / 6));
+      const bare = errorAt(cx, cy, false);
+      const corrected = errorAt(cx, cy, true);
+      before += bare;
+      after += corrected;
+      samples++;
+      if (corrected > bare + 1e-3) worsened++;
+      worstRegression = Math.max(worstRegression, corrected - bare);
+      worstBare = Math.max(worstBare, bare);
+    }
+  }
+  /**
+   * A few points near the seam come out slightly worse, and that is inherent
+   * rather than a defect: the mesh interpolates smoothly and a corner is a
+   * discontinuity in slope, so the correction rounds it off. What matters is
+   * that the rounding is small next to the misalignment being removed.
+   */
+  ok('nothing is made significantly worse', worstRegression < worstBare * 0.15,
+     `worst regression ${worstRegression.toFixed(4)} against ${worstBare.toFixed(4)} uncorrected `
+     + `(${worsened} of ${samples} slightly worse, near the seam)`);
+  ok('and removes most of the error overall', after < before * 0.35,
+     `mean ${(before / samples).toFixed(4)} → ${(after / samples).toFixed(4)} projector units`);
+
+  // A dot the camera never found must not leave a hole.
   const holed = bent.map((d, i) => (i === 12 ? { ...d, camera: null } : d));
-  const patched = residualMesh(holed, identity, axis);
-  ok('a missed marker is filled from its neighbours',
+  const patched = residualMesh(holed, H, axis, region);
+  ok('a missed marker does not break the correction',
      patched !== null && patched.offsets.every((v) => Number.isFinite(v)));
 }
 

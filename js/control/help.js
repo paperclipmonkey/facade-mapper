@@ -62,8 +62,8 @@ export const HELP_HTML = `
   <li><strong>Point a camera at the house</strong> from roughly where people will stand. Setup &rarr; Start camera. A tripod matters more than a good camera — everything below assumes the camera does not move.</li>
   <li><strong>Open a projector tab</strong> for each projector, drag each to its own display and press <kbd>F</kbd> for fullscreen.</li>
   <li><strong>Align each projector.</strong> Select it, then <em>Align with camera</em>. It flashes nine dots one at a time and watches where they land. Works best after dark.</li>
-  <li><strong>Trace the house</strong> on the camera view with the Area and Path tools. Tag things (<code>window</code>, <code>door</code>, <code>roof</code>) so effects can target groups.</li>
-  <li><strong>Add effects</strong> and point them at shapes or tags.</li>
+  <li><strong>Trace the house</strong> on the camera view with the Area and Path tools. As each shape closes you are asked to name it — clicking a tag both tags <em>and</em> names it, so one click turns a new rectangle into "Window 2" tagged <code>window</code>. That is what lets one effect light every window.</li>
+  <li><strong>Add effects</strong> and point them at shapes or tags. <em>Browse&hellip;</em> on a layer shows every effect rendered live on a shape like yours, which beats picking from a list of names you have never seen.</li>
   <li><strong>Save scenes</strong> for the looks you want, and give them hotkeys.</li>
 </ol>
 <p>

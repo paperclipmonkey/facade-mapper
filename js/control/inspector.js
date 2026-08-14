@@ -9,6 +9,7 @@
 import { el, clear, paramRow, toast, fmt } from './ui.js';
 import { SHAPE_TAGS } from '../core/state.js';
 import { getEffect, listByCategory, defaultParams } from '../effects/registry.js';
+import { openEffectPicker } from './effectPicker.js';
 
 export function renderInspector(container, app) {
   clear(container);
@@ -183,6 +184,33 @@ function renderLayer(container, app, id) {
     })
   );
 
+  /**
+   * Browsing beats guessing. The dropdown is kept — it is faster once you know
+   * the name you want — but the Browse button opens a gallery that renders every
+   * effect live on a shape like this layer's, which is the only way to choose
+   * one you have not seen.
+   */
+  const chooseEffect = (id) => {
+    if (!id || id === layer.effect) return;
+    app.pushUndo();
+    layer.effect = id;
+    layer.params = { ...defaultParams(layer.effect), ...layer.params };
+    layer.bindings = {};
+    app.resetLayerState(layer.id);
+    app.commit();
+    app.refreshInspector();
+  };
+
+  const browseBtn = el('button', { type: 'button', class: 'btn small', text: 'Browse…' });
+  browseBtn.addEventListener('click', () => {
+    const target = app.project.shapes.find((s) => (layer.targets || []).includes(s.id));
+    openEffectPicker({
+      current: layer.effect,
+      closed: target ? target.closed !== false : true,
+      onPick: chooseEffect,
+    });
+  });
+
   const effectRow = el('div', { class: 'field' }, [el('span', { text: 'Effect' })]);
   const effectSelect = el('select');
   for (const [category, effects] of listByCategory()) {
@@ -205,6 +233,7 @@ function renderLayer(container, app, id) {
   });
   effectRow.appendChild(effectSelect);
   container.appendChild(effectRow);
+  container.appendChild(el('div', { class: 'panel-actions' }, [browseBtn]));
 
   if (effect?.description) {
     container.appendChild(el('p', { class: 'panel-note', text: effect.description }));

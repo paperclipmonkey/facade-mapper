@@ -75,11 +75,15 @@ instead of this list.
    rather than the fit. A denser pass measures how far the wall departs from a
    plane and bends the output to match.
 5. **Trace the house.** The **Area** tool for windows and doors, the **Path**
-   tool for rooflines and gutters. Tag each shape (`window`, `door`, `roof`…) so
-   effects can target groups rather than individual shapes.
+   tool for rooflines and gutters. As each shape closes you are asked to name it,
+   and clicking a tag both tags *and* names it — one click turns a new rectangle
+   into "Window 2" tagged `window`. Worth doing: an effect pointed at the
+   `window` tag lights every window, and keeps working as you trace more.
 6. **Effects → Halloween starter** (or Christmas). That builds a complete look
    out of what you have tagged, grading included. Then take it apart and make it
-   yours.
+   yours — **Browse…** on any layer opens a gallery that renders all fifty
+   effects live, on a shape like the one you are pointing at, so you can pick by
+   eye rather than by name.
 7. **Export** once the alignment is right. That JSON file is your backup.
 
 ## How the alignment works
@@ -107,6 +111,11 @@ alignment runs 25 or 49 dots instead of 9. The extra dots are not there to fit a
 better plane — they measure how far the wall departs from one. The homography
 still does the global mapping; the leftover error at each dot is exactly the
 surface bending away, and that goes into the warp mesh as a correction.
+
+A corner is a discontinuity in slope and the mesh interpolates smoothly, so the
+correction rounds the seam off slightly rather than reproducing it exactly. It
+takes the bulk of the misalignment out; if the crease itself still reads as soft,
+nudge those control points by hand with **Surface warp**.
 
 On a genuinely flat wall the residuals come out at nothing and the mesh stays
 flat, so there is no cost to using a denser grid other than the time it takes to

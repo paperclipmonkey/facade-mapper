@@ -51,6 +51,7 @@ import { createStage, defaultWorldQuad } from './stage.js';
 import { createAudioAnalyser } from './audio.js';
 import { renderInspector } from './inspector.js';
 import { renderSetupGuide } from './setup.js';
+import { createShapeNamer } from './shapeNamer.js';
 import {
   renderProjectorList,
   renderShapeList,
@@ -142,6 +143,14 @@ const worldRenderer = createWorldRenderer({
 });
 
 const stage = createStage({ canvas: $('stage'), wrap: $('stageWrap'), app });
+
+/**
+ * Prompt for a name and a tag the moment a shape is drawn, while you still know
+ * what it is. Tagging is what makes one layer light every window, and doing it
+ * later — in another panel, on a shape called "Area 3" — is why it went unused.
+ */
+const shapeNamer = createShapeNamer({ host: $('stageWrap'), app });
+app.nameNewShape = (id) => shapeNamer.open(id);
 
 /* ------------------------------------------------------------------ *
  * Persistence + fan-out
