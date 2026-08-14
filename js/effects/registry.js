@@ -19,10 +19,13 @@ import text from './builtin/text.js';
 import mediaEffects from './builtin/media.js';
 import atmosphere from './builtin/atmosphere.js';
 import creatures from './builtin/creatures.js';
+import facade from './builtin/facade.js';
 
 export const CATEGORIES = [
   'basic',
   'path',
+  /** Effects that treat the other traced shapes as obstacles. */
+  'facade',
   'atmosphere',
   'halloween',
   'christmas',
@@ -32,7 +35,7 @@ export const CATEGORIES = [
 ];
 
 const builtins = new Map();
-for (const list of [basic, paths, atmosphere, halloween, christmas, creatures, text, mediaEffects]) {
+for (const list of [basic, paths, facade, atmosphere, halloween, christmas, creatures, text, mediaEffects]) {
   for (const def of list) builtins.set(def.id, normaliseEffect(def, true));
 }
 

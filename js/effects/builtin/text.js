@@ -110,6 +110,35 @@ function charState(p, index, count, t) {
   return state;
 }
 
+/**
+ * A halo around a glyph, built from widening strokes rather than a shadow.
+ *
+ * `shadowBlur` gives a lovely soft glow and costs a third of a millisecond *per
+ * glyph*: the browser renders each shadowed draw into its own layer and blurs
+ * it. Eleven characters on five windows is 55 of those, measured at 19.6ms a
+ * frame — more than the entire frame budget, for one line of text.
+ *
+ * The same 55 glyphs with two widening strokes come to 0.16ms, and read almost
+ * identically on a wall, because the bloom in the post stage is what actually
+ * produces the spill your eye responds to. This only has to give it something
+ * bright and slightly spread to work with. Trading an exact Gaussian for a
+ * hundredfold speed-up in front of a real bloom is not a close call.
+ */
+function haloGlyph(g, ch, x, y, colour, glow) {
+  g.save();
+  g.globalCompositeOperation = 'lighter';
+  g.lineJoin = 'round';
+  g.lineCap = 'round';
+  for (const [width, alpha] of [[glow, 0.1], [glow * 0.45, 0.16]]) {
+    g.lineWidth = width;
+    g.strokeStyle = rgba(colour, alpha);
+    g.strokeText(ch, x, y);
+  }
+  g.fillStyle = rgba(colour, 0.3);
+  g.fillText(ch, x, y);
+  g.restore();
+}
+
 function paintGlyph(g, ch, x, y, p, st, px) {
   g.save();
   g.globalAlpha *= st.alpha;
@@ -120,15 +149,7 @@ function paintGlyph(g, ch, x, y, p, st, px) {
   }
   const colour = st.colour || p.color;
 
-  if (p.glow > 0) {
-    g.save();
-    g.globalCompositeOperation = 'lighter';
-    g.shadowColor = colour;
-    g.shadowBlur = p.glow;
-    g.fillStyle = rgba(colour, 0.55);
-    g.fillText(ch, x, y);
-    g.restore();
-  }
+  if (p.glow > 0) haloGlyph(g, ch, x, y, colour, p.glow);
   if (p.strokeWidth > 0) {
     g.lineWidth = p.strokeWidth;
     g.strokeStyle = p.stroke;

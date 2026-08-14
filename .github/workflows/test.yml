@@ -43,5 +43,8 @@ jobs:
       - name: Surface collision tests
         run: node test/collide.test.mjs
 
+      - name: Facade collision and edge-blending tests
+        run: node test/obstacles.test.mjs
+
       - name: Figure orientation tests
         run: node test/figures.test.mjs

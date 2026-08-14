@@ -222,6 +222,10 @@ export function createProject(name = 'Untitled show') {
       audioGain: 1,
       /** Camera device id, remembered between sessions. */
       cameraId: null,
+      /** A still is stored in IndexedDB for this project, to trace on. */
+      hasStill: false,
+      /** This show is the built-in demo house rather than somebody's building. */
+      isDemo: false,
       showSafeArea: true,
       previewFps: 60,
       /** Bloom and colour grading, applied identically by every projector. */

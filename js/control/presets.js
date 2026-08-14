@@ -83,6 +83,20 @@ const HALLOWEEN = () => [
     opacity: 0.35,
     params: { color: '#dfe8f5', corner: 'top-left', rings: 6, spokes: 10, width: 1.6, scale: 0.8, spider: true },
   }),
+  // Aimed at the wall, and falling back to the whole frame if nothing is
+  // tagged `wall` — either way it treats the windows and door as solid and
+  // grows round them. Slow enough that it is still filling in an hour later,
+  // which is the point: the house is visibly worse than it was at dusk.
+  layer('vine', {
+    name: 'Creeping rot',
+    tags: ['wall'],
+    opacity: 0.9,
+    params: {
+      color: '#1d3a1c', tip: '#6f9a3e', tips: 7, speed: 40, thickness: 4.5,
+      branch: 0.5, wander: 0.55, climb: 0.3, spread: 0.75, cling: 0.8, seek: 0.7,
+      coverage: 0.45, leaves: 0.25, obstacles: 'window, door', shootGlow: 0.8,
+    },
+  }),
   layer('bats', {
     name: 'Bats',
     params: { color: '#12040f', silhouette: false, count: 12, size: 0.07, speed: 0.16, flap: 7, spread: 0.6, wander: 0.4, direction: 'right', interval: 70, crossing: 9 },
@@ -139,6 +153,18 @@ const CHRISTMAS = () => [
     // A slow, gentle breath so the rooms feel occupied rather than lit by a lamp.
     bindings: { level: { type: 'lfo', wave: 'sine', rate: 0.08, depth: 0.15, spread: 0.2 } },
   }),
+  // Under the warm rooms rather than over them: frost is on the glass, the
+  // light is behind it.
+  layer('frost', {
+    name: 'Frosted glass',
+    tags: ['window'],
+    opacity: 0.75,
+    stagger: 2.5,
+    params: {
+      color: '#bfe4ff', tip: '#ffffff', coverage: 0.8, grow: 40, fronds: 24,
+      branch: 0.6, sharpness: 0.5, thickness: 2, bloom: 0.4, sparkle: 0.5,
+    },
+  }),
   layer('snow', {
     name: 'Snowfall',
     params: { color: '#ffffff', count: 420, speed: 80, wind: 24, gust: 0.6, size: 5, depth: 0.75, sparkle: 0.25, settle: 0 },
@@ -154,7 +180,7 @@ export const PRESETS = [
     id: 'halloween',
     name: 'Halloween starter',
     description:
-      'Candlelit windows with something looking out, blood down the door, ground fog and a storm overhead.',
+      'Candlelit windows with something looking out, blood down the door, rot creeping over the brickwork, ground fog and a storm overhead.',
     tagsUsed: ['window', 'door'],
     grade: 'haunted',
     build: HALLOWEEN,
@@ -163,7 +189,7 @@ export const PRESETS = [
     id: 'christmas',
     name: 'Christmas starter',
     description:
-      'Chasing lights along the roofline, warm windows, icicles, a candy-cane door, snow and a Santa fly-past.',
+      'Chasing lights along the roofline, warm windows behind frosted glass, icicles, a candy-cane door, snow and a Santa fly-past.',
     tagsUsed: ['roof', 'window', 'door'],
     grade: 'frost',
     build: CHRISTMAS,

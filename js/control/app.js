@@ -40,7 +40,7 @@ import {
   migrateProject,
 } from '../core/state.js';
 import { createWorldRenderer } from '../render/worldRenderer.js';
-import { createWarpRenderer } from '../render/warp.js';
+import { createWarpRenderer, computeEdgeBlends, projectorsOverlap } from '../render/warp.js';
 import { GRADE_PRESETS, DEFAULT_GRADE } from '../render/postfx.js';
 import { createMediaPool, importMediaFile, removeMedia } from '../core/media.js';
 import { loadUserEffects, listByCategory, defaultParams, getEffect, getCompileErrors } from '../effects/registry.js';
@@ -71,6 +71,7 @@ import { scheduleWantsOn, describeSchedule } from './schedule.js';
 import { el, clear, toast, paramRow } from './ui.js';
 import { HELP_HTML, EFFECT_TEMPLATE } from './help.js';
 import { PRESETS, applyPreset } from './presets.js';
+import { demoShapes, demoWorldQuad, demoFacadeBlob, DEMO_ASPECT } from './demoHouse.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -365,11 +366,21 @@ function switchPanel(name) {
 function updateCalibrationNote() {
   const unaligned = app.project.projectors.filter((p) => !p.calibration?.H);
   const node = $('calibrationNote');
-  if (!unaligned.length) {
-    node.textContent = 'All projectors are aligned. Open their tabs and press F for fullscreen.';
+  const blendButton = $('btnAutoBlend');
+  const overlaps = unaligned.length ? [] : unblendedOverlaps();
+  blendButton.hidden = app.project.projectors.filter((p) => p.calibration?.H).length < 2;
+
+  if (unaligned.length) {
+    node.textContent = `${unaligned.length} projector${unaligned.length === 1 ? '' : 's'} still need aligning. Select one and use "Align with camera".`;
     return;
   }
-  node.textContent = `${unaligned.length} projector${unaligned.length === 1 ? '' : 's'} still need aligning. Select one and use "Align with camera".`;
+  if (overlaps.length) {
+    // Worth saying out loud: the doubled band is the most common "why does my
+    // wall have a bright stripe down it" and it has a one-click answer.
+    node.textContent = `${overlaps[0][0]} and ${overlaps[0][1]} light the same part of the wall, so that band is twice as bright. "Blend overlaps" fades each of them across it.`;
+    return;
+  }
+  node.textContent = 'All projectors are aligned. Open their tabs and press F for fullscreen.';
 }
 
 function updateStageStatus() {
@@ -447,6 +458,57 @@ app.beginManualCorners = (projectorId) => {
   app.commit();
   toast('Drag the yellow handles onto the projected corners, then switch the test pattern off.');
 };
+
+/**
+ * Set every projector's soft edges from where they actually overlap.
+ *
+ * Overlap is not handled for you at render time and cannot be: two projectors
+ * are two lamps, and the wall sums them. Each has to fade its own contribution
+ * across the shared band so the two ramps add back to one. The widths for that
+ * are pure geometry — both homographies are known — so measuring them by eye in
+ * the dark was always avoidable work.
+ */
+app.autoBlend = () => {
+  const aligned = app.project.projectors.filter((p) => p.calibration?.H);
+  if (aligned.length < 2) {
+    toast('Edge blending needs at least two aligned projectors.', 'bad');
+    return;
+  }
+  app.pushUndo();
+  let touched = 0;
+  for (const projector of aligned) {
+    const others = aligned.filter((p) => p !== projector).map((p) => p.calibration.H);
+    const blend = computeEdgeBlends(projector.calibration.H, others);
+    const changed = ['top', 'right', 'bottom', 'left'].some(
+      (edge) => Math.abs((projector.blend?.[edge] || 0) - blend[edge]) > 0.002
+    );
+    if (changed) touched++;
+    projector.blend = { ...projector.blend, ...blend };
+  }
+  app.commit();
+  toast(
+    touched
+      ? `Soft edges set on ${touched} projector${touched === 1 ? '' : 's'}. Adjust the blend gamma if the seam still shows.`
+      : 'These projectors do not overlap, so there is nothing to blend.',
+    'good'
+  );
+};
+
+/** Aligned projectors that share wall but have no soft edge set on either side. */
+function unblendedOverlaps() {
+  const aligned = app.project.projectors.filter((p) => p.calibration?.H);
+  const pairs = [];
+  for (let i = 0; i < aligned.length; i++) {
+    for (let j = i + 1; j < aligned.length; j++) {
+      const a = aligned[i];
+      const b = aligned[j];
+      if (!projectorsOverlap(a.calibration.H, b.calibration.H)) continue;
+      const feathered = [a, b].some((p) => ['top', 'right', 'bottom', 'left'].some((e) => (p.blend?.[e] || 0) > 0.01));
+      if (!feathered) pairs.push([a.name, b.name]);
+    }
+  }
+  return pairs;
+}
 
 app.onCornersChanged = (projector) => {
   const solved = solveFromCorners(projector.calibration.worldQuad);
@@ -717,10 +779,7 @@ async function captureStill() {
     toast('Start the camera first', 'bad');
     return;
   }
-  await putBlob(`still/${app.project.id}`, blob);
-  app.project.settings.hasStill = true;
-  await loadStill();
-  app.commit();
+  await adoptBackdrop(blob, { aspect: camera.aspect(), quiet: true });
   toast('Still captured — you can now trace with the camera switched off.', 'good');
 }
 
@@ -744,6 +803,117 @@ async function loadStill() {
   stillImage = image;
   $('stageEmpty').hidden = true;
 }
+
+/**
+ * Adopt an image as the backdrop shapes are traced on.
+ *
+ * The same slot the camera's own "capture still" writes to, which is the point:
+ * a photograph of the house taken on a phone in daylight is a perfectly good
+ * surface to trace on, and tracing is the slow part. Do it on the sofa, align
+ * the projectors on the night.
+ *
+ * The aspect ratio comes with it, and shapes are stored normalised, so the
+ * mapping only stays true if the photo and the camera end up framed alike —
+ * hence the warning when it does not match a show already traced.
+ */
+async function adoptBackdrop(blob, { aspect, quiet = false } = {}) {
+  await putBlob(`still/${app.project.id}`, blob);
+  app.project.settings.hasStill = true;
+  if (aspect > 0.1) {
+    if (!app.project.shapes.length) {
+      app.project.worldAspect = aspect;
+    } else if (Math.abs(app.project.worldAspect - aspect) > 0.02) {
+      toast(
+        `That picture is ${aspect.toFixed(2)}:1 but the show was traced at ${app.project.worldAspect.toFixed(2)}:1. Shapes will be stretched.`,
+        'bad'
+      );
+    }
+  }
+  await loadStill();
+  stage.resize();
+  app.commit();
+  if (!quiet) {
+    toast('Backdrop set. Trace the windows, the door and the roofline on it.', 'good');
+  }
+}
+
+/** Downscale and re-encode an imported photo, so it fits in the browser's store. */
+async function photoToBackdrop(file, maxWidth = 1600) {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error('That file is not an image the browser can read.'));
+      image.src = url;
+    });
+    const scale = Math.min(1, maxWidth / image.naturalWidth);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.82));
+    return { blob, aspect: canvas.width / canvas.height };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * The demo house
+ *
+ * A whole show — facade, traced shapes, an aligned projector and a look — with
+ * no hardware and no darkness required. It opens as its own show rather than
+ * overwriting the current one, so trying it costs nothing.
+ * ------------------------------------------------------------------ */
+
+app.loadDemoHouse = async (presetId = 'halloween') => {
+  flushSave();
+  const project = createProject('Demo house');
+  project.worldAspect = DEMO_ASPECT;
+  project.shapes = demoShapes();
+  project.settings.isDemo = true;
+  project.settings.hasStill = true;
+
+  // A plausible manual alignment, so coverage outlines, edge blending and the
+  // checklist all behave exactly as they would on a real wall.
+  const projector = project.projectors[0];
+  projector.name = 'Demo projector';
+  projector.calibration.worldQuad = demoWorldQuad();
+  const solved = solveFromCorners(projector.calibration.worldQuad);
+  if (solved) {
+    projector.calibration.H = solved.H;
+    projector.calibration.mode = 'manual';
+    projector.calibration.quality = solved.quality;
+    projector.calibration.calibratedAt = Date.now();
+  }
+
+  applyPreset(project, presetId);
+
+  app.project = project;
+  setCurrentProjectId(project.id);
+  await putBlob(`still/${project.id}`, await demoFacadeBlob());
+
+  restore(JSON.stringify(project));
+  await loadStill();
+  stage.resize();
+  clock.play();
+  updateTransportUI();
+  switchPanel('layers');
+  toast('Demo house loaded. Everything here works exactly as it does on a real one.', 'good');
+};
+
+/** Leave the demo behind for an empty show of your own. */
+app.startRealShow = () => {
+  flushSave();
+  const next = createProject('My house');
+  app.project = next;
+  setCurrentProjectId(next.id);
+  restore(JSON.stringify(next));
+  stillImage = null;
+  switchPanel('start');
+  toast('New show. The demo house is still in Shows if you want it back.');
+};
 
 /* ------------------------------------------------------------------ *
  * Code panel
@@ -1166,6 +1336,7 @@ function wire() {
 
   $('btnAddProjector').addEventListener('click', () => app.addProjector());
   $('btnRollCall').addEventListener('click', () => app.rollCall());
+  $('btnAutoBlend').addEventListener('click', () => app.autoBlend());
 
   /* --- Shapes --- */
 
@@ -1465,6 +1636,26 @@ function wire() {
     toast('Still cleared.');
   });
 
+  $('btnUsePhoto').addEventListener('click', () => $('photoFile').click());
+  $('photoFile').addEventListener('change', async (ev) => {
+    const [file] = ev.target.files || [];
+    ev.target.value = '';
+    if (!file) return;
+    try {
+      const { blob, aspect } = await photoToBackdrop(file);
+      await adoptBackdrop(blob, { aspect });
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
+  });
+
+  $('btnEmptyDemo').addEventListener('click', () => app.loadDemoHouse());
+  $('btnEmptyPhoto').addEventListener('click', () => $('btnUsePhoto').click());
+  $('btnEmptyCamera').addEventListener('click', () => {
+    switchPanel('settings');
+    startCamera();
+  });
+
   $('audioEnabled').addEventListener('change', async (ev) => {
     app.project.settings.audioEnabled = ev.target.checked;
     if (ev.target.checked) {
@@ -1738,7 +1929,20 @@ async function boot() {
   mediaPool.sync(app.project.media || []);
   sound.warm(app.project.media || []);
   await loadStill();
-  await refreshCameraDevices();
+
+  /**
+   * Deliberately not awaited.
+   *
+   * All this does is fill one dropdown, and `enumerateDevices()` does not
+   * always come back — in a headless browser, and occasionally in a background
+   * tab, it neither resolves nor rejects. Awaiting it meant the whole control
+   * tab stopped there: buttons wired, every panel empty, no error anywhere,
+   * because nothing had thrown. A camera list is not worth the rest of the
+   * application, and there is nothing below that needs it.
+   */
+  refreshCameraDevices().catch((err) => {
+    console.warn('[facade-mapper] could not list cameras', err);
+  });
 
   stage.resize();
   refreshPanels();
@@ -1746,6 +1950,13 @@ async function boot() {
   refreshCodePanel();
   updateStageStatus();
   updateTransportUI();
+
+  // `?demo` opens straight into the demo house, so the app can be linked to
+  // rather than described. It creates its own show, so following such a link
+  // never costs anybody the one they were working on.
+  if (new URLSearchParams(location.search).has('demo') && !app.project.settings?.isDemo) {
+    await app.loadDemoHouse();
+  }
 
   if (app.project.shapes.length || stillImage) $('stageEmpty').hidden = true;
 
@@ -1777,4 +1988,12 @@ async function boot() {
   requestAnimationFrame(frame);
 }
 
-boot();
+/**
+ * Boot is a long async chain touching storage, the camera list and IndexedDB,
+ * and if any link throws the rest silently never runs — you get a control tab
+ * with working buttons, empty panels and no clue why. Say so instead.
+ */
+boot().catch((err) => {
+  console.error('[facade-mapper] startup failed', err);
+  toast(`Could not finish starting up: ${err.message}. Reload, or check the browser console.`, 'bad');
+});

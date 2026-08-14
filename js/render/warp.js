@@ -169,6 +169,112 @@ export function computeRegion(H, { margin = 0.04, clampTo = 0.35 } = {}) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Overlap and soft-edge blending
+ * ------------------------------------------------------------------ */
+
+/**
+ * Work out how far each edge of a projector is overlapped by the others.
+ *
+ * Two projectors covering the same brickwork both emit into it, and light adds:
+ * the overlap band comes out at twice the brightness with a hard seam down each
+ * side of it. Nothing in the renderer can prevent that — there is no shared
+ * frame buffer to composite into, only two lamps pointed at a wall — so the
+ * only fix is for each projector to fade its own output out across the band, by
+ * exactly the amount the other fades in. Two complementary ramps sum to one, and
+ * the seam disappears.
+ *
+ * The ramps themselves are the shader's job and are applied in linear light,
+ * which is the part that has to be right: attenuating gamma-encoded values
+ * leaves a visible bright stripe no matter how carefully the widths are set.
+ *
+ * What this function adds is the widths. They were a manual measurement — stand
+ * in the garden, nudge four numbers per projector, look, nudge again — and they
+ * never needed to be, because the homographies already say precisely where each
+ * projector lands on the wall. Walking inwards from each edge and asking "is
+ * anybody else covering this?" gives the depth of the overlap directly.
+ *
+ * The median across each edge rather than the maximum: projectors are rarely
+ * exactly parallel, so the band is usually a wedge, and the median is the width
+ * that is right for most of the seam. It is also what a person tuning by eye
+ * converges on.
+ *
+ * @param {number[]} H          this projector's world -> projector homography
+ * @param {number[][]} others   the same for every other aligned projector
+ * @returns {{top:number,right:number,bottom:number,left:number}} in 0..1 of this output
+ */
+export function computeEdgeBlends(H, others, { samples = 33, steps = 48, maxFeather = 0.45, margin = 0.004 } = {}) {
+  const none = { top: 0, right: 0, bottom: 0, left: 0 };
+  const inv = H ? mat3Inverse(H) : null;
+  const peers = (others || []).filter(Boolean);
+  if (!inv || !peers.length) return none;
+
+  /** Is this point of my output also lit by somebody else? */
+  const shared = (u, v) => {
+    const world = applyH(inv, u, v);
+    if (!world || !isFinite(world.x) || !isFinite(world.y)) return false;
+    for (const other of peers) {
+      const q = applyH(other, world.x, world.y);
+      if (!q || !isFinite(q.x) || !isFinite(q.y)) continue;
+      if (q.x > margin && q.x < 1 - margin && q.y > margin && q.y < 1 - margin) return true;
+    }
+    return false;
+  };
+
+  const median = (values) => {
+    if (!values.length) return 0;
+    const sorted = values.slice().sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
+
+  /**
+   * The unbroken run of shared output starting at one edge, scanned inwards.
+   * A run, not a count: a projector whose far edge happens to clip a third
+   * projector must not widen the feather on the near one.
+   */
+  const depthsFor = (edge) => {
+    const out = [];
+    for (let s = 0; s < samples; s++) {
+      const along = (s + 0.5) / samples;
+      let depth = 0;
+      for (let i = 0; i < steps; i++) {
+        const into = ((i + 0.5) / steps) * maxFeather;
+        const u = edge === 'left' ? into : edge === 'right' ? 1 - into : along;
+        const v = edge === 'top' ? into : edge === 'bottom' ? 1 - into : along;
+        if (!shared(u, v)) break;
+        depth = into;
+      }
+      out.push(depth);
+    }
+    return out;
+  };
+
+  const result = {};
+  for (const edge of ['top', 'right', 'bottom', 'left']) {
+    const width = median(depthsFor(edge));
+    // Under about two per cent of the output is a corner clip rather than a
+    // seam, and feathering it would dim an edge for no reason.
+    result[edge] = width < 0.02 ? 0 : Math.min(maxFeather, width);
+  }
+  return result;
+}
+
+/** Do two aligned projectors light any of the same wall? */
+export function projectorsOverlap(a, b, samples = 13) {
+  const inv = a ? mat3Inverse(a) : null;
+  if (!inv || !b) return false;
+  for (let i = 0; i < samples; i++) {
+    for (let j = 0; j < samples; j++) {
+      const world = applyH(inv, (i + 0.5) / samples, (j + 0.5) / samples);
+      if (!world) continue;
+      const q = applyH(b, world.x, world.y);
+      if (q && q.x > 0.02 && q.x < 0.98 && q.y > 0.02 && q.y < 0.98) return true;
+    }
+  }
+  return false;
+}
+
+/* ------------------------------------------------------------------ *
  * Mesh warp sampling
  * ------------------------------------------------------------------ */
 

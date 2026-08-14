@@ -62,6 +62,7 @@
             <div class="panel-actions">
               <button type="button" class="btn small" id="btnAddProjector">Add projector</button>
               <button type="button" class="btn small" id="btnRollCall">Refresh tabs</button>
+              <button type="button" class="btn small" id="btnAutoBlend" hidden>Blend overlaps</button>
             </div>
             <div id="projectorList" class="list"></div>
             <div class="panel-note" id="calibrationNote"></div>
@@ -180,6 +181,16 @@
             </div>
             <div id="cameraInfo" class="panel-note"></div>
 
+            <h3 class="panel-heading">Backdrop</h3>
+            <p class="panel-note">
+              No camera to hand? Trace on a photograph instead. Take it from where the camera will
+              stand on the night and the shapes will land close enough to nudge into place.
+            </p>
+            <div class="panel-actions">
+              <button type="button" class="btn small" id="btnUsePhoto">Use a photo of the house…</button>
+              <input type="file" id="photoFile" accept="image/*" hidden />
+            </div>
+
             <h3 class="panel-heading">Audio reactivity</h3>
             <label class="inline-check"><input type="checkbox" id="audioEnabled" /> Use microphone</label>
             <label class="field"><span>Gain</span><input type="range" id="audioGain" min="0.1" max="8" step="0.1" value="1" /></label>
@@ -228,14 +239,20 @@
         <div class="stage-canvas-wrap" id="stageWrap">
           <canvas id="stage"></canvas>
           <div id="stageEmpty" class="stage-empty">
-            <h2>Point a camera at the house</h2>
+            <h2>Nothing to trace on yet</h2>
             <p>
-              Open <strong>Setup</strong> and start a camera. Trace the windows, door and roofline on
-              the picture, then let each projector find itself.
+              Everything you draw is drawn on a picture of the house — a live camera on the night, or
+              a photograph while you plan.
             </p>
+            <div class="stage-empty-actions">
+              <button type="button" class="btn primary" id="btnEmptyDemo">Try it on a demo house</button>
+              <button type="button" class="btn" id="btnEmptyPhoto">Use a photo of my house</button>
+              <button type="button" class="btn" id="btnEmptyCamera">Start a camera</button>
+            </div>
             <p class="muted">
-              No camera to hand? You can still draw shapes and align projectors by dragging their four
-              corners with the <strong>Corners</strong> tool.
+              The demo is a whole show — facade, traced windows, aligned projector, effects running —
+              so you can learn the app indoors in daylight and set the real one up knowing what you
+              are doing.
             </p>
           </div>
         </div>

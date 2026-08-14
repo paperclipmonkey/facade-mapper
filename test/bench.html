@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Facade Mapper — effect benchmark</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #0b0d12;
+        color: #e6e9ef;
+        font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;
+      }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      p { color: #98a0b0; max-width: 70ch; }
+      button {
+        font: inherit; padding: 6px 14px; border-radius: 6px;
+        border: 1px solid #3a4152; background: #ff7a18; color: #1a1206;
+        font-weight: 600; cursor: pointer;
+      }
+      table { border-collapse: collapse; margin-top: 16px; font-variant-numeric: tabular-nums; }
+      th, td { padding: 3px 12px 3px 0; text-align: left; }
+      th { color: #98a0b0; font-weight: 500; border-bottom: 1px solid #262c38; }
+      td.n { text-align: right; font-family: ui-monospace, monospace; }
+      tr.bad td { color: #ff6b6b; }
+      tr.warn td { color: #ffc14d; }
+      #status { margin-top: 12px; color: #98a0b0; }
+      canvas { display: none; }
+    </style>
+  </head>
+  <body>
+    <h1>Effect benchmark</h1>
+    <p>
+      Every built-in effect, drawn into a 1920&times;1080 world buffer over a traced facade —
+      the same renderer and the same geometry a projector tab uses. Each effect is measured
+      twice, pointed at five windows and again covering the whole frame, and the worse of the
+      two is reported, because that is the cost you can actually hit.
+    </p>
+    <p>
+      A projector has 16.7&nbsp;ms a frame for <em>everything</em>, and the bloom and warp want
+      a few of those. A show is a dozen layers, so roughly <strong>1&nbsp;ms</strong> per effect
+      is the budget; anything over 4&nbsp;ms will cost frames on its own.
+    </p>
+    <button id="run" type="button">Run benchmark</button>
+    <div id="status"></div>
+    <div id="out"></div>
+    <canvas id="target"></canvas>
+
+    <script type="module">
+      import { listEffects, defaultParams } from '../js/effects/registry.js';
+      import { createWorldRenderer } from '../js/render/worldRenderer.js';
+      import { createProject, createLayer } from '../js/core/state.js';
+      import { demoShapes } from '../js/control/demoHouse.js';
+
+      const W = 1920;
+      const H = 1080;
+      const WARMUP = 24;
+      // Frames are timed in batches with one readback at the end of each.
+      // Reading a pixel back after *every* frame forces the drawing to finish,
+      // which is what you want from a stopwatch — but it also tells the browser
+      // this canvas is read constantly, and it drops the whole surface to
+      // software rendering. Every effect then looks several times slower than
+      // it is in a projector tab, which nobody reads back. Batching keeps the
+      // synchronisation without paying that.
+      const BATCHES = 14;
+      const BATCH = 8;
+
+      const canvas = document.getElementById('target');
+      canvas.width = W;
+      canvas.height = H;
+      const g = canvas.getContext('2d');
+
+      const shapes = demoShapes();
+      const windows = shapes.filter((s) => (s.tags || []).includes('window')).map((s) => s.id);
+
+      /** One effect, one targeting arrangement, timed frame by frame. */
+      function measure(effect, targets) {
+        const project = createProject('bench');
+        project.worldAspect = 16 / 9;
+        project.shapes = shapes;
+        project.layers = [
+          createLayer(effect.id, { targets, params: defaultParams(effect.id), order: 0 }),
+        ];
+
+        const renderer = createWorldRenderer({});
+        const frame = (t, dt) => {
+          renderer.render(g, {
+            project,
+            time: { t, dt, beat: t * 2, beatPhase: (t * 2) % 1, bpm: 120 },
+            audio: { level: 0.4, low: 0.5, mid: 0.35, high: 0.25 },
+            region: { x: 0, y: 0, w: 1, h: 1 },
+            pixelSize: { w: W, h: H },
+            preview: false,
+          });
+        };
+
+        // Warm up: first frames allocate density fields, sprite ladders and
+        // accumulation buffers, and timing those as if they recurred every
+        // frame would libel half the library.
+        let t = 0;
+        for (let i = 0; i < WARMUP; i++) {
+          t += 1 / 60;
+          frame(t, 1 / 60);
+        }
+
+        const samples = [];
+        for (let b = 0; b < BATCHES; b++) {
+          const start = performance.now();
+          for (let i = 0; i < BATCH; i++) {
+            t += 1 / 60;
+            frame(t, 1 / 60);
+          }
+          // Canvas2D batches work; one readback per batch forces it to have
+          // actually happened before the clock is read.
+          g.getImageData(W - 1, H - 1, 1, 1);
+          samples.push((performance.now() - start) / BATCH);
+        }
+        samples.sort((a, b) => a - b);
+        return {
+          median: samples[Math.floor(samples.length / 2)],
+          p95: samples[Math.floor(samples.length * 0.95)],
+        };
+      }
+
+      async function run() {
+        const out = document.getElementById('out');
+        const status = document.getElementById('status');
+        out.innerHTML = '';
+        const effects = listEffects().sort((a, b) => a.id.localeCompare(b.id));
+        const results = [];
+
+        for (let i = 0; i < effects.length; i++) {
+          const effect = effects[i];
+          status.textContent = `${i + 1} / ${effects.length}  —  ${effect.name}`;
+          // Yield so the progress line actually paints.
+          await new Promise((r) => setTimeout(r, 0));
+
+          const runs = effect.scope === 'global'
+            ? [['whole frame', measure(effect, [])]]
+            : [['5 windows', measure(effect, windows)], ['whole frame', measure(effect, [])]];
+
+          const worst = runs.reduce((a, b) => (b[1].median > a[1].median ? b : a));
+          const byWhere = Object.fromEntries(runs.map(([where, r]) => [where, r.median]));
+          results.push({
+            id: effect.id,
+            name: effect.name,
+            category: effect.category,
+            where: worst[0],
+            median: worst[1].median,
+            p95: worst[1].p95,
+            windows: byWhere['5 windows'] ?? null,
+            frame: byWhere['whole frame'] ?? null,
+          });
+        }
+
+        results.sort((a, b) => b.median - a.median);
+        status.textContent = `${results.length} effects. Budget is about 1 ms each.`;
+
+        const ms = (v) => (v == null ? '—' : v.toFixed(2));
+        const rows = results
+          .map((r) => {
+            const cls = r.median > 4 ? 'bad' : r.median > 1.5 ? 'warn' : '';
+            return `<tr class="${cls}"><td>${r.name}</td><td>${r.category}</td>`
+              + `<td class="n">${ms(r.windows)}</td><td class="n">${ms(r.frame)}</td>`
+              + `<td class="n">${r.p95.toFixed(2)}</td></tr>`;
+          })
+          .join('');
+        out.innerHTML = `<table><thead><tr><th>Effect</th><th>Category</th>`
+          + `<th>5 windows, ms</th><th>Whole frame, ms</th><th>Worst p95</th>`
+          + `</tr></thead><tbody>${rows}</tbody></table>`;
+
+        window.__benchResults = results;
+      }
+
+      document.getElementById('run').addEventListener('click', run);
+    </script>
+  </body>
+</html>

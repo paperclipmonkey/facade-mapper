@@ -6,8 +6,9 @@
  * icicles and candy stripes want a specific edge or outline.
  */
 
-import { rgba, clamp, lerp, TAU, frac } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, frac, makeRng, mixHex } from '../../core/math.js';
 import { mixLinear } from '../color.js';
+import { offscreen } from '../lib.js';
 import {
   ensureSurfaces,
   sweepLanding,
@@ -28,6 +29,11 @@ import {
  * which is a plain textured blit. The softness is a radial falloff rather than a
  * true Gaussian; at the size a flake occupies on a wall the difference is not
  * visible, and it is roughly two hundred times faster.
+ *
+ * The ladder lives on plain `<canvas>` elements — see `fx.offscreen`. Baking it
+ * onto `OffscreenCanvas` handed the entire saving straight back: the blit
+ * itself became the bottleneck, and snow went from the cheapest particle effect
+ * in the library to the most expensive thing in the show by a wide margin.
  */
 const SPRITE_PX = 64;
 const SPRITE_LEVELS = 6;
@@ -36,10 +42,7 @@ function buildFlakeSprites(colour) {
   const sprites = [];
   for (let i = 0; i < SPRITE_LEVELS; i++) {
     const softness = i / (SPRITE_LEVELS - 1);
-    const canvas =
-      typeof OffscreenCanvas === 'function'
-        ? new OffscreenCanvas(SPRITE_PX, SPRITE_PX)
-        : Object.assign(document.createElement('canvas'), { width: SPRITE_PX, height: SPRITE_PX });
+    const canvas = offscreen(SPRITE_PX, SPRITE_PX);
     const c = canvas.getContext('2d');
     const half = SPRITE_PX / 2;
     // The solid core shrinks as softness rises, so the same stamp reads as a
@@ -895,4 +898,259 @@ const candyStripe = {
   },
 };
 
-export default [snow, santa, icicles, stars, aurora, candyStripe];
+/* ------------------------------------------------------------------ *
+ * Window frost
+ *
+ * Ice on glass is a dendrite: it nucleates at the cold edge of the pane and
+ * grows *inward*, branching as it goes, each branch thinner than its parent.
+ * That is a growth process, not a texture — which is why frost drawn as a
+ * static overlay never convinces and this does. Two things follow from taking
+ * the growth seriously:
+ *
+ * The structure is generated once and each segment remembers how far along the
+ * growth it arrived, so animating is a matter of revealing segments in order.
+ * You get creeping frost for free, and it creeps the way real frost does,
+ * outward from every edge at once rather than fading up uniformly.
+ *
+ * And the reveal is drawn into a cached bitmap incrementally — only the
+ * segments that appeared this frame are stroked, and the rest is a single blit.
+ * A few thousand hairline strokes every frame would cost more than the whole
+ * rest of the show; done this way a fully-grown pane costs one drawImage.
+ * ------------------------------------------------------------------ */
+
+const FROST_MAX_SEGMENTS = 7000;
+
+/**
+ * Grow a dendrite from every edge of the shape.
+ *
+ * Seeded from the shape id rather than the effect's own generator, so two
+ * projector tabs covering the same window agree on the pattern no matter when
+ * each of them first rendered it.
+ */
+function buildFrost(shape, fronds, branch, sharpness) {
+  const { bbox, sampler, centroid } = shape;
+  const rng = makeRng(`frost:${shape.id}:${fronds}:${branch.toFixed(2)}`);
+  const span = Math.max(bbox.w, bbox.h);
+  const step = span * 0.018;
+  const segments = [];
+  const stack = [];
+
+  const count = Math.max(3, Math.round(fronds));
+  for (let i = 0; i < count; i++) {
+    // Evenly spaced round the outline, jittered, so the fronds neither line up
+    // nor clump.
+    const u = (i + rng() * 0.8) / count;
+    const at = sampler.at(u);
+    let normal = at.angle + Math.PI / 2;
+    // Whichever perpendicular points into the shape is the one ice grows along.
+    if ((centroid.x - at.x) * Math.cos(normal) + (centroid.y - at.y) * Math.sin(normal) < 0) {
+      normal += Math.PI;
+    }
+    stack.push({
+      x: at.x,
+      y: at.y,
+      angle: normal + (rng() - 0.5) * 0.9,
+      // A fixed turn per step, chosen once. This is what separates a crystal
+      // from a scribble: a random walk with the same total deviation produces
+      // a wobbly straight line, while a *constant* bias sweeps a smooth arc,
+      // and a dendrite is a family of arcs. The random component stays, but
+      // small enough to read as irregularity rather than as noise.
+      curl: (rng() - 0.5) * 0.16 * (1 - sharpness * 0.7),
+      steps: 12 + rng() * 12,
+      width: 1,
+      dist: 0,
+      depth: 0,
+    });
+  }
+
+  // Side branches leave at a consistent acute angle, at regular intervals, on
+  // both sides at once. Spawning them at random instead — which is the obvious
+  // way to write it — gives a sparse, forking scribble: what your eye reads as
+  // ice is the *regularity*, a spine with matched pairs of shortening spikes,
+  // exactly as a fern leaf does. Depth is capped rather than tapering off by
+  // chance, so the segment count is bounded whatever the branching is set to.
+  const spacing = Math.max(2, Math.round(2 + (1 - branch) * 4));
+  const maxDepth = 2;
+
+  while (stack.length && segments.length < FROST_MAX_SEGMENTS) {
+    const frond = stack.pop();
+    let { x, y, angle, width, dist } = frond;
+    const total = Math.round(frond.steps);
+    for (let s = 0; s < total && segments.length < FROST_MAX_SEGMENTS; s++) {
+      const nx = x + Math.cos(angle) * step;
+      const ny = y + Math.sin(angle) * step;
+      segments.push({ x0: x, y0: y, x1: nx, y1: ny, dist, width });
+      x = nx;
+      y = ny;
+      dist += step;
+      angle += frond.curl + (rng() - 0.5) * (0.22 - 0.14 * sharpness);
+      width *= 0.955;
+
+      if (frond.depth < maxDepth && s > 0 && s % spacing === 0 && width > 0.14) {
+        // Shorter the further along the spine they are, which is what gives a
+        // frond its taper independently of the line width.
+        const remaining = (total - s) / total;
+        for (const side of [-1, 1]) {
+          stack.push({
+            x,
+            y,
+            angle: angle + side * (0.5 + rng() * 0.3),
+            curl: frond.curl * (0.6 + rng() * 0.8),
+            steps: Math.max(2, total * remaining * 0.42),
+            width: width * 0.52,
+            dist,
+            depth: frond.depth + 1,
+          });
+        }
+      }
+    }
+  }
+
+  let maxDist = 1;
+  for (const seg of segments) maxDist = Math.max(maxDist, seg.dist);
+  for (const seg of segments) seg.order = seg.dist / maxDist;
+  segments.sort((a, b) => a.order - b.order);
+  return { segments, maxDist };
+}
+
+const frost = {
+  id: 'frost',
+  name: 'Window Frost',
+  category: 'christmas',
+  scope: 'shape',
+  description:
+    'Ice crystals nucleating at the edges of the glass and branching inward. Grows over time; freeze it part-grown for a cold snap.',
+  params: [
+    { key: 'color', type: 'color', label: 'Ice', default: '#bfe4ff' },
+    { key: 'tip', type: 'color', label: 'Crystal tips', default: '#ffffff' },
+    { key: 'coverage', type: 'range', label: 'Coverage', default: 0.85, min: 0, max: 1, step: 0.01 },
+    { key: 'grow', type: 'range', label: 'Seconds to grow', default: 14, min: 0, max: 120, step: 0.5 },
+    { key: 'fronds', type: 'range', label: 'Fronds', default: 26, min: 4, max: 90, step: 1 },
+    { key: 'branch', type: 'range', label: 'Branching', default: 0.6, min: 0, max: 1, step: 0.01 },
+    { key: 'sharpness', type: 'range', label: 'Straightness', default: 0.5, min: 0, max: 1, step: 0.01 },
+    { key: 'thickness', type: 'range', label: 'Thickness', default: 2.2, min: 0.4, max: 8, step: 0.1 },
+    { key: 'bloom', type: 'range', label: 'Haze on the glass', default: 0.35, min: 0, max: 1, step: 0.01 },
+    { key: 'sparkle', type: 'range', label: 'Sparkle', default: 0.45, min: 0, max: 1, step: 0.01 },
+  ],
+  init() {
+    return { key: '', drawn: -1, cursor: 0 };
+  },
+  draw({ g, p, shape, t, state }) {
+    const { bbox } = shape;
+    if (bbox.w <= 1 || bbox.h <= 1) return;
+
+    // Rebuild only when something structural moves. Colour, coverage and
+    // thickness all repaint; fronds and branching regrow.
+    const key = [
+      shape.id,
+      Math.round(bbox.w),
+      Math.round(bbox.h),
+      Math.round(p.fronds),
+      p.branch.toFixed(2),
+      p.sharpness.toFixed(2),
+      p.color,
+      p.tip,
+      p.thickness.toFixed(2),
+    ].join('|');
+
+    if (state.key !== key) {
+      state.key = key;
+      state.built = buildFrost(shape, p.fronds, p.branch, p.sharpness);
+      // A pane on a facade is at most a few hundred pixels of projector; there
+      // is no value in a frost bitmap finer than the thing it lands on.
+      const scale = Math.min(1, 320 / Math.max(bbox.w, bbox.h));
+      state.scale = scale;
+      state.canvas = offscreen(bbox.w * scale, bbox.h * scale);
+      state.ctx = state.canvas.getContext('2d');
+      state.drawn = -1;
+      state.cursor = 0;
+    }
+
+    const target = p.grow > 0
+      ? clamp(p.coverage, 0, 1) * clamp(t / p.grow, 0, 1)
+      : clamp(p.coverage, 0, 1);
+
+    const { segments } = state.built;
+    const c = state.ctx;
+
+    if (target < state.drawn) {
+      // Thawing. Cheaper to start again than to un-draw, and it only happens
+      // while somebody is dragging the slider.
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      c.clearRect(0, 0, state.canvas.width, state.canvas.height);
+      state.cursor = 0;
+      state.drawn = 0;
+    }
+
+    if (target > state.drawn) {
+      c.setTransform(state.scale, 0, 0, state.scale, -bbox.x * state.scale, -bbox.y * state.scale);
+      c.lineCap = 'round';
+      c.globalCompositeOperation = 'lighter';
+      while (state.cursor < segments.length && segments[state.cursor].order <= target) {
+        const seg = segments[state.cursor++];
+        c.strokeStyle = mixHex(p.color, p.tip, Math.min(1, seg.order * 1.3));
+        c.lineWidth = Math.max(0.3, p.thickness * seg.width);
+        // Fine branches are faint as well as thin. Without this the whole
+        // structure reaches full brightness and the pane reads as a lattice of
+        // wires rather than as something with depth in it.
+        c.globalAlpha = 0.22 + 0.78 * seg.width;
+        c.beginPath();
+        c.moveTo(seg.x0, seg.y0);
+        c.lineTo(seg.x1, seg.y1);
+        c.stroke();
+      }
+      c.globalAlpha = 1;
+      state.drawn = target;
+    }
+
+    g.save();
+    g.clip(shape.path);
+    g.globalCompositeOperation = 'lighter';
+
+    // A breath of haze under the crystals — frost fogs the pane as well as
+    // etching it, and without this the fronds float on clear glass.
+    if (p.bloom > 0) {
+      const haze = g.createRadialGradient(
+        bbox.cx,
+        bbox.cy,
+        0,
+        bbox.cx,
+        bbox.cy,
+        Math.hypot(bbox.w, bbox.h) * 0.5
+      );
+      haze.addColorStop(0, rgba(p.color, 0.02 * p.bloom * target));
+      haze.addColorStop(1, rgba(p.color, 0.18 * p.bloom * target));
+      g.fillStyle = haze;
+      g.fill(shape.path);
+    }
+
+    g.drawImage(state.canvas, bbox.x, bbox.y, bbox.w, bbox.h);
+
+    // Sparkle rides on top rather than in the cache: it has to move, and there
+    // are only ever a handful of points. Which crystal glints is a hash of the
+    // sparkle's index and how many times it has cycled — deliberately not
+    // `rng()`, which would advance the effect's generator every frame and make
+    // two projector tabs disagree about everything downstream of it.
+    if (p.sparkle > 0 && state.cursor > 8) {
+      const count = Math.round(4 + p.sparkle * 10);
+      g.fillStyle = p.tip;
+      for (let i = 0; i < count; i++) {
+        const rate = 0.7 + i * 0.13;
+        const cycle = Math.floor(t * rate);
+        const flare = Math.sin(((t * rate) % 1) * Math.PI);
+        if (flare <= 0.02) continue;
+        const pick = (Math.imul(cycle + 1, 2246822519) ^ Math.imul(i + 1, 3266489917)) >>> 0;
+        const seg = segments[pick % state.cursor];
+        g.globalAlpha = flare * p.sparkle;
+        g.beginPath();
+        g.arc(seg.x1, seg.y1, Math.max(0.8, p.thickness * 0.9 * flare), 0, TAU);
+        g.fill();
+      }
+      g.globalAlpha = 1;
+    }
+
+    g.restore();
+  },
+};
+
+export default [snow, santa, icicles, stars, aurora, candyStripe, frost];

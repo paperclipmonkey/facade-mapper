@@ -17,6 +17,11 @@
  * The rule it exists to enforce: **align before you trace**. Everything you draw
  * is in camera coordinates, so tracing first and aligning afterwards is not a
  * different order, it is lost work.
+ *
+ * Above the list sits the demo offer, because the list read in order says "you
+ * cannot do anything until you own a projector and it is dark outside" — which
+ * is true of a real show and entirely the wrong first impression, since almost
+ * all of it can be learned on a picture of a house that does not exist.
  */
 
 import { el, clear } from './ui.js';
@@ -52,6 +57,7 @@ function displayClashes(app) {
  */
 function buildSteps(app) {
   const { projectors, shapes, layers } = app.project;
+  const demo = !!app.project.settings?.isDemo;
   const live = projectors.filter((p) => peerFor(app, p.id));
   const aligned = projectors.filter((p) => p.calibration?.H);
   const fullscreen = projectors.filter((p) => peerFor(app, p.id)?.fullscreen);
@@ -66,18 +72,34 @@ function buildSteps(app) {
   const firstUnaligned = projectors.find((p) => !p.calibration?.H);
   const firstOffline = projectors.find((p) => !peerFor(app, p.id));
 
+  /**
+   * On the demo house the four hardware steps have no work in them, so they
+   * report themselves satisfied rather than nagging about a camera that is not
+   * needed and a projector that does not exist. They stay in the list because
+   * the point of the demo is to show you what a real setup involves.
+   */
+  const notNeeded = (step) => (demo
+    ? { ...step, done: true, warn: false, status: 'Not needed on the demo house.', actions: [] }
+    : step);
+
+  const backdrop = app.camera.isRunning() || app.project.settings?.hasStill;
+
   return [
-    {
+    notNeeded({
       id: 'camera',
-      title: 'Point a camera at the house',
-      done: app.camera.isRunning(),
-      why: 'Everything you draw is drawn on the camera picture, and the camera is also what '
-        + 'watches the alignment dots. Put it on a tripod roughly where people will stand — if it '
-        + 'moves later, your whole mapping moves with it.',
-      status: app.camera.isRunning() ? 'Camera running.' : 'No camera yet.',
-      actions: [{ label: 'Camera settings', run: goto('settings'), primary: !app.camera.isRunning() }],
-    },
-    {
+      title: 'Get a picture of the house',
+      done: backdrop,
+      why: 'Everything you draw is drawn on this picture, and a live camera is also what watches '
+        + 'the alignment dots. Put it on a tripod roughly where people will stand — if it moves '
+        + 'later, your whole mapping moves with it. A photograph works for tracing in the meantime.',
+      status: app.camera.isRunning()
+        ? 'Camera running.'
+        : app.project.settings?.hasStill
+          ? 'Tracing on a still picture.'
+          : 'Nothing to trace on yet.',
+      actions: [{ label: 'Camera and backdrop', run: goto('settings'), primary: !backdrop }],
+    }),
+    notNeeded({
       id: 'projectors',
       title: 'Add a projector for each one you own',
       done: projectors.length > 0,
@@ -87,8 +109,8 @@ function buildSteps(app) {
         ? `${projectors.length} projector${projectors.length === 1 ? '' : 's'} set up.`
         : 'None yet.',
       actions: [{ label: 'Add projector', run: () => app.addProjector(), primary: !projectors.length }],
-    },
-    {
+    }),
+    notNeeded({
       id: 'tabs',
       title: 'Open a tab for each projector',
       done: projectors.length > 0 && live.length === projectors.length,
@@ -100,8 +122,8 @@ function buildSteps(app) {
       actions: firstOffline
         ? [{ label: `Open tab for ${firstOffline.name}`, run: () => app.openProjectorTab(firstOffline.id), primary: true }]
         : [{ label: 'Check again', run: () => app.rollCall() }],
-    },
-    {
+    }),
+    notNeeded({
       id: 'displays',
       title: 'Put each tab on its own display',
       /**
@@ -124,8 +146,8 @@ function buildSteps(app) {
       })(),
       warn: clashes.length > 0,
       actions: [{ label: 'Check again', run: () => app.rollCall() }],
-    },
-    {
+    }),
+    notNeeded({
       id: 'align',
       title: 'Align each projector with the camera',
       done: projectors.length > 0 && aligned.length === projectors.length,
@@ -142,13 +164,17 @@ function buildSteps(app) {
         // a calibration begun by accident costs a minute of standing in the dark.
         ? [{ label: `Align ${firstUnaligned.name}…`, run: selectProjector(firstUnaligned), primary: true }]
         : [{ label: 'Projectors', run: goto('projectors') }],
-    },
+    }),
     {
       id: 'trace',
       title: 'Trace the windows, the door and the roofline',
       done: shapes.length > 0,
       // The reason this step is fifth and not first.
-      why: 'Now, and not before — everything you draw is stored in camera coordinates, so tracing '
+      why: demo
+        ? 'Already done on the demo — five windows, a door, the roofline and the chimney, each '
+          + 'tagged. Draw another with Area or Path to see how it goes, or drag a corner of one and '
+          + 'watch the effect follow it.'
+        : 'Now, and not before — everything you draw is stored in camera coordinates, so tracing '
         + 'before aligning is not a different order, it is work you will lose. Use Area for windows '
         + 'and doors, Path for rooflines and gutters, and tag them (window, door, roof) so one '
         + 'effect can light all of them.',
@@ -167,8 +193,52 @@ function buildSteps(app) {
   ];
 }
 
+/**
+ * The offer to skip the hardware entirely, or the reminder that you took it.
+ *
+ * Placed above the checklist because it changes what the checklist means. Read
+ * in order, the list says "you cannot do anything until you own a projector and
+ * it is dark outside", which is true and is also the wrong first impression: you
+ * can do almost all of it on a picture of a house that does not exist.
+ */
+function renderDemoCard(node, app) {
+  const demo = !!app.project.settings?.isDemo;
+  // Only offered while there is nothing to lose. Once you have traced
+  // something, a button that opens a different show is a trap rather than an
+  // invitation.
+  const untouched = !app.project.shapes.length && !app.project.settings?.hasStill;
+  if (!demo && !untouched) return;
+
+  const card = demo
+    ? {
+      title: 'You are on the demo house',
+      body: 'Nothing here is a mock-up — the shapes, the effects, the alignment and the preview '
+        + 'are the same code a real show runs. Change anything you like; your own shows are '
+        + 'untouched and still in Shows.',
+      label: 'Start my own show',
+      run: () => app.startRealShow(),
+    }
+    : {
+      title: 'No projector to hand?',
+      body: 'Load a demo house and the whole app comes alive — a facade to trace on, windows and '
+        + 'a door already traced, a projector already aligned, effects already running. Learn it '
+        + 'indoors in daylight, then set the real one up knowing what each step is for.',
+      label: 'Try the demo house',
+      run: () => app.loadDemoHouse(),
+    };
+
+  const button = el('button', { type: 'button', class: 'btn small primary', text: card.label });
+  button.addEventListener('click', card.run);
+  node.appendChild(el('div', { class: 'setup-demo' }, [
+    el('h3', { text: card.title }),
+    el('p', { text: card.body }),
+    el('div', { class: 'panel-actions' }, [button]),
+  ]));
+}
+
 export function renderSetupGuide(node, app) {
   clear(node);
+  renderDemoCard(node, app);
   const steps = buildSteps(app);
   const currentIndex = steps.findIndex((s) => !s.done);
   const complete = currentIndex === -1;

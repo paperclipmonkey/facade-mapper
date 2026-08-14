@@ -58,8 +58,16 @@ export const HELP_HTML = `
   got — it ticks off what is done, expands the step you are on, and gives you the button for it.
   What follows is the same sequence in prose.
 </p>
+<p>
+  <strong>No projector, no camera, and it is the middle of the afternoon?</strong> Load the demo
+  house — the button is on the empty stage and at the top of <strong>Start here</strong>. It is a
+  complete show, with a facade to trace on, windows and a door already traced and tagged, a
+  projector already aligned and effects running. None of it is a mock-up: it is the same code a
+  real show runs, so anything you work out on it transfers directly. It opens as its own show, so
+  it never costs you one you were working on.
+</p>
 <ol>
-  <li><strong>Point a camera at the house</strong> from roughly where people will stand. Setup &rarr; Start camera. A tripod matters more than a good camera — everything below assumes the camera does not move.</li>
+  <li><strong>Point a camera at the house</strong> from roughly where people will stand. Setup &rarr; Start camera. A tripod matters more than a good camera — everything below assumes the camera does not move. No camera yet? Setup &rarr; <em>Use a photo of the house</em> lets you do all the tracing on a photograph indoors, which is the slow part.</li>
   <li><strong>Open a projector tab</strong> for each projector, drag each to its own display and press <kbd>F</kbd> for fullscreen.</li>
   <li><strong>Align each projector.</strong> Select it, then <em>Align with camera</em>. It flashes nine dots one at a time and watches where they land. Works best after dark.</li>
   <li><strong>Trace the house</strong> on the camera view with the Area and Path tools. As each shape closes you are asked to name it — clicking a tag both tags <em>and</em> names it, so one click turns a new rectangle into "Window 2" tagged <code>window</code>. That is what lets one effect light every window.</li>
@@ -147,8 +155,37 @@ export const HELP_HTML = `
 <p>
   Every tab shares one project through the browser, so the control tab is the only place you edit.
   Shapes live in camera coordinates, so a shape covered by two projectors is drawn correctly by
-  both. Where two projectors overlap on the same wall, use <em>Edge blending</em> on both to fade
-  the overlapping edges into each other.
+  both.
+</p>
+<p>
+  <strong>Where they overlap, both of them draw it, and light adds.</strong> There is no shared
+  frame buffer to composite into — there are two lamps pointed at a wall — so the shared band comes
+  out at twice the brightness with a hard seam down each side. Nothing in the renderer can prevent
+  that. What fixes it is each projector fading its own output out across the band by exactly the
+  amount the other fades in: two complementary ramps sum to one and the seam disappears. That is
+  <em>Edge blending</em>, and it is applied in linear light, which is the part that has to be right.
+</p>
+<p>
+  You do not have to measure the widths. Both homographies already say precisely where each
+  projector lands on the wall, so <strong>Projectors &rarr; Blend overlaps</strong> works them out
+  and sets them. Adjust <em>blend gamma</em> afterwards if the seam still reads slightly bright or
+  dark — that one depends on the projector's own response curve and cannot be derived from geometry.
+</p>
+
+<h2>Effects that know where the windows are</h2>
+<p>
+  Most effects are handed a shape and fill it. The ones in the <strong>facade</strong> category are
+  handed a shape to move <em>around in</em>, and a list of tags to treat as solid —
+  <code>window, door</code> by default. <strong>Bouncing Balls</strong> ricochet off the glass,
+  <strong>Serpent</strong> steers round the door rather than across it, and
+  <strong>Creeping Vine</strong> spreads over the brickwork and creeps <em>around</em> the frames,
+  seeking out bare wall and wrapping every opening it finds.
+</p>
+<p>
+  Point one at the shape tagged <code>wall</code> and it stays on the wall; leave the targets empty
+  and it uses the whole frame. Either way the windows are in the way — which is the entire point. A
+  ball crossing a facade is a video; a ball that ricochets off the top of the bay window is on the
+  house.
 </p>
 
 <h2>Paths and animation</h2>
@@ -253,11 +290,34 @@ export const HELP_HTML = `
       velocity to advect it with, which is where the billowing comes from.
     </td>
   </tr>
+  <tr>
+    <th><code>fx.deflect(...)</code></th>
+    <td>
+      Collision against the <em>openings</em> rather than the ledges, for anything that travels
+      across the facade. <code>fx.collectObstacles</code> resolves a tag list like
+      <code>"window, door"</code> into shapes to treat as solid; <code>deflect</code> bounces a
+      mover off one, or keeps it inside the shape you are drawing into.
+      <code>fx.nearestSurface</code> is what lets growth <em>follow</em> a window frame rather than
+      merely avoid it. Bouncing Balls, Serpent and Creeping Vine are built on these.
+    </td>
+  </tr>
+  <tr>
+    <th><code>fx.offscreen(w, h)</code></th>
+    <td>
+      A scratch canvas, for effects that only ever add — growth, trails, accretion. Stroke into it
+      once and blit it thereafter, rather than redrawing the whole history every frame. Note it is
+      a plain <code>&lt;canvas&gt;</code> and not an <code>OffscreenCanvas</code>: on the main
+      thread, blitting from the latter is about thirty times slower.
+    </td>
+  </tr>
 </table>
 <p class="muted">
-  One performance trap worth knowing: never set <code>g.filter</code> per particle. Every filtered draw
-  becomes its own composited layer, so a few hundred of them cost tens of milliseconds a frame. Bake a
-  handful of pre-softened sprites once and stamp them with <code>drawImage</code> instead.
+  One performance trap worth knowing: never set <code>g.filter</code> or <code>g.shadowBlur</code>
+  per particle or per glyph. Every such draw becomes its own composited layer — a line of glowing
+  text measured at 19.6&nbsp;ms a frame that way, against 0.16&nbsp;ms haloed with plain strokes.
+  Bake a handful of pre-softened sprites once and stamp them with <code>drawImage</code>, or fake
+  the halo and let the bloom in the post stage do the real work. Open
+  <code>test/bench.html</code> to measure your own.
 </p>
 
 <h2>Keyboard</h2>
