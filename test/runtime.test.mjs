@@ -199,5 +199,68 @@ const LOWER = { x: 0.2, y: 0.55, w: 0.6, h: 0.45 };
      flat.values.bloom === 0 && flat.values.contrast === 1 && flat.values.tonemap === false);
 }
 
+/* ------------------------------------------------------------------ *
+ * Trigger webhooks
+ * ------------------------------------------------------------------ */
+
+console.log('\n— trigger webhooks —');
+{
+  const { checkReachable, fireWebhook } = await import('../js/control/webhooks.js');
+
+  // The one that catches everybody, and the reason this is checked up front
+  // rather than left to fail silently at eight o'clock on the thirty-first.
+  globalThis.location = { protocol: 'https:' };
+  const blocked = checkReachable('http://wled.local/win&T=1');
+  ok('an http call from an https page is refused before it is sent', Boolean(blocked));
+  ok('and the message says what to do about it', /http/i.test(blocked) && /serve/i.test(blocked), blocked);
+
+  globalThis.location = { protocol: 'http:' };
+  ok('the same call from an http page is allowed', checkReachable('http://wled.local/win&T=1') === null);
+  ok('https is always allowed', checkReachable('https://example.invalid/x') === null);
+  ok('nonsense is caught', Boolean(checkReachable('wled.local/win')));
+  ok('a scheme a browser cannot call is caught', Boolean(checkReachable('mqtt://broker/x')));
+  ok('an empty hook is not an error', checkReachable('') === null);
+
+  // Nothing may throw. This runs mid-scare, and a device that has been
+  // unplugged must not take the trigger runtime down with it.
+  const calls = [];
+  globalThis.fetch = (url, init) => {
+    calls.push({ url, init });
+    return Promise.reject(new Error('ECONNREFUSED'));
+  };
+  const dead = await fireWebhook({ url: 'http://192.0.2.1/win&T=1' }, { key: 'k1' });
+  ok('a refused connection resolves rather than throwing', dead.ok === false, dead.error);
+
+  globalThis.fetch = (url, init) => {
+    calls.push({ url, init });
+    return Promise.resolve({ status: 200 });
+  };
+  const sent = await fireWebhook({ url: 'http://wled.local/win&T=1' }, { key: 'k2' });
+  ok('a good call reports ok', sent.ok === true);
+  ok('and defaults to no-cors', calls[calls.length - 1].init.mode === 'no-cors');
+  ok('and to GET', calls[calls.length - 1].init.method === 'GET');
+  ok('with no body', calls[calls.length - 1].init.body === undefined);
+
+  await fireWebhook({ url: 'http://wled.local/json', method: 'POST', body: '{"on":true}' }, { key: 'k3' });
+  const post = calls[calls.length - 1];
+  ok('a POST carries its body', post.init.body === '{"on":true}');
+  ok('and a content type no-cors will actually allow',
+    post.init.headers['Content-Type'] === 'text/plain', post.init.headers['Content-Type']);
+
+  await fireWebhook({ url: 'http://wled.local/json', method: 'POST', body: '{}', mode: 'cors' }, { key: 'k4' });
+  ok('cors mode sends real JSON',
+    calls[calls.length - 1].init.headers['Content-Type'] === 'application/json');
+
+  // A motion trigger can retrigger fast; a device should not be machine-gunned.
+  const before = calls.length;
+  await fireWebhook({ url: 'http://wled.local/a' }, { key: 'same' });
+  const throttled = await fireWebhook({ url: 'http://wled.local/a' }, { key: 'same' });
+  ok('a second call on the same hook straight away is dropped',
+    throttled.throttled === true && calls.length === before + 1);
+
+  ok('an empty url does nothing at all',
+    (await fireWebhook({ url: '' }, { key: 'k5' })).skipped === true);
+}
+
 console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILURE(S)`}`);
 process.exit(failures ? 1 : 0);

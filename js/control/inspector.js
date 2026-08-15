@@ -11,6 +11,7 @@ import { SHAPE_TAGS } from '../core/state.js';
 import { getEffect, listByCategory, defaultParams } from '../effects/registry.js';
 import { openEffectPicker } from './effectPicker.js';
 import { layerIssues } from './diagnostics.js';
+import { checkReachable, fireWebhook } from './webhooks.js';
 
 export function renderInspector(container, app) {
   clear(container);
@@ -1204,6 +1205,106 @@ function renderTrigger(container, app, id) {
   container.appendChild(
     el('p', { class: 'panel-note', text: 'Minimum gap between firings, so one group of visitors gets one scare.' })
   );
+
+  /* --- and tells the rest of the house --- */
+
+  container.appendChild(heading('HTTP calls'));
+  container.appendChild(
+    el('p', {
+      class: 'panel-note',
+      html: 'For <strong>WLED</strong> and anything else on the network that takes a URL. '
+        + '<em>Before</em> fires the instant the trigger does; <em>after</em> when the hold expires and '
+        + 'the show goes back to what it was doing — so the whole house resets itself for the next group.',
+    })
+  );
+
+  if (!trigger.http) {
+    trigger.http = {
+      before: { url: '', method: 'GET', body: '', mode: 'no-cors' },
+      after: { url: '', method: 'GET', body: '', mode: 'no-cors' },
+    };
+  }
+
+  for (const [when, label, placeholder] of [
+    ['before', 'Before', 'http://wled.local/win&T=1&A=255&FX=45'],
+    ['after', 'After', 'http://wled.local/win&PL=1'],
+  ]) {
+    const hook = trigger.http[when] || (trigger.http[when] = { url: '', method: 'GET', body: '', mode: 'no-cors' });
+
+    const urlRow = el('div', { class: 'field' }, [el('span', { text: label })]);
+    const url = el('input', { type: 'text', value: hook.url || '', placeholder, spellcheck: 'false' });
+    const warn = el('p', { class: 'panel-note issue warn' });
+    const check = () => {
+      const problem = checkReachable(url.value);
+      warn.textContent = problem || '';
+      warn.hidden = !problem;
+    };
+    url.addEventListener('change', () => {
+      app.pushUndo();
+      hook.url = url.value.trim();
+      check();
+      app.commit();
+    });
+    url.addEventListener('input', check);
+    check();
+    urlRow.appendChild(url);
+    container.appendChild(urlRow);
+    container.appendChild(warn);
+
+    if (hook.url) {
+      const methodRow = el('div', { class: 'field' }, [el('span', { text: 'Method' })]);
+      const method = el('select');
+      for (const m of ['GET', 'POST', 'PUT']) {
+        method.appendChild(el('option', { value: m, text: m, selected: (hook.method || 'GET') === m }));
+      }
+      method.addEventListener('change', () => {
+        app.pushUndo();
+        hook.method = method.value;
+        app.commit();
+        app.refreshInspector();
+      });
+      methodRow.appendChild(method);
+      container.appendChild(methodRow);
+
+      if (hook.method && hook.method !== 'GET') {
+        const bodyRow = el('div', { class: 'field' }, [el('span', { text: 'Body' })]);
+        const body = el('input', { type: 'text', value: hook.body || '', placeholder: '{"on":true,"bri":255}', spellcheck: 'false' });
+        body.addEventListener('change', () => {
+          app.pushUndo();
+          hook.body = body.value;
+          app.commit();
+        });
+        bodyRow.appendChild(body);
+        container.appendChild(bodyRow);
+      }
+
+      container.appendChild(
+        checkbox('Wait for a reply', hook.mode === 'cors', (checked) => {
+          hook.mode = checked ? 'cors' : 'no-cors';
+          app.commitLive();
+        })
+      );
+      container.appendChild(
+        el('p', {
+          class: 'panel-note',
+          text: 'Off is right for almost everything: the call still goes out, the reply is just '
+            + 'ignored, and the device needs no CORS setup. Turn it on to find out why one is failing.',
+        })
+      );
+
+      const test = el('button', { type: 'button', class: 'btn small', text: `Test ${label.toLowerCase()}` });
+      test.addEventListener('click', async () => {
+        const result = await fireWebhook(hook, { key: `test:${trigger.id}:${when}` });
+        if (result.skipped) toast('Nothing to call — put a URL in first.');
+        else if (result.ok) {
+          toast(result.opaque
+            ? 'Sent. The reply is hidden, so check the lights rather than this message.'
+            : `Sent — the device replied ${result.status}.`, 'good');
+        } else toast(result.error, 'bad');
+      });
+      container.appendChild(el('div', { class: 'panel-actions' }, [test]));
+    }
+  }
 
   const remove = el('button', { type: 'button', class: 'btn small danger', text: 'Delete trigger' });
   remove.addEventListener('click', () => {

@@ -366,6 +366,42 @@ the trigger constantly, and one of them is your choice:
 The Triggers panel shows a live reading of how much of the region is moving and
 the level it has to beat, which is the only sane way to aim one.
 
+### Driving the rest of the house
+
+Most houses that get projected on already have something else running — WLED on
+the gutter, a smart plug on the inflatable, a relay on the fog machine — and all
+of them speak HTTP. Every trigger can call two URLs: **before**, at the instant
+it fires, and **after**, when the hold expires and the show goes back to what it
+was doing. Wire the ambient state into *after* and the whole house resets itself
+for the next group without anyone touching anything.
+
+WLED's classic API is all GET, so a hook is usually just a URL:
+
+```
+http://wled.local/win&T=1&A=255&FX=45      before — everything red, strobing
+http://wled.local/win&PL=1                 after  — back to the ambient playlist
+```
+
+POST and a body are there for JSON APIs. There is a **Test** button beside each.
+
+**The thing that will catch you out:** a page served over **https** may not call
+**http**. Browsers block it as mixed content, silently, before the request
+leaves — and WLED and friends are all plain http on the local network. So a show
+driven from the GitHub Pages copy cannot talk to them at all. The fix is not a
+proxy or a certificate: serve the control page the same way as everything it is
+talking to, over http from the machine running the show. It is static files, so
+anything that serves a directory will do. The URL box says so if you are in that
+situation rather than leaving you to find out in the dark.
+
+Calls default to **no-cors**, which means the reply is discarded. That sounds
+like a loss and is not: these are commands, nobody is waiting on the answer, and
+the alternative is configuring CORS headers on every device you own. Tick *wait
+for a reply* when you want to know why one is failing.
+
+Only the control tab fires them. Projector tabs have no concept of triggers, and
+four copies of the same call arriving a few milliseconds apart is not what any
+of these devices expects.
+
 **Sounds** are imported into the media library like anything else, and play from
 the control tab only — projector tabs usually drive displays with no speakers,
 and four copies a few milliseconds apart sounds like a flanger, not a

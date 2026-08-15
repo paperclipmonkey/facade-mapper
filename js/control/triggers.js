@@ -13,8 +13,9 @@
 
 import { activateScene } from '../core/scenes.js';
 import { createMotionGate } from './motion.js';
+import { fireWebhook } from './webhooks.js';
 
-export function createTriggerRuntime({ app, sound, onFired } = {}) {
+export function createTriggerRuntime({ app, sound, onFired, onWebhook } = {}) {
   const gate = createMotionGate();
 
   /** Scene to restore when the current hold expires, and when. */
@@ -59,10 +60,28 @@ export function createTriggerRuntime({ app, sound, onFired } = {}) {
       holding = null;
     }
 
+    call(trigger, 'before');
+
     gate.markFired(trigger.id);
     if (!manual) scheduleTimer(trigger);
     onFired?.(trigger, { manual });
     return true;
+  }
+
+  /**
+   * Fire one of a trigger's HTTP hooks.
+   *
+   * Deliberately not awaited. This runs in the middle of a scare, and a plug
+   * that has been unplugged must not hold up the scene change by so much as a
+   * frame — so the call is launched and the result reported whenever it turns
+   * up. `fireWebhook` never rejects, so there is nothing here to catch.
+   */
+  function call(trigger, when) {
+    const hook = trigger?.http?.[when];
+    if (!hook?.url) return;
+    fireWebhook(hook, { key: `${trigger.id}:${when}` }).then((result) => {
+      if (!result.skipped) onWebhook?.(trigger, when, result);
+    });
   }
 
   function scheduleTimer(trigger) {
@@ -89,6 +108,7 @@ export function createTriggerRuntime({ app, sound, onFired } = {}) {
     // fire again the instant the previous one finishes.
     if (holding && now >= holding.until) {
       const scenes = scenesById();
+      call((app.project.triggers || []).find((t) => t.id === holding.triggerId), 'after');
       if (holding.restoreTo && scenes.has(holding.restoreTo)) {
         activateScene(app.project, holding.restoreTo, { fade: 0.8 });
       } else {

@@ -2211,6 +2211,17 @@ async function boot() {
       toast(`${trigger.name} fired`, 'good');
       renderSceneButtons($('sceneButtons'), app);
     },
+    /**
+     * Report a failed call, and only a failed one.
+     *
+     * A working webhook should be silent — you will see the lights. A failing
+     * one is otherwise completely invisible, because `no-cors` throws away the
+     * response, so this is the only place anybody finds out that the URL is
+     * wrong or the page is on https.
+     */
+    onWebhook: (trigger, when, result) => {
+      if (!result.ok) toast(`${trigger.name} (${when}): ${result.error}`, 'bad');
+    },
   });
 
   mediaPool.sync(app.project.media || []);

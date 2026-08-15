@@ -169,6 +169,16 @@ export function createTrigger(overrides = {}) {
     every: 180,
     jitter: 0.5,
 
+    /**
+     * HTTP calls fired around this trigger, for WLED and anything else on the
+     * network that takes a URL. `before` goes at the instant it fires; `after`
+     * when the hold expires and the show returns to what it was doing.
+     */
+    http: {
+      before: { url: '', method: 'GET', body: '', mode: 'no-cors' },
+      after: { url: '', method: 'GET', body: '', mode: 'no-cors' },
+    },
+
     ...overrides,
   };
 }
