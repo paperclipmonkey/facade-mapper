@@ -80,9 +80,24 @@ makes a wall of ivy cost one `drawImage` a frame — so left alone it fills to i
 coverage budget and then stops, which is the one thing a living thing never
 does. **Wither** fades the accumulated growth continuously, so new shoots
 replace the oldest and the budget becomes a level the plant lives at rather than
-a finish line. Measured over a simulated minute on the demo wall, coverage with
-wither off flatlines at 10.9% after twenty seconds; with wither at 0.3 it keeps
-moving — 8, 12, 14, 16, 17, 18% — and converges instead of freezing.
+a finish line. Measured on the demo wall with wither at 0.3, coverage climbs
+past 22% over four minutes and is still moving; with wither off it stops dead.
+
+The number of live shoots is scaled by how much room is left under the budget,
+rather than switched off when it runs out, and every shoot fades in and out over
+about a third of a second rather than appearing and vanishing. Both of those
+matter more than they sound: the shoots carry the brightest pixels on the wall,
+so anything that removes one abruptly reads as a flash. The earlier
+switch-at-the-budget version emptied and refilled the whole shoot list about
+twenty-one times a second once the wall was full — measured, not estimated — and
+since the grown bitmap barely changes at that point, that strobe was the only
+thing moving. It now measures zero such transitions over four minutes.
+
+One thing to know about **Growth speed**: it is px/s and now means it. Until
+recently every tip took at least one step per frame regardless, so anything
+below about 190 px/s ran at 190 — the slow settings were not slow, they were
+identical. If you have a saved show from before, its vines will genuinely creep
+now, and may want the speed raising.
 
 **Start again after** clears the wall completely every N seconds, for a show
 that wants the house taken over, cleaned, and taken over again. And **Restart**,

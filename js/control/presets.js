@@ -105,7 +105,11 @@ const HALLOWEEN = () => [
     tags: ['wall'],
     opacity: 0.9,
     params: {
-      color: '#1d3a1c', tip: '#6f9a3e', tips: 7, speed: 40, thickness: 4.5,
+      // 90, not the 40 this used to say. Growth used to round up to one step
+      // per tip per frame whatever the speed, so anything under ~190 px/s ran
+      // at ~190; "40" was never 40. Now that the setting means what it says,
+      // this is the rate that actually looks like the old preset did.
+      color: '#1d3a1c', tip: '#6f9a3e', tips: 7, speed: 90, thickness: 4.5,
       branch: 0.5, wander: 0.55, climb: 0.3, spread: 0.75, cling: 0.8, seek: 0.7,
       coverage: 0.45, wither: 0.3, regrow: 0, leaves: 0.25,
       obstacles: 'window, door', shootGlow: 0.8,

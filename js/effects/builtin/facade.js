@@ -517,6 +517,8 @@ const vine = {
       /** Points on existing growth, as candidates to sprout a new runner from. */
       state.seeds = [];
       state.sinceSeed = 0;
+      /** Sub-step growth carried over from the last frame. */
+      state.carry = 0;
       /** Openings something has already reached, so the pull towards them stops. */
       state.wrapped = new Set();
       state.plantedAt = t;
@@ -543,6 +545,7 @@ const vine = {
       state.visits.fill(0);
       state.seeds.length = 0;
       state.sinceSeed = 0;
+      state.carry = 0;
       state.wrapped.clear();
       state.plantedAt = t;
     };
@@ -624,6 +627,11 @@ const vine = {
       life: (bbox.w + bbox.h) * (0.15 + rng() * 0.35),
       sinceLeaf: 0,
       tint: rng(),
+      /** How brightly this shoot is lit, eased so it never pops on or off. */
+      glow: 0,
+      /** Finished growing. Kept in the list until it has faded out. */
+      dead: false,
+      retiring: false,
     });
 
     /**
@@ -663,23 +671,98 @@ const vine = {
       return newTip(best.x, best.y, angle);
     };
 
-    const wanted = Math.round(clamp(p.tips, 1, 24));
-    while (state.grown < budget && state.tips.length < wanted) state.tips.push(spawn());
+    /**
+     * How many shoots the plant can support, as a continuous quantity.
+     *
+     * The old rule was a switch: below the coverage budget, run every tip;
+     * at it, `tips.length = 0`. Withering pins `grown` to the budget, so that
+     * switch flipped every frame or two — measured on the demo wall, the tip
+     * list emptied and refilled about twenty-one times a second, for the rest
+     * of the evening. Once the wall is full the accumulated bitmap barely
+     * changes, so that strobe was the *only* thing moving: seven bright shoots
+     * blinking at 21 Hz, which is exactly "it stops glowing and just flickers".
+     *
+     * Making it proportional removes the switch rather than damping it. As the
+     * plant approaches its budget the shoots wind down one at a time, and as
+     * decay makes room they come back one at a time. There is no threshold to
+     * sit on top of, so there is nothing to oscillate: a full wall keeps one or
+     * two shoots working rather than alternating between seven and none.
+     */
+    const headroom = clamp((budget - state.grown) / (budget * 0.15), 0, 1);
+    // A floor of one while there is any room at all. Rounding a small headroom
+    // still toggles between zero and one shoot, about once a second, and one
+    // shoot that keeps creeping reads far better than one that keeps returning.
+    // Only a plant with no room left — coverage reached and no withering to
+    // make more — goes down to none, and even that one fades out.
+    const wanted = headroom <= 0
+      ? 0
+      : Math.max(1, Math.round(clamp(p.tips, 1, 24) * headroom));
 
-    // Growth is finished: retire the tips rather than leaving them parked.
-    // A live tip costs a glow gradient and a fill every frame whether or not it
-    // is moving, so a fully-grown wall was paying for up to forty-eight shoots
-    // that would never advance again — for the rest of the evening.
-    if (state.grown >= budget && state.tips.length) state.tips.length = 0;
+    /**
+     * Shoots fade in and out rather than appearing and vanishing.
+     *
+     * A tip is both the thing that draws and the thing that glows, and the glow
+     * is by far the brightest object on the wall — retiring one instantly is a
+     * hard cut on the brightest pixels in the frame. Easing over about a third
+     * of a second costs nothing and makes the wind-down invisible.
+     *
+     * This covers ordinary deaths too — a runner reaching the end of its life,
+     * or walking into a corner it cannot leave. Those were removed outright at
+     * full brightness, which is a blip when seven shoots are lit and the entire
+     * glow vanishing when the plant is at its ceiling and running one.
+     *
+     * A retiring tip stops growing immediately: it is being switched off, and a
+     * shoot that carries on stroking while it fades leaves a line going nowhere.
+     */
+    const ease = Math.min(1, dt * 3.5);
+    let live = 0;
+    for (const tip of state.tips) {
+      if (!tip.dead && live < wanted) {
+        tip.retiring = false;
+        live += 1;
+      } else {
+        tip.retiring = true;
+      }
+    }
+    for (let i = state.tips.length - 1; i >= 0; i--) {
+      const tip = state.tips[i];
+      tip.glow += ((tip.retiring ? 0 : 1) - tip.glow) * ease;
+      // Once dark, a parked tip is pure cost — a gradient and a fill per frame
+      // for something invisible — so this is also what keeps a finished wall
+      // down to one drawImage.
+      if (tip.retiring && tip.glow < 0.02) state.tips.splice(i, 1);
+    }
+    while (live < wanted) {
+      state.tips.push(spawn());
+      live += 1;
+    }
 
     /* --- grow --- */
-    const advance = Math.min(p.speed * Math.min(dt, 1 / 30), stepPx * VINE_STEPS_PER_FRAME);
-    let remaining = advance;
 
-    while (remaining > 0 && state.grown < budget && state.tips.length) {
-      remaining -= stepPx;
+    /**
+     * Whole steps only, with the remainder carried to the next frame.
+     *
+     * The old form took `min(speed * dt, cap)` as a *length* and then ran the
+     * step loop while it was positive, so any speed below one step per frame
+     * still bought a full step: everything from 5 to 189 px/s grew at exactly
+     * the same rate. The preset's "slow creep" at 40 px/s was really running at
+     * 189, which is most of why it reached its budget in half a minute and
+     * spent the rest of the evening strobing.
+     */
+    state.carry = (state.carry || 0) + p.speed * Math.min(dt, 1 / 30);
+    let steps = Math.floor(state.carry / stepPx);
+    if (steps > VINE_STEPS_PER_FRAME) {
+      steps = VINE_STEPS_PER_FRAME;
+      state.carry = 0;
+    } else {
+      state.carry -= steps * stepPx;
+    }
+
+    while (steps > 0 && state.grown < budget && state.tips.length) {
+      steps -= 1;
       for (let i = state.tips.length - 1; i >= 0; i--) {
         const tip = state.tips[i];
+        if (tip.retiring) continue;
 
         tip.angle += (rng() - 0.5) * p.wander * 0.55;
         // Climb: a steady pull towards up (or down, if you want it dripping).
@@ -774,7 +857,8 @@ const vine = {
           }
         }
         if (!placed) {
-          state.tips.splice(i, 1);
+          tip.dead = true;
+          tip.retiring = true;
           continue;
         }
 
@@ -830,7 +914,10 @@ const vine = {
           });
         }
 
-        if (tip.life <= 0 || tip.width < 0.18) state.tips.splice(i, 1);
+        if (tip.life <= 0 || tip.width < 0.18) {
+          tip.dead = true;
+          tip.retiring = true;
+        }
       }
     }
 
@@ -842,14 +929,18 @@ const vine = {
     if (p.shootGlow > 0) {
       g.globalCompositeOperation = 'lighter';
       for (const tip of state.tips) {
-        glow(g, tip.x, tip.y, p.thickness * (3 + p.shootGlow * 4), p.tip, 0.5 * p.shootGlow);
+        if (tip.glow < 0.02) continue;
+        glow(g, tip.x, tip.y, p.thickness * (3 + p.shootGlow * 4), p.tip, 0.5 * p.shootGlow * tip.glow);
       }
       g.fillStyle = p.tip;
       for (const tip of state.tips) {
+        if (tip.glow < 0.02) continue;
+        g.globalAlpha = tip.glow;
         g.beginPath();
         g.arc(tip.x, tip.y, Math.max(0.6, p.thickness * tip.width * 0.7), 0, TAU);
         g.fill();
       }
+      g.globalAlpha = 1;
     }
     g.restore();
   },
