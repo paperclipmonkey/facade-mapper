@@ -121,7 +121,7 @@ const HALLOWEEN = () => [
     params: {
       brickW: 76, brickH: 24, gap: 5, rate: 5, cluster: 8, holes: 3, heal: 40,
       brick: '#7d4130', void: '#08040c', innerGlow: '#4bff8f', glowAmount: 0.8,
-      arms: 3, armColor: '#24402c', armTip: '#597a37', thickness: 27, suckers: 0.85, armGlow: 0.8,
+      arms: 3, armColor: '#24402c', armTip: '#597a37', thickness: 27, suckers: 0.85, armGlow: 0.4,
       reach: 0.9, writhe: 1, dust: 0.7, gravity: 1400,
       obstacles: 'window, door', seed: 1,
     },

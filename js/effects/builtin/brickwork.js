@@ -297,7 +297,7 @@ const breach = {
     { key: 'armTip', type: 'color', label: 'Tentacle tip', default: '#597a37' },
     { key: 'thickness', type: 'range', label: 'Tentacle thickness', default: 27, min: 4, max: 110, step: 1 },
     { key: 'suckers', type: 'range', label: 'Suckers', default: 0.85, min: 0, max: 1, step: 0.01 },
-    { key: 'armGlow', type: 'range', label: 'Tip glow', default: 0.8, min: 0, max: 3, step: 0.05 },
+    { key: 'armGlow', type: 'range', label: 'Tip glow', default: 0.4, min: 0, max: 3, step: 0.05 },
     { key: 'reach', type: 'range', label: 'Reach', default: 0.9, min: 0.1, max: 3, step: 0.05 },
     { key: 'crawl', type: 'range', label: 'Crawl speed', default: 130, min: 10, max: 600, step: 5 },
     { key: 'wander', type: 'range', label: 'Wander', default: 0.5, min: 0, max: 1, step: 0.01 },
@@ -1315,8 +1315,23 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
      * enough to survive being projected.
      */
     const point = 0.16 + 0.84 * smoothstep(0, base * 2.4, fromTip);
-    const swell = 1 + 0.16 * Math.sin(d * 0.035 + arm.phase);
-    const width = Math.max(0.6, base * taper * swell * point * (0.5 + 0.5 * emerge));
+    /**
+     * A slow swell along the length, so it is a limb rather than a cone — but
+     * gently. At a sixth either way over a 180-pixel period it was beading the
+     * arm, and near the end, where the taper is already falling, a swell maximum
+     * behind a thin tip is exactly the bulb it looked like.
+     */
+    const swell = 1 + 0.07 * Math.sin(d * 0.018 + arm.phase);
+    /**
+     * And floored against the *base* width rather than against a pixel.
+     *
+     * Taper and point multiply, so at the far end of a long arm the two
+     * together reached 0.048 of the base — a two-and-a-half pixel ribbon, which
+     * is one projector pixel and well under the four-pixel floor. That is the
+     * thin section, and the soft bloom sitting on the end of it is what made it
+     * read as a bulb on a hair.
+     */
+    const width = Math.max(base * 0.14, base * taper * swell * point) * (0.5 + 0.5 * emerge);
     widths.push(width);
 
     /**
@@ -1358,6 +1373,37 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
       sy = a.y + Math.sin(dir + Math.PI / 2) * swing;
     }
     joints.push({ x: sx, y: sy });
+  }
+
+  /**
+   * Take the sharpest corners out of the swayed spine before anything is drawn.
+   *
+   * A ribbon of half-width `w` following a curve of radius `R` turns inside out
+   * once `w > R` — that is geometry, not a tuning choice, and it is why the
+   * width has to be pinched at tight bends. Which is visible as a neck in the
+   * arm exactly where it turns hardest.
+   *
+   * The right end to fix it at is the curve, not the width. The crawl's own
+   * path is gentle enough (a 0.26 radian cap over a 15-pixel step is a 58-pixel
+   * radius against a 27-pixel half-width), but the sway is applied on top of it
+   * and can fold that into something much tighter. Two Laplacian passes pull
+   * each joint a little towards the line between its neighbours, which costs
+   * nothing visible in the motion and lifts the radius back above the width, so
+   * the pinch cap stops firing and the arm keeps its thickness round a bend.
+   *
+   * Moving a joint means it needs checking again, so a smoothed position that
+   * is not clear is simply not taken.
+   */
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 1; i < n - 1; i++) {
+      const mx = (joints[i - 1].x + joints[i + 1].x) * 0.5;
+      const my = (joints[i - 1].y + joints[i + 1].y) * 0.5;
+      const sx = joints[i].x + (mx - joints[i].x) * 0.34;
+      const sy = joints[i].y + (my - joints[i].y) * 0.34;
+      if (!container || stepClear(container, obstacles, sx, sy, 0, widths[i] * 0.7)) {
+        joints[i] = { x: sx, y: sy };
+      }
+    }
   }
 
   // Smooth first, then fit: every vertex the smoothing introduces has to be
