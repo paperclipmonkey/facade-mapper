@@ -32,12 +32,13 @@ const bloodDrip = {
     { key: 'pool', type: 'range', label: 'Pool at top', default: 0.05, min: 0, max: 0.3, step: 0.005 },
     { key: 'gloss', type: 'range', label: 'Wet sheen', default: 0.5, min: 0, max: 1, step: 0.01 },
     { key: 'droplets', type: 'bool', label: 'Shed droplets', default: true },
+    { key: 'fade', type: 'range', label: 'Fade when it lands (s)', default: 2.2, min: 0, max: 10, step: 0.1 },
     { key: 'restart', type: 'bool', label: 'Loop', default: true },
   ],
   init() {
     return { drips: null, count: 0 };
   },
-  draw({ g, p, shape, t, rng, state, noise }) {
+  draw({ g, p, shape, t, dt, rng, state, noise }) {
     const { bbox } = shape;
     if (bbox.h <= 0) return;
     const count = Math.max(1, Math.round(p.count));
@@ -48,7 +49,10 @@ const bloodDrip = {
         // Jitter within the column so drips don't look like a comb.
         x: bbox.x + ((i + 0.5) / count + (rng() - 0.5) * 0.6 / count) * bbox.w,
         rate: 1 - p.variation * rng(),
-        delay: rng() * 4,
+        /** How far down, 0..1. Integrated, never assigned — see below. */
+        pos: 0,
+        wait: rng() * 4,
+        alpha: 1,
         wobble: rng() * 10,
         thickness: 0.6 + rng() * 0.8,
         seed: rng() * 100,
@@ -67,22 +71,61 @@ const bloodDrip = {
       g.fillRect(bbox.x, bbox.y, bbox.w, poolH * 1.6);
     }
 
-    for (const drip of state.drips) {
-      const elapsed = Math.max(0, t - drip.delay);
-      let progress = elapsed * p.speed * drip.rate;
-      if (p.restart) progress = frac(progress / 1.4) * 1.4;
-      if (progress <= 0) continue;
+    const step = Math.min(dt, 1 / 20);
 
-      // Stick-slip: surface tension holds a bead until enough mass builds up,
-      // then it runs. Real drips crawl in bursts, and a constant-velocity drip
-      // is the single most obvious tell that something is animated.
-      const stutter = p.stickSlip > 0
-        ? 1 + p.stickSlip * 0.8 * noise.noise2(progress * 6 + drip.seed, 0)
+    for (const drip of state.drips) {
+      if (drip.wait > 0) {
+        drip.wait -= step;
+        continue;
+      }
+
+      /**
+       * Down, and only down.
+       *
+       * Stick-slip used to be a factor multiplying the head's *position*: a
+       * noise value either side of one, applied to how far down the wall the
+       * bead had got. Which means that when the noise fell, the bead went back
+       * up the door. That is the bounce — it was not a wobble on top of a
+       * descent, it was a descent that reversed several times a second, and no
+       * amount of tuning the amplitude would have fixed it.
+       *
+       * Surface tension does not lift a drip back up the wall; it holds it
+       * still. So the noise now gates the *speed*, is clamped so it can never
+       * go negative, and the position is integrated from it. Monotone by
+       * construction, however the noise behaves.
+       */
+      const gate = p.stickSlip > 0
+        ? clamp(1 - p.stickSlip * (0.5 + 0.5 * noise.noise2(t * 1.6 + drip.seed, 0)), 0.04, 1)
         : 1;
-      const eased = Math.min(1.35, (progress * progress * 0.6 + progress * 0.4) * stutter);
-      const headY = bbox.y + eased * bbox.h;
+      // And it accelerates as it goes, because it is falling.
+      drip.pos += p.speed * drip.rate * gate * (0.45 + 0.9 * drip.pos) * step;
+
+      if (drip.pos >= 1) {
+        drip.pos = 1;
+        // Landed. Fade out where it is, rather than snapping back to the top:
+        // the old loop reset the position outright, so every drip vanished from
+        // the bottom of the door and reappeared at the top in the same frame.
+        if (p.fade > 0) drip.alpha -= step / p.fade;
+        else drip.alpha = 0;
+        if (drip.alpha <= 0) {
+          if (!p.restart) continue;
+          drip.pos = 0;
+          drip.alpha = 1;
+          drip.wait = rng() * 5;
+          drip.rate = 1 - p.variation * rng();
+          drip.thickness = 0.6 + rng() * 0.8;
+          drip.seed = rng() * 100;
+          continue;
+        }
+      }
+      if (drip.alpha <= 0) continue;
+
+      const progress = drip.pos;
+      const headY = bbox.y + drip.pos * bbox.h;
       const w = p.width * drip.thickness;
       const sway = Math.sin(t * 0.5 + drip.wobble) * w * 0.18;
+
+      g.globalAlpha = drip.alpha;
 
       // The trail is thinner and darker than the head: most of the liquid is in
       // the bead, and what is left behind is a thin film.
@@ -140,7 +183,9 @@ const bloodDrip = {
       // Satellite drop: when a bead detaches it leaves a smaller one behind it,
       // trailing a thin thread. Cheap detail, very recognisable.
       if (p.droplets && progress > 0.35) {
-        const dropPhase = frac(elapsed * p.speed * drip.rate * 2.3 + drip.wobble);
+        // Chased off the same integrated position, so the satellite runs down
+        // the wall with the bead rather than to its own clock.
+        const dropPhase = frac(drip.pos * 2.3 + drip.wobble);
         const dropY = bbox.y + dropPhase * bbox.h * 1.1;
         if (dropY > headY + beadH * 2) {
           g.fillStyle = p.color;
@@ -155,6 +200,7 @@ const bloodDrip = {
           g.stroke();
         }
       }
+      g.globalAlpha = 1;
     }
     g.restore();
   },

@@ -57,30 +57,25 @@ const HALLOWEEN = () => [
     opacity: 0.7,
     params: { hotTemp: 2200, coolTemp: 1050, count: 70, rise: 30, drift: 18, turbulence: 24, size: 5, twinkle: 0.6, opacity: 0.7 },
   }),
-  layer('candle', {
-    name: 'Candlelit windows',
-    tags: ['window'],
-    // A little stagger stops every window flickering on the same beat, which is
-    // the single biggest giveaway that it is a projection.
-    stagger: 0.7,
-    params: { temperature: 1850, shadow: '#25060a', level: 0.8, jitter: 0.45, rate: 3.2, gust: 0.35, hotspot: 0.65 },
-  }),
-  layer('eyes', {
-    name: 'Something watching',
-    tags: ['window'],
-    opacity: 0.85,
-    stagger: 1.3,
-    params: { color: '#ffe74c', pupil: '#12000a', pairs: 1, size: 0.09, blink: 0.4, wander: 0.35, glow: 1.4 },
-  }),
   layer('blood-drip', {
     name: 'Blood down the door',
     tags: ['door'],
     params: { color: '#7a0008', highlight: '#d61c22', count: 7, speed: 0.13, width: 18, variation: 0.65, pool: 0.06 },
   }),
-  layer('chase', {
-    name: 'Doorway chase',
+  /**
+   * The door breathes rather than having lights run round it.
+   *
+   * A chase is busy and reads as decoration. A slow pulse on the one opening
+   * people are deciding whether to walk up to is a call to action — it says
+   * *this* door, and it says it without competing with anything else on the
+   * wall. Warm rather than red, for the same reason: it should look like a
+   * porch light somebody left on for you.
+   */
+  layer('pulse', {
+    name: 'Doorway pulse',
     tags: ['door'],
-    params: { color: '#ff7a18', trail: '#8b00ff', count: 8, size: 12, speed: 0.18, tail: 0.05, glow: 1.2 },
+    blend: 'lighter',
+    params: { color: '#ff8a2b', mode: 'both', rate: 0.34, wave: 'sine', min: 0.12, max: 0.85, width: 16, grow: 0.012 },
   }),
   layer('pulse', {
     name: 'Window pulse',
@@ -89,15 +84,6 @@ const HALLOWEEN = () => [
     opacity: 0.5,
     stagger: 0.35,
     params: { color: '#8b00ff', mode: 'outline', rate: 0.5, wave: 'heartbeat', min: 0, max: 0.9, width: 8 },
-  }),
-  layer('web', {
-    name: 'Cobwebs',
-    tags: ['window'],
-    opacity: 0.35,
-    // 5, not the 1.6 this used to be: a web thread at 1.6 world pixels lands
-    // under one projector pixel and turns into grey haze. See the four-pixel
-    // floor in docs/effects.md.
-    params: { color: '#dfe8f5', corner: 'top-left', rings: 6, spokes: 10, width: 5, scale: 0.8, spider: true },
   }),
   // Brick, then the thing behind the brick, then the rot growing over both.
   // The order is the whole point: Breach has to draw after the wall it is
@@ -138,25 +124,6 @@ const HALLOWEEN = () => [
       arms: 3, armColor: '#24402c', armTip: '#8ccc52', thickness: 34, suckers: 0.9,
       reach: 0.9, writhe: 1, dust: 0.7, gravity: 1400,
       obstacles: 'window, door', seed: 1,
-    },
-  }),
-  // Aimed at the wall, and falling back to the whole frame if nothing is
-  // tagged `wall` — either way it treats the windows and door as solid and
-  // grows round them. Slow enough that it is still filling in an hour later,
-  // which is the point: the house is visibly worse than it was at dusk.
-  layer('vine', {
-    name: 'Creeping rot',
-    tags: ['wall'],
-    opacity: 0.9,
-    params: {
-      // 90, not the 40 this used to say. Growth used to round up to one step
-      // per tip per frame whatever the speed, so anything under ~190 px/s ran
-      // at ~190; "40" was never 40. Now that the setting means what it says,
-      // this is the rate that actually looks like the old preset did.
-      color: '#1d3a1c', tip: '#6f9a3e', tips: 7, speed: 90, thickness: 4.5,
-      branch: 0.5, wander: 0.55, climb: 0.3, spread: 0.75, cling: 0.8, seek: 0.7,
-      coverage: 0.45, wither: 0.3, regrow: 0, leaves: 0.25,
-      obstacles: 'window, door', shootGlow: 0.8,
     },
   }),
   layer('bats', {

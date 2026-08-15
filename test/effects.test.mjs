@@ -14,7 +14,8 @@
  */
 
 import { getEffect, defaultParams } from '../js/effects/registry.js';
-import { buildPathSampler, boundingBox } from '../js/core/math.js';
+import { buildPathSampler, boundingBox, makeRng } from '../js/core/math.js';
+import { defaultNoise } from '../js/core/noise.js';
 import { resolveParams, baseParams } from '../js/core/modulators.js';
 
 let failures = 0;
@@ -272,6 +273,55 @@ console.log('\n— text on a path —');
  * bring the whole machine to a crawl — every frame a different number, every
  * frame a megabyte of cached growth thrown away and regenerated.
  * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ *
+ * Blood only runs downhill
+ * ------------------------------------------------------------------ */
+
+console.log('\n— blood drip —');
+{
+  const effect = getEffect('blood-drip');
+  const shape = geo([{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 600 }, { x: 0, y: 600 }]);
+  const p = { ...defaultParams('blood-drip'), speed: 0.4 };
+  const state = effect.init();
+  const rng = makeRng('blood');
+  let t = 0;
+  let back = 0;
+  let landed = false;
+  let faded = 0;
+  let restarts = 0;
+  let prev = null;
+
+  for (let f = 0; f < 7200; f++) {
+    t += 1 / 60;
+    effect.draw({
+      g: recordingContext(), p, stable: p, shape, shapes: () => [],
+      t, dt: 1 / 60, rng, state, noise: defaultNoise,
+      i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120,
+      audio: { level: 0, low: 0, mid: 0, high: 0 },
+    });
+    const d = state.drips[0];
+    if (prev !== null) {
+      if (d.pos < prev - 1e-9 && d.pos !== 0) back += 1;
+      if (d.pos === 0 && prev > 0.9) restarts += 1;
+    }
+    if (d.alpha < 1 && d.alpha > 0) faded += 1;
+    if (d.pos >= 1) landed = true;
+    prev = d.pos;
+  }
+
+  /**
+   * The one that matters. Stick-slip used to be a factor on the head's
+   * *position*, so when the noise fell the bead climbed back up the door — a
+   * visible bounce two or three times a second. Surface tension holds a drip
+   * still; it does not lift it. The noise gates the speed now, and the position
+   * is integrated, so this is monotone by construction.
+   */
+  ok('a drip never travels back up the door', back === 0, `${back} upward frames`);
+  ok('it reaches the bottom', landed);
+  ok('and fades there rather than snapping back', faded > 100, `${faded} fading frames`);
+  ok('then starts again', restarts > 0, `${restarts} cycles`);
+}
 
 console.log('\n— modulation and caches —');
 {
