@@ -46,6 +46,7 @@ import { createMediaPool, importMediaFile, removeMedia } from '../core/media.js'
 import { loadUserEffects, listByCategory, defaultParams, getEffect, getCompileErrors } from '../effects/registry.js';
 import { captureScene, activateScene as applyScene, tickPlaylist, transitionProgress } from '../core/scenes.js';
 import { createCamera } from './camera.js';
+import { feed as extraFeed, pruneFeeds } from './feeds.js';
 import { runCalibration, checkDrift, solveFromCorners } from './calibration.js';
 import { createStage, defaultWorldQuad } from './stage.js';
 import { createAudioAnalyser } from './audio.js';
@@ -143,7 +144,15 @@ let palette = null;
 
 const worldRenderer = createWorldRenderer({
   mediaPool,
-  camera: () => (camera.isRunning() ? camera.video : null),
+  /**
+   * The video an effect should draw. No argument, or an empty one, means the
+   * alignment camera — which is what every existing show asks for. A device id
+   * means "open that one yourself", and is how you get a doorstep webcam into a
+   * window without moving the camera the whole mapping depends on.
+   */
+  camera: (deviceId) => (deviceId
+    ? extraFeed(deviceId)
+    : (camera.isRunning() ? camera.video : null)),
   onEffectError: ({ effectId, message }) => toast(`Effect "${effectId}" threw: ${message}`, 'bad'),
 });
 
@@ -205,7 +214,23 @@ function broadcastClock() {
   bus.post(MSG.CLOCK, clock.getTransport());
 }
 
+/**
+ * Close any extra camera a layer no longer asks for.
+ *
+ * A camera left open holds its light on and lights the browser's recording
+ * indicator, which is alarming when the layer that opened it was deleted an
+ * hour ago. Cheap enough to do on every commit.
+ */
+function pruneCameraFeeds() {
+  const wanted = new Set();
+  for (const layer of app.project.layers) {
+    if (layer.effect === 'camera-feed' && layer.params?.device) wanted.add(layer.params.device);
+  }
+  pruneFeeds(wanted);
+}
+
 app.commit = () => {
+  pruneCameraFeeds();
   markDirty();
   broadcast();
   refreshPanels();
@@ -1251,7 +1276,16 @@ function frame() {
   stage.draw({
     previewCanvas: app.showEffectsPreview ? (previewWarp ? previewGL : previewCanvas) : null,
     cameraElement: app.cameraVisible && camera.isRunning() ? camera.video : null,
-    stillImage: app.cameraVisible ? stillImage : null,
+    /**
+     * The still stays whether or not the live view is on.
+     *
+     * These used to be one switch, so turning the camera view off left a black
+     * stage — and that made one perfectly reasonable arrangement impossible:
+     * tracing against the captured still (or the demo facade) while a camera is
+     * running for an effect to use. The checkbox means "show me the live camera
+     * *instead of* the still", which is what it looks like it means.
+     */
+    stillImage,
     cameraOpacity: app.cameraOpacity,
     showEffects: app.showEffectsPreview,
   });

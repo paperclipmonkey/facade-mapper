@@ -140,8 +140,18 @@ const cameraFeed = {
   category: 'media',
   scope: 'shape',
   description:
-    'Projects the camera feed back onto the house. Point it at the front path for a delayed, ghostly mirror.',
+    'Projects a camera feed back onto the house. Point a second webcam at the front path for a ghostly mirror of whoever is standing on it.',
   params: [
+    /**
+     * Which camera, and by default not the one doing the alignment.
+     *
+     * The alignment camera is a measuring instrument on a tripod pointed at the
+     * wall you are projecting onto — feed that back into the projection and you
+     * have built a feedback loop. Leave this on "alignment camera" and you get
+     * the old behaviour, which is occasionally what you want; pick a second
+     * device and this layer opens it on its own.
+     */
+    { key: 'device', type: 'camera', label: 'Camera', default: '' },
     { key: 'fit', type: 'select', label: 'Fit', default: 'cover', options: ['cover', 'contain', 'stretch'] },
     { key: 'blend', type: 'select', label: 'Blend', default: 'source-over', options: ['source-over', 'screen', 'lighter', 'difference'] },
     { key: 'mirror', type: 'bool', label: 'Mirror', default: true },
@@ -151,8 +161,9 @@ const cameraFeed = {
   ],
   draw({ g, p, shape, camera }) {
     // Only the control tab holds a camera stream; projector tabs get null and
-    // simply draw nothing rather than erroring.
-    const el = camera?.();
+    // simply draw nothing rather than erroring. Same for a device that is still
+    // opening, or one that has been unplugged.
+    const el = camera?.(p.device || null);
     if (!el) return;
     const mediaW = el.videoWidth || 0;
     const mediaH = el.videoHeight || 0;

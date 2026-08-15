@@ -225,6 +225,31 @@ neon tube. Text longer than its path is shrunk to fit rather than running off
 the end; turn **Shrink to fit path** off if you meant to scroll it along with
 **Position on path**.
 
+### A second camera
+
+**Live Camera** has its own **Camera** setting, and it defaults to *not* the one
+doing the alignment. That default is the point.
+
+The alignment camera is a measuring instrument. It sits on a tripod pointed at
+the wall you are projecting onto, its exposure is pinned so the calibration dots
+read consistently, and every shape you have ever traced is stored in its
+coordinates — move it and the whole mapping moves. It is also, by definition,
+looking at your own projection, so feeding it back into the show is a feedback
+loop and looks like one.
+
+A camera you point at *people* is a different job: a webcam on the doorstep for a
+delayed mirror in an upstairs window, a spare one watching the gate. Plug it in,
+pick it from the layer's Camera list, and that layer opens it on its own. Streams
+are shared between layers asking for the same device and closed when the last
+layer stops asking, so the recording light goes out when it should.
+
+Two related things worth knowing. The picture behind your shapes in the editor is
+the *tracing backdrop* — it is never projected, and no projector tab has a camera
+at all. And the **Camera** tick in the stage toolbar means "show the live view
+*instead of* the captured still", so turning it off puts the still (or the demo
+facade) back rather than leaving you with a black stage: trace against a
+photograph while a camera runs for an effect to use.
+
 ## Drawing for a projector
 
 Effects draw in a virtual space 1920 pixels wide, and a domestic projector is

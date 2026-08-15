@@ -8,6 +8,7 @@
  */
 
 import { describeBinding, BINDING_TYPES, WAVES } from '../core/modulators.js';
+import { listCameras } from './feeds.js';
 
 export function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -111,6 +112,45 @@ export function paramRow(def, value, binding, handlers) {
         commit(num);
       });
       control.append(input, readout);
+      break;
+    }
+
+    /**
+     * A camera picker.
+     *
+     * Populated asynchronously, because enumerating devices is async and a
+     * parameter row is not. It renders immediately with whatever it already
+     * knows — the stored value and the default — and fills in the real list a
+     * moment later, so the row never blocks the inspector.
+     *
+     * Labels are blank until the browser has granted camera permission at least
+     * once, which is a privacy rule rather than a bug; the fallback is the
+     * device's position in the list, which is enough to tell two apart.
+     */
+    case 'camera': {
+      const select = el('select');
+      const current = String(value ?? def.default ?? '');
+      select.appendChild(el('option', { value: '', text: 'Alignment camera' }));
+      if (current) select.appendChild(el('option', { value: current, text: 'Selected camera', selected: true }));
+      select.addEventListener('change', () => commit(select.value));
+      listCameras().then((cams) => {
+        const chosen = select.value;
+        clear(select);
+        select.appendChild(el('option', { value: '', text: 'Alignment camera' }));
+        cams.forEach((cam, i) => {
+          select.appendChild(el('option', {
+            value: cam.deviceId,
+            text: cam.label || `Camera ${i + 1}`,
+          }));
+        });
+        // A device that has since been unplugged still has to be shown, or
+        // opening the inspector would silently retarget the layer.
+        if (chosen && !cams.some((c) => c.deviceId === chosen)) {
+          select.appendChild(el('option', { value: chosen, text: 'Camera (not connected)' }));
+        }
+        select.value = chosen;
+      });
+      control.appendChild(select);
       break;
     }
 
