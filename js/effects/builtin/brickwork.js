@@ -26,7 +26,7 @@
  * not.
  */
 
-import { rgba, clamp, TAU, mixHex, makeRng, pointInPolygon } from '../../core/math.js';
+import { rgba, clamp, TAU, mixHex, makeRng, pointInPolygon, smoothstep } from '../../core/math.js';
 import { collectObstacles, isClear, nearestSurface } from '../obstacles.js';
 import { offscreen, glow } from '../lib.js';
 
@@ -294,9 +294,10 @@ const breach = {
     { key: 'glowAmount', type: 'range', label: 'Inner glow', default: 0.8, min: 0, max: 3, step: 0.05 },
     { key: 'arms', type: 'range', label: 'Tentacles per hole', default: 3, min: 0, max: 8, step: 1 },
     { key: 'armColor', type: 'color', label: 'Tentacle', default: '#243026' },
-    { key: 'armTip', type: 'color', label: 'Tentacle tip', default: '#79994a' },
+    { key: 'armTip', type: 'color', label: 'Tentacle tip', default: '#597a37' },
     { key: 'thickness', type: 'range', label: 'Tentacle thickness', default: 27, min: 4, max: 110, step: 1 },
     { key: 'suckers', type: 'range', label: 'Suckers', default: 0.55, min: 0, max: 1, step: 0.01 },
+    { key: 'armGlow', type: 'range', label: 'Tip glow', default: 0.8, min: 0, max: 3, step: 0.05 },
     { key: 'reach', type: 'range', label: 'Reach', default: 0.9, min: 0.1, max: 3, step: 0.05 },
     { key: 'crawl', type: 'range', label: 'Crawl speed', default: 130, min: 10, max: 600, step: 5 },
     { key: 'wander', type: 'range', label: 'Wander', default: 0.5, min: 0, max: 1, step: 0.01 },
@@ -1275,12 +1276,38 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
     const amp = base * 1.15 * Math.min(writhe, 2) * Math.pow(v, 1.15) * emerge * smooth;
     const swing = (Math.sin(wave - v * 2.7) * 0.68 + Math.sin(wave * 1.63 - v * 5.6 + arm.phase) * 0.32) * amp;
 
-    // Held wide down most of the arm, falling away late, and stopping at a
-    // fifth of the base rather than at a point. `1 - u` gives a triangle, and a
-    // triangle is a leaf.
-    const taper = 1 - 0.8 * Math.pow(u, 2.2);
-    const swell = 1 + 0.16 * Math.sin(along[i] * 0.035 + arm.phase);
-    const width = Math.max(1.5, base * taper * swell * (0.5 + 0.5 * emerge));
+    /**
+     * Thickness, from two things that are not the same.
+     *
+     * The **taper** is a property of the limb: how thick it is a given distance
+     * from the body. Held wide down most of it and falling away late, because
+     * `1 - u` gives a triangle and a triangle is a leaf. Measured against a
+     * little over half the arm's full reach rather than all of it — an arm that
+     * only ever grows to a third of its limit otherwise never thins at all, and
+     * comes out a uniform tube, which is what these were.
+     *
+     * The **tip** is a property of the end: whatever is currently the leading
+     * few centimetres is thin, and stops being thin once it is no longer the
+     * end. That is not a contradiction of the above, it is the difference
+     * between a limb and its growing point, and without it every arm finishes
+     * in a club the same width as its middle — which is the single thing that
+     * still read as wrong. Its length scales with the arm's own girth, so a fat
+     * tentacle gets a proportionally long point rather than a stubbed one.
+     */
+    const taperScale = Math.max(1, fullReach * 0.55);
+    const d = along[i];
+    const taper = 1 - 0.78 * Math.pow(Math.min(1, d / taperScale), 1.9);
+    const fromTip = along[n - 1] - d;
+    /**
+     * Floored, not run to zero. A point that tapers all the way out spends its
+     * last eighty pixels under one projector pixel — which is the four-pixel
+     * floor, and it comes out as a hair that flickers rather than a tip. A
+     * sixth of the base width is fine enough to read as a point and thick
+     * enough to survive being projected.
+     */
+    const point = 0.16 + 0.84 * smoothstep(0, base * 2.4, fromTip);
+    const swell = 1 + 0.16 * Math.sin(d * 0.035 + arm.phase);
+    const width = Math.max(0.6, base * taper * swell * point * (0.5 + 0.5 * emerge));
     widths.push(width);
 
     /**
@@ -1358,7 +1385,11 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
   const ramp = g.createLinearGradient(joints[0].x, joints[0].y, tip0.x, tip0.y);
   ramp.addColorStop(0, mixHex(p.armColor, '#000000', 0.35));
   ramp.addColorStop(0.45, p.armColor);
-  ramp.addColorStop(1, mixHex(p.armColor, p.armTip, 0.75));
+  // All the way to the tip colour, not three quarters of the way. With a light
+  // tip that hardly showed; with the darker one asked for it left the arm a
+  // flat shape with no form at all — a silhouette on the brick rather than
+  // something with a lit side.
+  ramp.addColorStop(1, p.armTip);
   /**
    * A dark rim, then the body inside it.
    *
@@ -1413,7 +1444,7 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
   // assuming the smaller one inside it must be fine is exactly the kind of
   // reasoning that has been wrong twice already in this file.
   if (container) fitWidths(container, obstacles, lit, litWidths);
-  g.fillStyle = rgba('#ffffff', 0.09);
+  g.fillStyle = rgba('#ffffff', 0.13);
   tentacleRibbon(g, lit, litWidths);
 
   /**

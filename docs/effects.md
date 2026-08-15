@@ -204,6 +204,13 @@ Three more settings are worth knowing:
 - **Holes at once** and **Bricks per hole** decide whether this is one enormous
   breach or a wall coming apart everywhere. Neighbouring gaps merge into a
   single opening, mortar and all.
+- **Tentacle** and **Tentacle tip** are the two ends of a gradient down the
+  arm, so keep the tip lighter than the body or the whole thing flattens into a
+  silhouette. Thickness is two separate things: a taper that is a property of
+  the limb — how thick it is a given distance from the hole — and a point that
+  is a property of the *end*, so whatever is currently the leading few
+  centimetres is thin and stops being thin once it is no longer the end. Without
+  the second, every arm finishes in a club the same width as its middle.
 - **Suckers** is what stops the tentacles reading as foliage. Turn them off and
   you have vines coming out of a hole, which is also a good look, just a
   different one. They sit on a fixed flank of each arm — an earlier version put
