@@ -824,6 +824,7 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
     // is feeling about rather than parked. Uses the same target-and-retract as
     // everything else, so nothing jumps.
     arm.probeAt = arm.timer + 2 + rng() * 3;
+    arm.stuck = 0;
     arm.phase2 = 'back';
     arm.carry = 0;
     arm.backTo = Math.max(2, arm.path.length - (3 + Math.floor(rng() * 5)));
@@ -870,8 +871,19 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
   arm.growing = arm.phase2 !== 'back';
 
   const speed = Math.max(1, p.crawl) * (arm.pace ?? 1) * (arm.phase2 === 'back' ? 1.6 : 1);
-  const atFull = arm.phase2 === 'feel' && arm.path.length >= maxJoints;
-  if (atFull) return; // nothing to advance, and the remainder must stay put
+  /**
+   * At rest: either fully extended, or holding station against something it
+   * cannot get past.
+   *
+   * The second case used to keep trying a step every single frame for as long
+   * as the arm stayed there — failing, nudging the search heading, and failing
+   * again — which is the vibration. There is nothing to be gained from
+   * retrying sixty times a second what has failed twenty times in a row; the
+   * probe and give-up timers will move it along soon enough. The remainder has
+   * to stay put too, or it overflows and steps the drawn length.
+   */
+  const atFull = arm.phase2 === 'feel' && (arm.path.length >= maxJoints || arm.stuck > 6);
+  if (atFull) return;
 
   arm.carry += speed * dt;
   let steps = Math.floor(arm.carry / stepPx);
@@ -1013,10 +1025,15 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
        */
       arm.carry = Math.min(arm.carry + stepPx, stepPx * 1.5);
       arm.stuck = (arm.stuck || 0) + 1;
-      // Try the other way round every few frames rather than every frame:
-      // alternating on each attempt just rocks between two blocked headings.
-      if (arm.stuck % 4 === 0) arm.turn *= -1;
-      arm.angle += MAX_TURN * arm.turn;
+      // Sweep the search heading a quarter as often as it used to. Nudging on
+      // every failed attempt rocks between two blocked directions at frame
+      // rate, and now that the drawing follows the arm rather than the search
+      // that is merely wasted work — but it was visible as a shaking tip for a
+      // long time, and there is no reason to hunt that fast.
+      if (arm.stuck % 4 === 0) {
+        arm.turn *= -1;
+        arm.angle += MAX_TURN * arm.turn;
+      }
       break;
     }
     arm.stuck = 0;
@@ -1334,13 +1351,22 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
     const before = path[path.length - 2];
     const reach = Math.max(4, p.thickness) * arm.girth;
     if (arm.growing) {
-      // Wound in until it fits rather than dropped when it does not: dropping
-      // it takes up to a whole step off the drawn length in one frame, which is
-      // the very thing this is here to remove.
+      /**
+       * Along the last segment it actually laid, not along `arm.angle`.
+       *
+       * `arm.angle` is the crawl's *search* heading, and a blocked arm swings
+       * it by a fifth of a radian every frame looking for a way past. Drawing
+       * the leading end along it therefore whipped the tip back and forth
+       * several times a second wherever an arm came to rest against something —
+       * measured at 4.8 direction reversals per arm-second. The direction the
+       * arm is actually pointing changes only when a joint is placed, which is
+       * exactly as often as the drawn end should turn.
+       */
+      const dir = Math.atan2(last.y - before.y, last.x - before.x);
       for (let d = f; d > 0.04; d *= 0.72) {
-        const ex = last.x + Math.cos(arm.angle) * d * arm.stepPx;
-        const ey = last.y + Math.sin(arm.angle) * d * arm.stepPx;
-        if (!container || stepClear(container, obstacles, ex, ey, arm.angle, reach)) {
+        const ex = last.x + Math.cos(dir) * d * arm.stepPx;
+        const ey = last.y + Math.sin(dir) * d * arm.stepPx;
+        if (!container || stepClear(container, obstacles, ex, ey, dir, reach)) {
           path.push({ x: ex, y: ey });
           break;
         }
