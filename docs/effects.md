@@ -54,6 +54,21 @@ by default.
 | **Serpent** | A snake that explores the wall, steering round the openings rather than across them. |
 | **Creeping Vine** | Ivy, mould or veins spreading over the brickwork and creeping *around* the frames. Seeks out bare wall and wraps every opening it finds. |
 
+**Keeping the vine alive.** Growth is permanent by construction — that is what
+makes a wall of ivy cost one `drawImage` a frame — so left alone it fills to its
+coverage budget and then stops, which is the one thing a living thing never
+does. **Wither** fades the accumulated growth continuously, so new shoots
+replace the oldest and the budget becomes a level the plant lives at rather than
+a finish line. Measured over a simulated minute on the demo wall, coverage with
+wither off flatlines at 10.9% after twenty seconds; with wither at 0.3 it keeps
+moving — 8, 12, 14, 16, 17, 18% — and converges instead of freezing.
+
+**Start again after** clears the wall completely every N seconds, for a show
+that wants the house taken over, cleaned, and taken over again. And **Restart**,
+on any layer in the inspector, wipes whatever that effect has built up right
+now — ivy, frost, a drift of snow on a sill — which is also how you re-roll one
+you do not like the shape of.
+
 Point one at the shape tagged `wall` and it stays on the wall; leave the targets
 empty and it uses the whole frame. Either way the windows are in the way.
 

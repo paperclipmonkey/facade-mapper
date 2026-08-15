@@ -332,6 +332,26 @@ function renderLayer(container, app, id) {
     });
   });
 
+  /**
+   * Wipe whatever this layer has accumulated and start it over.
+   *
+   * Plenty of effects build up state you cannot get back to any other way — a
+   * wall of ivy, a pane of frost, a drift of snow on a sill. Until now the only
+   * way to restart one was to nudge a parameter that happened to be part of its
+   * cache key, which is a trick you have to know and which changes the look as
+   * a side effect. This does the thing directly, for every effect at once.
+   */
+  const restartBtn = el('button', {
+    type: 'button',
+    class: 'btn small',
+    text: 'Restart',
+    title: 'Clear anything this effect has built up and start it again',
+  });
+  restartBtn.addEventListener('click', () => {
+    app.resetLayerState(layer.id);
+    toast(`${layer.name || effect?.name || layer.effect} restarted.`);
+  });
+
   const effectRow = el('div', { class: 'field' }, [el('span', { text: 'Effect' })]);
   const effectSelect = el('select');
   for (const [category, effects] of listByCategory()) {
@@ -354,7 +374,7 @@ function renderLayer(container, app, id) {
   });
   effectRow.appendChild(effectSelect);
   container.appendChild(effectRow);
-  container.appendChild(el('div', { class: 'panel-actions' }, [browseBtn]));
+  container.appendChild(el('div', { class: 'panel-actions' }, [browseBtn, restartBtn]));
 
   if (effect?.description) {
     container.appendChild(el('p', { class: 'panel-note', text: effect.description }));

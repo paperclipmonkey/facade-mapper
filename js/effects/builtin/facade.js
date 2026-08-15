@@ -457,6 +457,11 @@ const vine = {
     { key: 'cling', type: 'range', label: 'Cling to frames', default: 0.75, min: 0, max: 1, step: 0.01 },
     { key: 'seek', type: 'range', label: 'Seek out openings', default: 0.6, min: 0, max: 1, step: 0.01 },
     { key: 'coverage', type: 'range', label: 'Coverage', default: 0.5, min: 0.02, max: 1, step: 0.01 },
+    // The two that make it a living thing rather than a texture. Wither is the
+    // one to reach for: it turns the coverage budget into a level the plant
+    // lives at, with new shoots replacing the oldest growth for ever.
+    { key: 'wither', type: 'range', label: 'Wither', default: 0.25, min: 0, max: 1, step: 0.01 },
+    { key: 'regrow', type: 'range', label: 'Start again after (s)', default: 0, min: 0, max: 600, step: 5 },
     { key: 'leaves', type: 'range', label: 'Leaves', default: 0.4, min: 0, max: 1, step: 0.01 },
     OBSTACLE_PARAM,
     { key: 'shootGlow', type: 'range', label: 'Shoot glow', default: 1, min: 0, max: 4, step: 0.05 },
@@ -514,9 +519,73 @@ const vine = {
       state.sinceSeed = 0;
       /** Openings something has already reached, so the pull towards them stops. */
       state.wrapped = new Set();
+      state.plantedAt = t;
     }
 
     const c = state.ctx;
+
+    /**
+     * Start again from bare wall.
+     *
+     * Everything that remembers where the plant has been has to go together —
+     * the bitmap, the length grown, the live tips, the visit grid, the sprout
+     * candidates and the set of openings already wrapped. Miss one and the new
+     * growth inherits the old one's opinions: tips that think the wall is
+     * already covered, or that every window has been visited.
+     */
+    const replant = () => {
+      c.save();
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      c.clearRect(0, 0, state.canvas.width, state.canvas.height);
+      c.restore();
+      state.tips.length = 0;
+      state.grown = 0;
+      state.visits.fill(0);
+      state.seeds.length = 0;
+      state.sinceSeed = 0;
+      state.wrapped.clear();
+      state.plantedAt = t;
+    };
+
+    // A hard cycle, for a show that wants the wall to be taken over, cleared,
+    // and taken over again. Off by default; `wither` is the gentler version.
+    if (p.regrow > 0 && t - state.plantedAt > p.regrow) replant();
+
+    /**
+     * Withering.
+     *
+     * Without it the vine grows to its coverage budget and then simply stops,
+     * which is the one thing a living thing never does — you get a static
+     * texture that happens to have arrived by animation. Fading the accumulated
+     * bitmap continuously turns the same machinery into a steady state: new
+     * shoots add at the head while the oldest growth dies back, so the wall
+     * keeps changing all evening without ever filling in solid.
+     *
+     * `grown` decays at the same rate as the picture, which is what makes the
+     * coverage budget behave as a ceiling the plant lives at rather than a
+     * finish line it crosses once. Tips retired at the ceiling are respawned by
+     * the block below as soon as decay makes room, so the cycle needs no
+     * bookkeeping of its own.
+     */
+    if (p.wither > 0) {
+      const lost = clamp(p.wither * 0.06 * Math.min(dt, 1 / 30), 0, 0.2);
+      c.save();
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      c.globalCompositeOperation = 'destination-out';
+      c.fillStyle = `rgba(0,0,0,${lost})`;
+      c.fillRect(0, 0, state.canvas.width, state.canvas.height);
+      c.restore();
+      state.grown *= 1 - lost;
+
+      // The visit grid has to forget too, or tips keep avoiding wall that has
+      // long since gone bare again.
+      state.sinceForget = (state.sinceForget || 0) + dt;
+      if (state.sinceForget > 2) {
+        state.sinceForget = 0;
+        for (let i = 0; i < state.visits.length; i++) state.visits[i] = (state.visits[i] * 0.7) | 0;
+        if (state.seeds.length > 120) state.seeds.splice(0, state.seeds.length - 120);
+      }
+    }
     const stepPx = Math.max(2, p.thickness * 0.7);
     // A length budget rather than an area test: how much vine it takes to cover
     // a wall is length × width, so dividing the area by the width gives a

@@ -107,7 +107,8 @@ const HALLOWEEN = () => [
     params: {
       color: '#1d3a1c', tip: '#6f9a3e', tips: 7, speed: 40, thickness: 4.5,
       branch: 0.5, wander: 0.55, climb: 0.3, spread: 0.75, cling: 0.8, seek: 0.7,
-      coverage: 0.45, leaves: 0.25, obstacles: 'window, door', shootGlow: 0.8,
+      coverage: 0.45, wither: 0.3, regrow: 0, leaves: 0.25,
+      obstacles: 'window, door', shootGlow: 0.8,
     },
   }),
   layer('bats', {
