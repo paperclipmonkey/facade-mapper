@@ -296,7 +296,7 @@ const breach = {
     { key: 'armColor', type: 'color', label: 'Tentacle', default: '#243026' },
     { key: 'armTip', type: 'color', label: 'Tentacle tip', default: '#597a37' },
     { key: 'thickness', type: 'range', label: 'Tentacle thickness', default: 27, min: 4, max: 110, step: 1 },
-    { key: 'suckers', type: 'range', label: 'Suckers', default: 0.55, min: 0, max: 1, step: 0.01 },
+    { key: 'suckers', type: 'range', label: 'Suckers', default: 0.85, min: 0, max: 1, step: 0.01 },
     { key: 'armGlow', type: 'range', label: 'Tip glow', default: 0.8, min: 0, max: 3, step: 0.05 },
     { key: 'reach', type: 'range', label: 'Reach', default: 0.9, min: 0.1, max: 3, step: 0.05 },
     { key: 'crawl', type: 'range', label: 'Crawl speed', default: 130, min: 10, max: 600, step: 5 },
@@ -1294,9 +1294,18 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
      * still read as wrong. Its length scales with the arm's own girth, so a fat
      * tentacle gets a proportionally long point rather than a stubbed one.
      */
-    const taperScale = Math.max(1, fullReach * 0.55);
+    /**
+     * Held full for most of the arm, then falling away.
+     *
+     * The exponent is doing the real work. At 1.9 against half the reach the
+     * width was down to a fifth by the halfway point — a fat shoulder and then
+     * a long thin whip, which is a bullwhip rather than a limb. A steeper curve
+     * over more of the length keeps it near full width to about two thirds and
+     * spends the taper where a taper belongs, near the end.
+     */
+    const taperScale = Math.max(1, fullReach * 0.85);
     const d = along[i];
-    const taper = 1 - 0.78 * Math.pow(Math.min(1, d / taperScale), 1.9);
+    const taper = 1 - 0.7 * Math.pow(Math.min(1, d / taperScale), 3.2);
     const fromTip = along[n - 1] - d;
     /**
      * Floored, not run to zero. A point that tapers all the way out spends its
@@ -1479,9 +1488,9 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
       const b = joints[i + 1];
       const seg = Math.hypot(b.x - a.x, b.y - a.y);
       since += seg;
-      const r = widths[i] * 0.22;
+      const r = widths[i] * 0.24;
       if (r < 1.2) continue;
-      if (since < r * 4.4) continue;
+      if (since < r * 3.6) continue;
       since = 0;
 
       const along = Math.atan2(b.y - a.y, b.x - a.x);
@@ -1489,7 +1498,11 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
       // A little variation in size and offset, or a row of identical discs
       // reads as machined rather than grown.
       const vary = 0.82 + 0.36 * Math.abs(Math.sin(i * 1.7 + arm.phase));
-      g.fillStyle = rgba(mixHex(p.armTip, '#ffffff', 0.12), 0.3 * p.suckers);
+      // Lifted well clear of the arm's own colour. They were mixed a tenth of
+      // the way to white off the *tip* colour, so darkening the tip took the
+      // suckers down with it and they all but vanished — the one detail that
+      // says this is not a plant.
+      g.fillStyle = rgba(mixHex(p.armTip, '#ffffff', 0.3), 0.42 * p.suckers);
       g.save();
       g.translate(a.x + Math.cos(nrm) * widths[i] * 0.4, a.y + Math.sin(nrm) * widths[i] * 0.4);
       g.rotate(along);
@@ -1497,7 +1510,7 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
       g.ellipse(0, 0, r * vary * 0.62, r * vary, 0, 0, TAU);
       g.fill();
       // The rim, a shade darker, which is what stops them looking like paint.
-      g.fillStyle = rgba(mixHex(p.armColor, '#000000', 0.4), 0.3 * p.suckers);
+      g.fillStyle = rgba(mixHex(p.armColor, '#000000', 0.5), 0.45 * p.suckers);
       g.beginPath();
       g.ellipse(0, r * vary * 0.22, r * vary * 0.34, r * vary * 0.42, 0, 0, TAU);
       g.fill();
