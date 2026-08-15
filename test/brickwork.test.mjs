@@ -114,6 +114,13 @@ function run(effect, params, frames, { dt = 1 / 60 } = {}) {
       t, dt, rng, state, i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120,
       audio: { level: 0, low: 0, mid: 0, high: 0 },
     });
+    // The withdrawal invariant, checked every frame rather than sampled: a hole
+    // may not start closing while any of its arms is still out on the wall.
+    for (const hole of state.holes || []) {
+      if (hole.closing > 0 && (hole.arms || []).some((a) => a.path && a.path.length > 2)) {
+        state.brokeWithdrawal = `closing at ${hole.closing.toFixed(2)} with an arm still out`;
+      }
+    }
     seen.push(g);
   }
   return { g, state, seen };
@@ -416,6 +423,38 @@ function insidePoly(pts, x, y) {
   const b = ribbon(seen[1001]);
   ok('no writhe means no movement', Boolean(a) && Boolean(b)
     && Math.hypot(a[5].x - b[5].x, a[5].y - b[5].y) < 0.001);
+}
+
+console.log('\n— arms are individuals —');
+
+{
+  const { seen, state } = run(breach, { ...base, rate: 60, heal: 0, arms: 4, holes: 1 }, 1500);
+  ok('the run produced frames', seen.length === 1500);
+  const arm = state.holes[0]?.arms || [];
+  const paces = arm.map((a) => a.pace);
+  ok('every arm has its own pace', new Set(paces).size === paces.length, paces.map((x) => x?.toFixed(2)).join(', '));
+
+  /**
+   * And it shows. Pace existed nowhere before this — `arm.rate` was only ever
+   * used by the sway — so every tentacle on the house extended at exactly the
+   * same speed, which is the kind of wrongness you feel before you can name it.
+   */
+  const lengths = arm.map((a) => a.path.length);
+  ok('so they are not all the same length at the same moment',
+    new Set(lengths).size > 1, lengths.join(', '));
+}
+
+{
+  /**
+   * A healing hole pulls its arms back in before the bricks return. It used to
+   * fade the whole thing out over a couple of seconds, arms included, so a
+   * tentacle three metres up the wall went thin and then stopped existing —
+   * which reads as a dropped frame rather than as anything retreating.
+   */
+  const { state } = run(breach, { ...base, rate: 60, heal: 5, holes: 1, arms: 3, cluster: 2 }, 4200);
+  ok('nothing is left over at the end', Array.isArray(state.holes));
+  ok('no hole ever starts closing with an arm still out',
+    !state.brokeWithdrawal, state.brokeWithdrawal || '');
 }
 
 console.log(failures ? `\n${failures} failing` : '\nall good');

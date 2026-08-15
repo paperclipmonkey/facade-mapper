@@ -485,6 +485,16 @@ const breach = {
             girth: 0.65 + rng() * 0.7,
             turn: rng() < 0.5 ? 1 : -1,
             /**
+             * How fast this one crawls, relative to the setting.
+             *
+             * There was no such thing until now: `arm.rate` existed and was
+             * only ever used for the sway, so every tentacle on the house
+             * extended at precisely the same speed. Three arms out of one hole
+             * moving in lockstep is the sort of wrongness you feel before you
+             * can name — nothing alive does that.
+             */
+            pace: 0.55 + rng() * 0.95,
+            /**
              * Which flank the suckers are on. Fixed for the arm's whole life,
              * and deliberately *not* `turn`.
              *
@@ -517,11 +527,40 @@ const breach = {
        * Set it to zero if you want the damage to be permanent, which is the
        * right choice for a short scene fired from a trigger.
        */
-      if (p.heal > 0 && !hole.pending.length && hole.openFor > p.heal) {
-        hole.closing = Math.min(1, hole.closing + step / 1.8);
-        if (hole.closing >= 1) {
-          for (const brick of hole.gone) state.taken.delete(brick);
-          state.holes.splice(i, 1);
+      if (p.heal > 0 && !hole.pending.length && hole.openFor > p.heal) hole.retiring = true;
+
+      if (hole.retiring) {
+        /**
+         * Arms first, then the bricks.
+         *
+         * Healing used to fade the whole hole out over about two seconds, arms
+         * included — so a tentacle three metres up the wall went thin and then
+         * simply stopped existing. It reads as a dropped frame rather than as
+         * anything retreating. Sending them back the way they came takes the
+         * same machinery the arms already have for giving up on a direction,
+         * and the wall only starts closing once they are back inside it.
+         */
+        let out = false;
+        for (const arm of hole.arms) {
+          if (arm.path && arm.path.length > 2) {
+            out = true;
+            if (arm.phase2 !== 'back') {
+              arm.phase2 = 'back';
+              arm.timer = 0;
+            }
+            // ...and stay back. Without this the arm reaches its stub, decides
+            // it has finished retracting, and sets off again into a hole that
+            // is trying to close behind it.
+            arm.holdBack = true;
+          }
+        }
+        if (!out) {
+          hole.arms.length = 0;
+          hole.closing = Math.min(1, hole.closing + step / 1.8);
+          if (hole.closing >= 1) {
+            for (const brick of hole.gone) state.taken.delete(brick);
+            state.holes.splice(i, 1);
+          }
         }
       }
     }
@@ -740,7 +779,7 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
   } else if (arm.phase2 === 'feel' && arm.timer > 6 + arm.girth * 6) {
     arm.phase2 = 'back';
     arm.timer = 0;
-  } else if (arm.phase2 === 'back' && arm.path.length <= 2) {
+  } else if (arm.phase2 === 'back' && arm.path.length <= 2 && !arm.holdBack) {
     arm.phase2 = 'out';
     arm.timer = 0;
     // Back to a single joint at the hole, not to the two-joint stub retraction
@@ -753,7 +792,7 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
     arm.angle = -Math.PI / 2 + (rng() - 0.5) * 2.4;
   }
 
-  const speed = Math.max(1, p.crawl) * (arm.phase2 === 'back' ? 1.7 : 1);
+  const speed = Math.max(1, p.crawl) * (arm.pace ?? 1) * (arm.phase2 === 'back' ? 1.6 : 1);
   arm.carry += speed * dt;
   let steps = Math.floor(arm.carry / stepPx);
   if (steps > 6) {
@@ -939,6 +978,68 @@ function angleDelta(from, to) {
 }
 
 /**
+ * Interpolate a smoother spine through the crawled one.
+ *
+ * The crawl steps about two thirds of the arm's width at a time and the ribbon
+ * joins those with straight lines, so the outline is visibly faceted — a
+ * tentacle made of flat panels. The obvious fix is to draw curves between the
+ * joints instead, and it is a trap: `fitWidths` validates *vertices*, and a
+ * curve bulges away from them into space nothing has checked. Two separate
+ * rounds of this file have been spent on exactly that class of mistake.
+ *
+ * Adding vertices has no such problem. A Catmull-Rom pass through the existing
+ * joints puts a point every few pixels, the outline is straight between them so
+ * it stays where it is drawn, and the clearance pass then validates all of them
+ * — smoother *and* still provably off the glass.
+ */
+function subdivide(joints, widths, k, container, obstacles) {
+  if (k < 2 || joints.length < 3) return { joints, widths };
+  const n = joints.length;
+  const at = (i) => joints[Math.max(0, Math.min(n - 1, i))];
+  const wAt = (i) => widths[Math.max(0, Math.min(n - 1, i))];
+  const outJ = [];
+  const outW = [];
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = at(i - 1);
+    const p1 = at(i);
+    const p2 = at(i + 1);
+    const p3 = at(i + 2);
+    for (let s = 0; s < k; s++) {
+      const t = s / k;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      // Standard Catmull-Rom. Passes through every original joint, so the
+      // crawl's own path is preserved exactly and only the gaps are filled.
+      let x = 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3);
+      let y = 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3);
+      /**
+       * A spline overshoots on the outside of a tight bend, and a point that
+       * lands inside a window cannot be rescued by thinning the arm there —
+       * thinning pulls the flanks in towards a spine that is already on the
+       * glass. So an interpolated point that is not clear falls back to the
+       * straight line between the two crawled joints, and failing that to the
+       * nearer of the two, both of which the crawl validated when it placed
+       * them. The smoothing is a nicety; the containment is not.
+       */
+      if (container && !isClear(container, obstacles, x, y)) {
+        x = p1.x + (p2.x - p1.x) * t;
+        y = p1.y + (p2.y - p1.y) * t;
+        if (!isClear(container, obstacles, x, y)) {
+          const near = t < 0.5 ? p1 : p2;
+          x = near.x;
+          y = near.y;
+        }
+      }
+      outJ.push({ x, y });
+      outW.push(wAt(i) + (wAt(i + 1) - wAt(i)) * t);
+    }
+  }
+  outJ.push(at(n - 1));
+  outW.push(wAt(n - 1));
+  return { joints: outJ, widths: outW };
+}
+
+/**
  * Pull in the half-width anywhere the ribbon's own outline would not fit.
  *
  * Uses exactly the normal `tentacleRibbon` uses, because the whole point is to
@@ -1022,6 +1123,74 @@ function fitWidths(container, obstacles, joints, widths) {
     // evening and none. It costs a nick a fraction of a pixel wide.
     widths[i] = Math.min(widths[i], fits ? w : 0);
   }
+
+  /**
+   * And no sudden steps in the result.
+   *
+   * Both of the rules above act on one vertex at a time, so a single tight spot
+   * — a bend against a window reveal, a spline point that had to be pulled back
+   * — takes that vertex to nothing while its neighbours stay full width. The
+   * ribbon then has a notch cut out of it, which after all this work is the one
+   * thing that still looked machine-made.
+   *
+   * Two passes limit how fast the width may fall away, forwards and backwards.
+   * Both only ever *reduce* a width, so everything above still holds: a pinch
+   * becomes a smooth taper into it and out the other side, which is what a limb
+   * squeezing past something looks like anyway.
+   */
+  const SLOPE = 0.55;
+  for (let i = 1; i < n; i++) {
+    const step = Math.hypot(joints[i].x - joints[i - 1].x, joints[i].y - joints[i - 1].y);
+    widths[i] = Math.min(widths[i], widths[i - 1] + SLOPE * step);
+  }
+  for (let i = n - 2; i >= 0; i--) {
+    const step = Math.hypot(joints[i + 1].x - joints[i].x, joints[i + 1].y - joints[i].y);
+    widths[i] = Math.min(widths[i], widths[i + 1] + SLOPE * step);
+  }
+
+  /**
+   * Then check the smoothed widths, because *reducing* one is not safe either.
+   *
+   * That reads as nonsense and is the third time this exact property has bitten
+   * this file: clearance is not convex, so a flank pulled *in* can land inside
+   * a window that the wider one cleared by passing over it and out the far
+   * side. The fit above samples a few radii along each ray for exactly that
+   * reason, and the smoothing then moves the width to one it never sampled.
+   *
+   * So the final answer is verified, and pinches to the centreline if it has
+   * to. A notch here is rare — it needs the smoothing to have lowered a width
+   * into an obstructed band — and its neighbours are already tapered, so what
+   * survives is a narrowing rather than the square-cut gap this pass exists to
+   * remove.
+   */
+  for (let i = 0; i < n; i++) {
+    const a = joints[i];
+    const b = joints[Math.min(i + 1, n - 1)];
+    const prev = joints[Math.max(i - 1, 0)];
+    const angle = Math.atan2(b.y - prev.y, b.x - prev.x) + Math.PI / 2;
+    const cx = Math.cos(angle);
+    const cy = Math.sin(angle);
+    let w = widths[i];
+    // Only a width of exactly nothing is accepted unchecked. A fifth of a pixel
+    // sounds like nothing and is still a pixel wide once it is projected.
+    let fits = w <= 0;
+    for (let tries = 0; tries < 6 && !fits; tries++) {
+      // Every radius that gets drawn, not just the outermost: the rim goes at
+      // the full width and the body inside it at 85%, and a ray that crosses a
+      // window and comes out the far side clears at one and not the other.
+      let clear = true;
+      for (const f of [1, 0.85, 0.45]) {
+        if (!isClear(container, obstacles, a.x + cx * w * f, a.y + cy * w * f)
+          || !isClear(container, obstacles, a.x - cx * w * f, a.y - cy * w * f)) {
+          clear = false;
+          break;
+        }
+      }
+      if (clear) fits = true;
+      else w *= 0.6;
+    }
+    widths[i] = fits ? w : 0;
+  }
 }
 
 /**
@@ -1046,7 +1215,7 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
   const emerge = out * out * (3 - 2 * out); // smoothstep
   if (emerge < 0.01) return;
 
-  const n = arm.path.length;
+  let n = arm.path.length;
   const base = Math.max(4, p.thickness) * arm.girth;
   const wave = t * p.writhe * arm.rate + arm.phase;
   const writhe = clamp(p.writhe, 0, 3);
@@ -1155,6 +1324,16 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
     joints.push({ x: sx, y: sy });
   }
 
+  // Smooth first, then fit: every vertex the smoothing introduces has to be
+  // checked like any other, and checking before adding them would be checking
+  // the wrong outline.
+  const dense = subdivide(joints, widths, 3, container, obstacles);
+  joints.length = 0;
+  widths.length = 0;
+  joints.push(...dense.joints);
+  widths.push(...dense.widths);
+  n = joints.length;
+
   /**
    * And where even the reduced sway leaves a flank over a window or off the
    * gable, thin the arm there instead.
@@ -1248,20 +1427,50 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
    * photograph would show.
    */
   if (p.suckers > 0) {
-    // Spaced by the arm's own girth rather than one per joint. The step length
-    // is now well under the width, so one sucker a joint is a solid chain of
-    // overlapping discs — which is most of what read as a row of peas.
-    const gap = Math.max(1, Math.round(base * 0.75 / Math.max(1, base * 0.55)) + 1);
-    g.fillStyle = rgba(mixHex(p.armTip, '#ffffff', 0.12), 0.3 * p.suckers);
-    for (let i = 1; i < n - 1; i += gap) {
+    /**
+     * Spaced along the arm, not one per joint.
+     *
+     * They used to be placed per joint, and the joint spacing is set by the
+     * crawl step and then tripled by the smoothing — so they came out as a
+     * solid overlapping chain, which is most of what read as blocky. Walking
+     * the arm by distance and dropping one every couple of diameters puts them
+     * where they belong regardless of how finely the spine happens to be
+     * divided, and they thin out towards the tip with the arm.
+     *
+     * Ellipses rather than circles, squashed along the arm's own axis: a sucker
+     * is a disc on the side of a cylinder, so from any angle worth drawing it
+     * is foreshortened. That one detail does more than the size or the spacing.
+     */
+    const side = arm.side ?? 1;
+    let since = Infinity;
+    for (let i = 1; i < n - 1; i++) {
       const a = joints[i];
       const b = joints[i + 1];
-      const dir = Math.atan2(b.y - a.y, b.x - a.x) + (Math.PI / 2) * arm.side;
-      const r = widths[i] * 0.2;
+      const seg = Math.hypot(b.x - a.x, b.y - a.y);
+      since += seg;
+      const r = widths[i] * 0.22;
       if (r < 1.2) continue;
+      if (since < r * 4.4) continue;
+      since = 0;
+
+      const along = Math.atan2(b.y - a.y, b.x - a.x);
+      const nrm = along + (Math.PI / 2) * side;
+      // A little variation in size and offset, or a row of identical discs
+      // reads as machined rather than grown.
+      const vary = 0.82 + 0.36 * Math.abs(Math.sin(i * 1.7 + arm.phase));
+      g.fillStyle = rgba(mixHex(p.armTip, '#ffffff', 0.12), 0.3 * p.suckers);
+      g.save();
+      g.translate(a.x + Math.cos(nrm) * widths[i] * 0.4, a.y + Math.sin(nrm) * widths[i] * 0.4);
+      g.rotate(along);
       g.beginPath();
-      g.arc(a.x + Math.cos(dir) * widths[i] * 0.42, a.y + Math.sin(dir) * widths[i] * 0.42, r, 0, TAU);
+      g.ellipse(0, 0, r * vary * 0.62, r * vary, 0, 0, TAU);
       g.fill();
+      // The rim, a shade darker, which is what stops them looking like paint.
+      g.fillStyle = rgba(mixHex(p.armColor, '#000000', 0.4), 0.3 * p.suckers);
+      g.beginPath();
+      g.ellipse(0, r * vary * 0.22, r * vary * 0.34, r * vary * 0.42, 0, 0, TAU);
+      g.fill();
+      g.restore();
     }
   }
 

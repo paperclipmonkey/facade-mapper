@@ -185,6 +185,11 @@ in until it fits, and where even that leaves an edge over a window the arm is
 frame is invisible; one that covers the glass is the only thing anybody
 notices.
 
+Each arm has its own pace, girth, reach and lean, so a clutch out of one hole
+never moves in lockstep — which is the kind of wrongness you feel before you can
+name it. And when a hole heals, the arms are pulled back inside it before the
+bricks return, rather than fading out where they stand.
+
 **Crawl speed**, **Wander**, **Feel round frames** and **Seek bare wall** are the
 steering. Turn Seek bare wall down and a clutch of arms will pile up on top of
 one another; turn Feel round frames down and they cross open wall instead of
