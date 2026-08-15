@@ -122,6 +122,20 @@ and is available to effects you write yourself.
 
 ### Brick, and what is behind it
 
+**Sizing the bricks.** The starter is set to about 1.4× life, and that is a
+compromise rather than an oversight. A real brick is 215 × 65mm with a 10mm
+joint; on a 6-metre wall through an XGA projector that joint lands at under two
+projector pixels and turns into grey haze — under the four-pixel floor. Since
+the joint has to be exaggerated, the brick has to be exaggerated with it, or you
+get thin bricks with cartoon mortar. To work it out for your own wall: divide
+1920 by the width in metres to get drawing-pixels per metre, and keep the mortar
+above 4 of them.
+
+If the house already has some real brick on it — a reveal round the door, a
+plinth under a bay — sample those colours for the projected wall. Having the two
+agree is most of what makes it read as masonry rather than as a pattern, because
+the eye has a reference two feet away from it.
+
 **Brickwork** exists for one situation and solves it completely: a rendered,
 painted or pale wall has no surface of its own, so everything projected onto it
 reads as a slide on a sheet. Give it masonry first and every effect above it

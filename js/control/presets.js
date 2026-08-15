@@ -111,8 +111,21 @@ const HALLOWEEN = () => [
     name: 'Brick',
     tags: ['wall'],
     params: {
-      color: '#7a4030', color2: '#4a2620', mortar: '#241f1d',
-      brickW: 132, brickH: 44, gap: 7, variation: 0.6, relief: 0.7,
+      /**
+       * Matched to the real brick a 1930s semi already has — the reveal round
+       * the door and the plinth under the bay. Getting those two to agree with
+       * the projected wall is most of why this reads as masonry rather than as
+       * a pattern: the eye has a reference two feet away from it.
+       *
+       * Size is about 1.4× life, and that is a compromise rather than a
+       * mistake. A real brick is 215 × 65mm with a 10mm joint; on a 6-metre
+       * wall through an XGA projector that joint lands at under two projector
+       * pixels and turns into grey haze — under the four-pixel floor. Since the
+       * joint has to be exaggerated, the brick is exaggerated with it, or you
+       * get thin bricks with cartoon mortar.
+       */
+      color: '#8f4a33', color2: '#5f3024', mortar: '#2b2621',
+      brickW: 76, brickH: 24, gap: 5, variation: 0.6, relief: 0.7,
       obstacles: 'window, door', seed: 1,
     },
   }),
@@ -120,8 +133,8 @@ const HALLOWEEN = () => [
     name: 'Something behind the wall',
     tags: ['wall'],
     params: {
-      brickW: 132, brickH: 44, gap: 7, rate: 5, cluster: 5, holes: 3, heal: 40,
-      brick: '#6d3828', void: '#08040c', innerGlow: '#4bff8f', glowAmount: 0.8,
+      brickW: 76, brickH: 24, gap: 5, rate: 5, cluster: 8, holes: 3, heal: 40,
+      brick: '#7d4130', void: '#08040c', innerGlow: '#4bff8f', glowAmount: 0.8,
       arms: 3, armColor: '#24402c', armTip: '#8ccc52', thickness: 34, suckers: 0.9,
       reach: 0.9, writhe: 1, dust: 0.7, gravity: 1400,
       obstacles: 'window, door', seed: 1,

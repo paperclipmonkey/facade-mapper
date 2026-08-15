@@ -44,9 +44,20 @@ the cold.
 the Start here panel, or open the app with [`?demo`](../index.html?demo)
 appended to the URL.
 
-That loads a complete show: a facade to trace on, five windows and a door
-already traced and tagged, a projector already aligned, and a Halloween look
-running. Nothing about it is a mock-up — the shapes, the effects, the alignment
+That loads a complete show: a facade to trace on, its windows and door already
+traced and tagged, a projector already aligned, and a Halloween look running.
+
+The facade is a 1930s rendered semi, because that is what most of the houses
+this gets pointed at actually are, and the details it has are the ones that
+change what the effects have to deal with. A **hipped** roof, so the front
+eaves is a horizontal gutter rather than a gable rake — which is the best thing
+that can happen to a string of fairy lights, since a rake makes them climb and
+half the roofline ends up pointing at the sky. A **bay** on the ground floor,
+which is a wide low opening quite unlike a flat window. A **flat-roofed store**
+on one side, for snow to settle on. **White render** rather than brick, which is
+why Brickwork exists. And the **neighbour's half** carrying on past the party
+wall, which is the most useful thing about a semi to practise on: the projector
+quad stops at the party wall, because you light your half and not theirs. Nothing about it is a mock-up — the shapes, the effects, the alignment
 and the preview are all the same code a real show runs, so anything you learn
 there is directly transferable. It opens as its own show, so it never costs you
 one you were working on.
