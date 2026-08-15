@@ -245,6 +245,24 @@ export const GRADE_PRESETS = [
     },
   },
   {
+    id: 'white-wall',
+    name: 'White wall',
+    description: 'For rendered, painted or pale brick. Crushes the low end hard, because a light wall shows every bit of grey a projector cannot help emitting.',
+    values: {
+      // A projector cannot emit darkness, and a white wall reflects three or
+      // four times as much of the grey it does emit as brick does. So the black
+      // parts of the frame are the problem: gamma below one and a firm contrast
+      // pull the low end down towards where the wall disappears, and a slightly
+      // lower exposure keeps the mid-tones off the ceiling once the extra
+      // reflectance is doing its work. Saturation stays near neutral because a
+      // white surface already reproduces colour properly — the boost that makes
+      // brick look alive makes render look like a cartoon.
+      bloom: 0.32, bloomThreshold: 0.68, bloomKnee: 0.2, bloomRadius: 1.1,
+      exposure: 0.95, contrast: 1.3, saturation: 1.02, temperature: 0,
+      gamma: 0.82, tonemap: true,
+    },
+  },
+  {
     id: 'saturated',
     name: 'Saturated',
     description: 'Punchy colour with a big halo. Fairy lights and chases.',

@@ -55,7 +55,7 @@ const HALLOWEEN = () => [
   layer('embers', {
     name: 'Drifting embers',
     opacity: 0.7,
-    params: { hotTemp: 2200, coolTemp: 1050, count: 70, rise: 30, drift: 18, turbulence: 24, size: 3, twinkle: 0.6, opacity: 0.7 },
+    params: { hotTemp: 2200, coolTemp: 1050, count: 70, rise: 30, drift: 18, turbulence: 24, size: 5, twinkle: 0.6, opacity: 0.7 },
   }),
   layer('candle', {
     name: 'Candlelit windows',
@@ -94,7 +94,38 @@ const HALLOWEEN = () => [
     name: 'Cobwebs',
     tags: ['window'],
     opacity: 0.35,
-    params: { color: '#dfe8f5', corner: 'top-left', rings: 6, spokes: 10, width: 1.6, scale: 0.8, spider: true },
+    // 5, not the 1.6 this used to be: a web thread at 1.6 world pixels lands
+    // under one projector pixel and turns into grey haze. See the four-pixel
+    // floor in docs/effects.md.
+    params: { color: '#dfe8f5', corner: 'top-left', rings: 6, spokes: 10, width: 5, scale: 0.8, spider: true },
+  }),
+  // Brick, then the thing behind the brick, then the rot growing over both.
+  // The order is the whole point: Breach has to draw after the wall it is
+  // taking apart, and the vine has to draw after the wall it is climbing.
+  //
+  // On a rendered or painted house this bottom layer is doing more work than
+  // anything else in the preset — it is what turns a flat pale wall into a
+  // surface, and every effect above it stops looking like a slide projected
+  // onto a sheet.
+  layer('brickwork', {
+    name: 'Brick',
+    tags: ['wall'],
+    params: {
+      color: '#7a4030', color2: '#4a2620', mortar: '#241f1d',
+      brickW: 132, brickH: 44, gap: 7, variation: 0.6, relief: 0.7,
+      obstacles: 'window, door', seed: 1,
+    },
+  }),
+  layer('breach', {
+    name: 'Something behind the wall',
+    tags: ['wall'],
+    params: {
+      brickW: 132, brickH: 44, gap: 7, rate: 5, cluster: 5, holes: 3, heal: 40,
+      brick: '#6d3828', void: '#08040c', innerGlow: '#4bff8f', glowAmount: 0.8,
+      arms: 3, armColor: '#24402c', armTip: '#8ccc52', thickness: 34, suckers: 0.9,
+      reach: 0.9, writhe: 1, dust: 0.7, gravity: 1400,
+      obstacles: 'window, door', seed: 1,
+    },
   }),
   // Aimed at the wall, and falling back to the whole frame if nothing is
   // tagged `wall` — either way it treats the windows and door as solid and
@@ -125,7 +156,7 @@ const HALLOWEEN = () => [
     needsTag: 'sign',
     params: {
       content: 'TRICK OR TREAT', mode: 'path', font: 'impact', weight: '900', size: 1.05,
-      tracking: 0.06, color: '#ff7a18', stroke: '#1a0500', strokeWidth: 3, glow: 22,
+      tracking: 0.06, color: '#ff7a18', stroke: '#1a0500', strokeWidth: 5, glow: 22,
       align: 'centre', animation: 'flicker', speed: 1.1, amount: 0.6, pathOffset: 0,
     },
   }),
@@ -143,7 +174,7 @@ const CHRISTMAS = () => [
   layer('stars', {
     name: 'Stars',
     opacity: 0.7,
-    params: { color: '#ffffff', count: 120, size: 3.5, twinkle: 0.9, spikes: true, shooting: 3 },
+    params: { color: '#ffffff', count: 120, size: 7, twinkle: 0.9, spikes: true, shooting: 3 },
   }),
   // Icicles go on before the lights: they are the solid thing hanging off the
   // gutter, and the bulbs need to read as sitting in front of them.
@@ -151,7 +182,7 @@ const CHRISTMAS = () => [
     name: 'Icicles',
     tags: ['roof', 'trim'],
     opacity: 0.8,
-    params: { color: '#bfe9ff', tip: '#ffffff', count: 26, length: 0.1, variation: 0.65, width: 0.8, grow: 0, glint: 0.45 },
+    params: { color: '#bfe9ff', tip: '#ffffff', count: 26, length: 0.1, variation: 0.65, width: 4, grow: 0, glint: 0.45 },
   }),
   layer('fairy-lights', {
     name: 'Roofline lights',
@@ -190,7 +221,7 @@ const CHRISTMAS = () => [
     stagger: 2.5,
     params: {
       color: '#bfe4ff', tip: '#ffffff', coverage: 0.8, grow: 40, fronds: 24,
-      branch: 0.6, sharpness: 0.5, thickness: 2, bloom: 0.4, sparkle: 0.5,
+      branch: 0.6, sharpness: 0.5, thickness: 4, bloom: 0.4, sparkle: 0.5,
     },
   }),
   // Settling is stated rather than left to the defaults. This layer used to
@@ -221,7 +252,7 @@ const CHRISTMAS = () => [
     needsTag: 'sign',
     params: {
       content: 'MERRY CHRISTMAS', mode: 'path', font: 'serif', weight: '700', size: 0.95,
-      tracking: 0.1, color: '#ffe9b0', stroke: '#ffffff', strokeWidth: 2, glow: 16,
+      tracking: 0.1, color: '#ffe9b0', stroke: '#ffffff', strokeWidth: 4, glow: 16,
       align: 'centre', animation: 'wave', speed: 0.5, amount: 0.25, pathOffset: 0,
     },
     bindings: {

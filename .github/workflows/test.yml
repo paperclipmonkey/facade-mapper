@@ -60,3 +60,6 @@ jobs:
 
       - name: Layer diagnostic tests
         run: node test/diagnostics.test.mjs
+
+      - name: Brickwork and breach tests
+        run: node test/brickwork.test.mjs

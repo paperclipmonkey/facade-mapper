@@ -7,6 +7,7 @@ file is for the ideas behind them.
 - [Targeting](#targeting)
 - [Effects that know where the windows are](#effects-that-know-where-the-windows-are)
 - [Paths and animation](#paths-and-animation)
+- [Drawing for a projector](#drawing-for-a-projector)
 - [The look](#the-look)
 - [Modulating parameters](#modulating-parameters)
 - [Triggers](#triggers)
@@ -74,6 +75,8 @@ by default.
 | **Bouncing Balls** | Loose on the wall, ricocheting off the windows and doors. Add gravity and they fall, bounce off the sills and settle. |
 | **Serpent** | A snake that explores the wall, steering round the openings rather than across them. |
 | **Creeping Vine** | Ivy, mould or veins spreading over the brickwork and creeping *around* the frames. Seeks out bare wall and wraps every opening it finds. |
+| **Brickwork** | A course of brick laid over the shape, in running bond, with openings cut cleanly where the windows are. |
+| **Breach** | Bricks work loose, shudder, and drop out — and something reaches through the hole they leave. Goes directly over Brickwork. |
 
 **Keeping the vine alive.** Growth is permanent by construction — that is what
 makes a wall of ivy cost one `drawImage` a frame — so left alone it fills to its
@@ -117,6 +120,35 @@ most photographic effect in the world when it does not.
 The collision model is in [`js/effects/obstacles.js`](../js/effects/obstacles.js)
 and is available to effects you write yourself.
 
+### Brick, and what is behind it
+
+**Brickwork** exists for one situation and solves it completely: a rendered,
+painted or pale wall has no surface of its own, so everything projected onto it
+reads as a slide on a sheet. Give it masonry first and every effect above it
+starts to look like light falling on a building. Openings are *cut* rather than
+left unlaid — running bond staggers alternate courses, so "skip any brick
+centred in this window" leaves a ragged scatter round each opening like a bad
+tooth, where a real wall has a clean reveal.
+
+**Breach** takes that wall apart. Bricks rattle in their beds for the best part
+of a second before they go, one at a time, tumbling down the wall with a puff of
+dust; the gap left behind is lit from inside by something you cannot see, and
+tentacles push out of it and feel around. Put it directly above Brickwork with
+the same brick dimensions.
+
+Three settings are worth knowing:
+
+- **Wall heals after (s)** puts the wall back and lets it be broken somewhere
+  else. Without it the effect spends its holes in the first minute and then has
+  nothing left to do for the rest of the evening. Set it to zero when firing a
+  short scene from a trigger, where permanence is the point.
+- **Holes at once** and **Bricks per hole** decide whether this is one enormous
+  breach or a wall coming apart everywhere. Neighbouring gaps merge into a
+  single opening, mortar and all.
+- **Suckers** is what stops the tentacles reading as foliage. So does the curl
+  at the tip. Turn both down and you have vines coming out of a hole, which is
+  also a good look, just a different one.
+
 ## Paths and animation
 
 Any shape — closed area or open line — carries an arc-length path. Chase, Fairy
@@ -130,6 +162,42 @@ outline that thickens with the room, or "TRICK OR TREAT" guttering like a bad
 neon tube. Text longer than its path is shrunk to fit rather than running off
 the end; turn **Shrink to fit path** off if you meant to scroll it along with
 **Position on path**.
+
+## Drawing for a projector
+
+Effects draw in a virtual space 1920 pixels wide, and a domestic projector is
+usually narrower than that. On XGA — 1024 across — one drawing pixel is a bit
+over half a projector pixel, and on a 6-metre wall a projector pixel is about
+6mm. Two numbers follow from that, and they are worth knowing before you spend
+an evening wondering why something looks like haze.
+
+**Nothing thinner than about 4.** Any width, thickness or size setting is in
+drawing pixels, so 4 is roughly two projector pixels on a 1024-wide output —
+about 12mm on a 6-metre wall. Below that a line does not vanish (the render is
+supersampled, so it fades rather than flickers), but it goes dim, loses its
+colour, and stops reading as a line at all. The starter presets were all raised
+to that floor: cobwebs went from 1.6 to 5, star size from 3.5 to 7, icicle
+edges from 0.8 to 4, frost branches from 2 to 4, text outlines from 2–3 to 4–5.
+If you are writing an effect, treat 4 as the minimum feature and let bloom do
+the rest — spreading a bright thin thing over several pixels is exactly what it
+is for.
+
+**Turn Render detail up.** It is a per-projector slider, default 1.25, and it
+sets how much bigger than the output the intermediate buffer is. At 1.25 an XGA
+projector renders at 1280 wide; at 2.0 it renders at 2048 and downsamples, which
+visibly cleans up thin strokes, text edges and anything moving slowly. It costs
+GPU upload bandwidth per frame and nothing else, and a single XGA output has
+plenty of headroom for it.
+
+**Black is the hard part, not white.** A projector cannot emit darkness, and
+real ANSI contrast on a domestic machine is nearer 200:1 than the 2000:1 on the
+box. Whatever grey lands in the "black" parts of your frame lands on the wall,
+and a white or rendered wall reflects three or four times as much of it as brick
+does. Hence the **White wall** look: gamma below one and a firm contrast, to
+pull the low end down to where the wall disappears, and saturation left near
+neutral because a pale surface already reproduces colour properly. Trace the
+wall and mask to it; a lit rectangle with a visible edge gives the whole thing
+away faster than any amount of pixel structure.
 
 ## The look
 

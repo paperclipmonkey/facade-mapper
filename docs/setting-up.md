@@ -14,6 +14,7 @@ behind it.
 - [When the wall is not flat](#when-the-wall-is-not-flat)
 - [Several projectors](#several-projectors)
 - [Tracing](#tracing)
+- [Matching the show to the projector and the wall](#matching-the-show-to-the-projector-and-the-wall)
 - [Running it every night](#running-it-every-night)
 - [Where everything is stored](#where-everything-is-stored)
 
@@ -196,6 +197,45 @@ While drawing: <kbd>Enter</kbd> finishes, <kbd>Esc</kbd> cancels,
 <kbd>Backspace</kbd> removes the last point. Afterwards, <kbd>Alt</kbd>-click an
 edge to add a point or a point to remove it, and <kbd>Shift</kbd>-drag to line a
 point up with its neighbour.
+
+## Matching the show to the projector and the wall
+
+Worth ten minutes of arithmetic before you buy anything, because the answer is
+usually not the one you expect.
+
+**Resolution is rarely the problem.** XGA — 1024 across — thrown 6 metres wide
+gives pixels 5.9mm across. At the 8 to 12 metres people actually watch from,
+that is around two arcminutes: about twice the eye's resolving limit, so the
+pixel grid is invisible unless somebody walks up to within four or five metres.
+What *is* a problem is thin detail, because effects draw in a 1920-wide space
+and get squeezed into 1024 — see [the four-pixel floor](effects.md#drawing-for-a-projector).
+
+**Brightness is rarely the problem either, on a dark wall.** 3400 lumens over
+6 × 4.5 metres is about 126 lux at full white, which off brick is roughly
+10 cd/m² and off render or white paint nearer 30 — cinema reference white is 48,
+so the second of those is genuinely bright once your eyes have adjusted. And
+that is the figure for a fully lit frame; most looks are mostly black, so the
+lit parts get the whole lamp concentrated into a fraction of the area. Killing
+the porch light and asking the neighbour about theirs will do more for the image
+than doubling the lumens.
+
+**Throw distance usually is the problem.** A projector of that class is often
+1.5–1.9:1, so a 6-metre-wide image wants 9 to 11.4 metres of standing-back room.
+That is a large front garden. Two projectors side by side, each covering 3
+metres, need only 4.5 to 5.7 — which is the real reason to run two, rather than
+brightness or pixels. A short-throw lens solves the same problem with one.
+
+**A 4:3 projector on a 6 × 5 metre wall** covers 6 × 4.5, so you will be half a
+metre short at the top, or spilling two thirds of a metre off each side if you
+frame to the height instead. Decide which before you mount anything.
+
+**On a white or rendered wall**, start from the **White wall** look rather than
+Neutral, and consider putting **Brickwork** underneath the whole show. A pale
+flat wall has no surface of its own, which is why projections onto one read as a
+slide on a bedsheet; giving it masonry to be made of fixes that in one layer.
+The other thing a light wall changes is the black end — it reflects three or
+four times as much of the grey a projector cannot help emitting — so crushing
+the low end matters more here than anywhere else.
 
 ## Running it every night
 
