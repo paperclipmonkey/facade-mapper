@@ -200,11 +200,25 @@ const brickwork = {
   init() {
     return { key: '' };
   },
-  draw({ g, p, shape, state, shapes, stable }) {
+  draw({ g, p, shape, state, shapes, stable, share }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2) return;
 
     const obstacles = collectObstacles(shapes, p.obstacles, shape.id);
+
+    /**
+     * Publish the course this wall was actually laid to.
+     *
+     * From `stable`, because that is what got baked — a mortar width bound to
+     * the microphone changes `p` sixty times a second and changes the wall
+     * never. Breach reads this so its holes land on real bricks without anybody
+     * typing the same three numbers into two panels and keeping them in step.
+     */
+    share?.set(`brickwork:${shape.id}`, {
+      w: Math.max(6, stable.brickW),
+      h: Math.max(3, stable.brickH),
+      gap: Math.max(0, stable.gap),
+    });
     const key = wallKey(shape, stable, obstacles);
     if (state.key !== key) {
       state.key = key;
@@ -281,9 +295,18 @@ const breach = {
   description:
     'Bricks work loose, shudder, and drop out of the wall — and something reaches out through the hole they leave. Put it directly over Brickwork, matched to the same brick size.',
   params: [
-    { key: 'brickW', type: 'range', label: 'Brick width', default: 132, min: 20, max: 400, step: 2 },
-    { key: 'brickH', type: 'range', label: 'Brick height', default: 44, min: 8, max: 160, step: 1 },
-    { key: 'gap', type: 'range', label: 'Mortar', default: 7, min: 0, max: 30, step: 0.5 },
+    /**
+     * Take the brick size from the Brickwork layer underneath, if there is one
+     * on the same shape. On by default: two layers taking a wall apart together
+     * that disagree about where the bricks are is never what anybody wanted,
+     * and lining them up by hand is fiddly and goes stale the moment either is
+     * touched. Turn it off to breach a wall that already has brick on it — a
+     * real one, or a photograph.
+     */
+    { key: 'match', type: 'bool', label: 'Match the brickwork', default: true },
+    { key: 'brickW', type: 'range', label: 'Brick width', default: 76, min: 20, max: 400, step: 2 },
+    { key: 'brickH', type: 'range', label: 'Brick height', default: 24, min: 8, max: 160, step: 1 },
+    { key: 'gap', type: 'range', label: 'Mortar', default: 5, min: 0, max: 30, step: 0.5 },
     { key: 'rate', type: 'range', label: 'Bricks a minute', default: 7, min: 0, max: 60, step: 1 },
     { key: 'cluster', type: 'range', label: 'Bricks per hole', default: 5, min: 1, max: 16, step: 1 },
     { key: 'holes', type: 'range', label: 'Holes at once', default: 3, min: 1, max: 10, step: 1 },
@@ -312,14 +335,18 @@ const breach = {
   init() {
     return { key: '', holes: [], falling: [], motes: [], since: 0 };
   },
-  draw({ g, p, shape, t, dt, rng, state, shapes, stable }) {
+  draw({ g, p, shape, t, dt, rng, state, shapes, stable, share }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2) return;
 
     const obstacles = collectObstacles(shapes, p.obstacles, shape.id);
-    const w = Math.max(6, p.brickW);
-    const h = Math.max(3, p.brickH);
-    const gap = Math.max(0, p.gap);
+    // The grid the Brickwork layer on this shape laid, if there is one. Both
+    // effects build their courses from the same bbox with the same maths, so
+    // agreeing on these three numbers is all it takes to agree on every brick.
+    const laid = p.match ? share?.get(`brickwork:${shape.id}`) : null;
+    const w = laid ? laid.w : Math.max(6, p.brickW);
+    const h = laid ? laid.h : Math.max(3, p.brickH);
+    const gap = laid ? laid.gap : Math.max(0, p.gap);
 
     // The same grid the Brickwork layer under this one laid, recomputed rather
     // than shared: two layers cannot see each other's state, and matching the

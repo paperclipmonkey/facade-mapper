@@ -383,7 +383,11 @@ function insidePoly(pts, x, y) {
   const nearBase = [];
   for (const g of seen.slice(400)) {
     const s0 = spinesIn(g)[0];
-    if (!s0 || s0.spine.length < 8) continue;
+    // Long arms only. Thickness near the base is a fact about the limb, but the
+    // last stretch of *any* arm is its growing point and is legitimately thin —
+    // so on a short arm the sample point is inside that and the two properties
+    // are not separable. Twenty joints puts it clear.
+    if (!s0 || s0.spine.length < 20) continue;
     // Half-width three joints out from the hole, which is always the same
     // distance along the arm whatever the arm is doing.
     const i = 3;
@@ -423,6 +427,87 @@ function insidePoly(pts, x, y) {
   const b = ribbon(seen[1001]);
   ok('no writhe means no movement', Boolean(a) && Boolean(b)
     && Math.hypot(a[5].x - b[5].x, a[5].y - b[5].y) < 0.001);
+}
+
+console.log('\n— the two layers agree about the bricks —');
+
+{
+  /**
+   * Brickwork lays a wall, Breach takes bricks out of it. If the two disagree
+   * about the course, the holes land across brick faces and the whole thing
+   * falls apart — and keeping three numbers in step by hand across two panels
+   * is a chore with a wrong answer waiting in it.
+   *
+   * They are wired through the renderer's notice board, so the test drives both
+   * effects with one shared Map exactly as the renderer does.
+   */
+  const share = new Map();
+  const brickP = { ...defaultParams('brickwork'), brickW: 96, brickH: 30, gap: 6, obstacles: '' };
+  const breachP = { ...defaultParams('breach'), obstacles: '', rate: 60, heal: 0, arms: 0,
+    // Deliberately wrong, to prove they are not simply both on the defaults.
+    brickW: 210, brickH: 70, gap: 14 };
+
+  const bState = brickwork.init();
+  const xState = breach.init();
+  const rng = makeRng('pair');
+  let g = null;
+  let t = 0;
+  for (let f = 0; f < 900; f++) {
+    t += 1 / 60;
+    const common = { stable: null, shape: wall, shapes: () => [], t, dt: 1 / 60, rng,
+      i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120, audio: { level: 0, low: 0, mid: 0, high: 0 }, share };
+    brickwork.draw({ ...common, g: recordingContext(), p: brickP, stable: brickP, state: bState });
+    g = recordingContext();
+    breach.draw({ ...common, g, p: breachP, stable: breachP, state: xState });
+  }
+
+  const published = share.get(`brickwork:${wall.id}`);
+  ok('the wall publishes the course it laid', published?.w === 96 && published?.h === 30,
+    JSON.stringify(published));
+
+  const voids = g.rects.filter((r) => r.style === breachP.void);
+  ok('bricks came out', voids.length > 0, `${voids.length}`);
+
+  /**
+   * Every void should be one brick of the *laid* course, grown by the mortar
+   * joint — which is how neighbouring gaps merge into one hole. Against its own
+   * setting of 210 × 70 it would be nowhere near.
+   */
+  const wrong = voids.filter((r) =>
+    Math.abs(r.w - (96 + 6 * 2)) > 0.51 || Math.abs(r.h - (30 + 6 * 2)) > 0.51);
+  ok('and every one is the size of a laid brick, not of its own setting',
+    wrong.length === 0, `${wrong.length} of ${voids.length} the wrong size`);
+
+  // And they sit on the course, not across it.
+  const pitchY = 30 + 6;
+  const offCourse = voids.filter((r) => {
+    const rows = (r.y + 6 - wall.bbox.y) / pitchY;
+    return Math.abs(rows - Math.round(rows)) > 0.02;
+  });
+  ok('and lands on a course rather than across two', offCourse.length === 0,
+    `${offCourse.length} off the course`);
+}
+
+{
+  // And it can still be told not to, for a wall that is already brick.
+  const share = new Map();
+  share.set(`brickwork:${wall.id}`, { w: 96, h: 30, gap: 6 });
+  const p = { ...defaultParams('breach'), obstacles: '', rate: 60, heal: 0, arms: 0,
+    match: false, brickW: 210, brickH: 70, gap: 14 };
+  const state = breach.init();
+  const rng = makeRng('nomatch');
+  let g = null;
+  let t = 0;
+  for (let f = 0; f < 900; f++) {
+    t += 1 / 60;
+    g = recordingContext();
+    breach.draw({ g, p, stable: p, shape: wall, shapes: () => [], t, dt: 1 / 60, rng, state,
+      i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120, audio: { level: 0, low: 0, mid: 0, high: 0 }, share });
+  }
+  const voids = g.rects.filter((r) => r.style === p.void);
+  ok('with matching off it uses its own brick size',
+    voids.length > 0 && voids.every((r) => Math.abs(r.w - (210 + 14 * 2)) < 0.51),
+    `${voids.length} gaps`);
 }
 
 console.log('\n— arms are individuals —');

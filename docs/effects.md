@@ -144,7 +144,12 @@ left unlaid — running bond staggers alternate courses, so "skip any brick
 centred in this window" leaves a ragged scatter round each opening like a bad
 tooth, where a real wall has a clean reveal.
 
-**Breach** takes that wall apart. Bricks rattle in their beds for the best part
+**Breach** takes it apart, and takes the brick size from the Brickwork layer
+under it automatically — the two are drawing the same wall, so they agree about
+where the bricks are without anybody typing the same three numbers into two
+panels and keeping them in step. Change the course on the Brickwork layer and
+the holes follow. Turn **Match the brickwork** off to breach a wall that is
+already brick: a real one, or a photograph. Bricks rattle in their beds for the best part
 of a second before they go, one at a time, tumbling down the wall with a puff of
 dust; the gap left behind is lit from inside by something you cannot see, and
 tentacles push out of it and feel their way over the brickwork. Put it directly

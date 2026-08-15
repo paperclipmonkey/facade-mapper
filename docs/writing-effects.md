@@ -118,3 +118,23 @@ the show carries on. The message names the effect and the error. Compile errors
 appear under the editor with real line numbers, because the module is compiled
 through a `blob:` URL and imported, so you get proper ES module semantics rather
 than `new Function`.
+
+## Talking to another layer
+
+`ctx.share` is a `Map` every effect can read and write. Effects are otherwise
+completely independent, which is almost always right — but two of them drawing
+the same brick wall have to agree about where the bricks are, and the only
+alternative is asking somebody to keep two panels in step by hand.
+
+Key it with your own effect id so it cannot become a general-purpose global by
+accident, and publish the values you actually drew with rather than the ones you
+were given — `stable` rather than `p`, if a modulator can move them:
+
+```js
+share.set(`brickwork:${shape.id}`, { w, h, gap });   // publisher
+const laid = share.get(`brickwork:${shape.id}`);     // reader
+```
+
+It is not cleared between frames. A publisher normally draws first because it
+sits lower in the stack, but nothing enforces that, and a reader that finds the
+previous frame's values is right about everything that matters.

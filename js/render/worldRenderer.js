@@ -133,6 +133,8 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
 
   const instanceState = new Map(); // "layerId:effectId:shapeId" -> { state, rng, noise }
   const reportedErrors = new Set();
+  /** Values effects publish for each other. See `share` in the draw context. */
+  const share = new Map();
   let frameShapeCache = null;
   let frameShapeKey = '';
 
@@ -370,6 +372,22 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
           // the current shape's id as `exclude` so an effect does not collide
           // with the thing it is being drawn into.
           shapes: (tag, exclude) => sceneShapes(tag, exclude),
+          /**
+           * A notice board between layers.
+           *
+           * Effects are otherwise entirely independent, which is almost always
+           * right — but two of them drawing the same brick wall have to agree
+           * about where the bricks are, and making somebody type the same three
+           * numbers into two panels and keep them in step is not a design, it
+           * is a chore with a wrong answer waiting in it.
+           *
+           * Deliberately not cleared between frames. A publisher normally draws
+           * first because it sits lower in the stack, but nothing enforces
+           * that, and a reader that finds last frame's values is right about
+           * everything that matters. Keyed by the publisher, so this cannot
+           * become a general-purpose global by accident.
+           */
+          share,
           preview,
           /** Parameters *without* modulation. Key caches on this, never on `p`. */
           stable,
