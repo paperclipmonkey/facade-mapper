@@ -293,10 +293,10 @@ const breach = {
     { key: 'innerGlow', type: 'color', label: 'Light from inside', default: '#4bff8f' },
     { key: 'glowAmount', type: 'range', label: 'Inner glow', default: 0.8, min: 0, max: 3, step: 0.05 },
     { key: 'arms', type: 'range', label: 'Tentacles per hole', default: 3, min: 0, max: 8, step: 1 },
-    { key: 'armColor', type: 'color', label: 'Tentacle', default: '#24402c' },
-    { key: 'armTip', type: 'color', label: 'Tentacle tip', default: '#8ccc52' },
-    { key: 'thickness', type: 'range', label: 'Tentacle thickness', default: 20, min: 4, max: 110, step: 1 },
-    { key: 'suckers', type: 'range', label: 'Suckers', default: 0.9, min: 0, max: 1, step: 0.01 },
+    { key: 'armColor', type: 'color', label: 'Tentacle', default: '#243026' },
+    { key: 'armTip', type: 'color', label: 'Tentacle tip', default: '#79994a' },
+    { key: 'thickness', type: 'range', label: 'Tentacle thickness', default: 27, min: 4, max: 110, step: 1 },
+    { key: 'suckers', type: 'range', label: 'Suckers', default: 0.55, min: 0, max: 1, step: 0.01 },
     { key: 'reach', type: 'range', label: 'Reach', default: 0.9, min: 0.1, max: 3, step: 0.05 },
     { key: 'crawl', type: 'range', label: 'Crawl speed', default: 130, min: 10, max: 600, step: 5 },
     { key: 'wander', type: 'range', label: 'Wander', default: 0.5, min: 0, max: 1, step: 0.01 },
@@ -484,6 +484,18 @@ const breach = {
             length: 0.7 + rng() * 0.6,
             girth: 0.65 + rng() * 0.7,
             turn: rng() < 0.5 ? 1 : -1,
+            /**
+             * Which flank the suckers are on. Fixed for the arm's whole life,
+             * and deliberately *not* `turn`.
+             *
+             * `turn` is which way the crawl prefers to swerve, and it is
+             * flipped whenever a step is blocked — which, for an arm holding
+             * station against a window frame, is every single frame. Drawing
+             * the suckers on `turn` therefore snapped them from one side of the
+             * arm to the other at sixty hertz: a hard flicker on the brightest
+             * detail of the brightest object on the wall.
+             */
+            side: rng() < 0.5 ? 1 : -1,
             carry: 0,
             /** 'out' reaching, 'feel' holding station and probing, 'back' retracting. */
             phase2: 'out',
@@ -677,7 +689,11 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
   // Long enough that the ribbon cannot pinch on a tight turn: the inside edge
   // of a bend has radius `step / turn - halfWidth`, and that has to stay
   // positive. Hence a step near the arm's own width and a hard cap on the turn.
-  const stepPx = Math.max(8, thickness * 0.9);
+  // Well under the arm's own width. Step length only has to clear the pinch
+  // condition below; tying it to thickness one-for-one made a thick arm both
+  // fat *and* unable to turn, which is why the last version had to be thinned
+  // to the point of looking like string.
+  const stepPx = Math.max(7, thickness * 0.55);
   /**
    * How sharply it can turn, and therefore whether it can get anywhere.
    *
@@ -689,7 +705,7 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
    * corridor requirement against a 107-pixel turning circle, on a facade whose
    * gaps are about 200 pixels wide.
    */
-  const MAX_TURN = 0.34;
+  const MAX_TURN = 0.26;
   const maxLen = Math.max(w, h) * 7 * p.reach * arm.length;
   const maxJoints = Math.max(4, Math.round(maxLen / stepPx));
 
@@ -841,7 +857,9 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
     }
     if (!placed) {
       arm.stuck = (arm.stuck || 0) + 1;
-      arm.turn *= -1;
+      // Try the other way round every few frames rather than every frame:
+      // alternating on each attempt just rocks between two blocked headings.
+      if (arm.stuck % 4 === 0) arm.turn *= -1;
       arm.angle += MAX_TURN * arm.turn;
       break;
     }
@@ -912,16 +930,74 @@ function fitWidths(container, obstacles, joints, widths) {
     const angle = Math.atan2(b.y - prev.y, b.x - prev.x) + Math.PI / 2;
     const cx = Math.cos(angle);
     const cy = Math.sin(angle);
+
+    /**
+     * No wider than the bend can carry.
+     *
+     * On the inside of a turn the flank sits at radius `step / turn − width`;
+     * once that goes negative the inner edge has crossed the centreline and the
+     * ribbon is drawn inside out, as a bow-tie. Bounding the *turn* to keep it
+     * positive is the tempting fix and it costs all the movement, because the
+     * turn is mostly the sway and the sway is the life in the thing. Bounding
+     * the *width* costs nothing anybody can see: an arm thins slightly where it
+     * flexes hardest, which is what a limb does.
+     */
+    if (i > 0 && i < n - 1) {
+      const inA = Math.atan2(a.y - prev.y, a.x - prev.x);
+      const outA = Math.atan2(b.y - a.y, b.x - a.x);
+      const turn = Math.abs(((outA - inA + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+      const step = Math.hypot(a.x - prev.x, a.y - prev.y);
+      // No floor worth speaking of: on a hairpin in an offset curve `step` can
+      // be very nearly zero, and a floor there is precisely the case that
+      // inverts. A tentacle with a sub-pixel pinch point is invisible; one
+      // drawn as a bow-tie is not.
+      if (turn > 1e-4) widths[i] = Math.min(widths[i], Math.max(0.15, (step / turn) * 0.8));
+    }
+
     let w = widths[i];
-    // Three halvings take a full-width arm down to an eighth, which is thinner
-    // than anything survives being projected — past that, give up and pin it to
-    // the centreline, which is clear by construction.
-    for (let tries = 0; tries < 3; tries++) {
-      if (isClear(container, obstacles, a.x + cx * w, a.y + cy * w)
-        && isClear(container, obstacles, a.x - cx * w, a.y - cy * w)) break;
+    let fits = false;
+    /**
+     * Halve until it fits, down to a sixty-fourth of the width.
+     *
+     * Four halvings was not enough at the tip, and the reason is worth keeping:
+     * the corridor the crawl reserves is a *line* either side of the step
+     * direction, not a disc, and it checks nothing ahead of the last joint. So
+     * a tip can legitimately sit a pixel short of a window edge, and the sway —
+     * which is at its largest exactly there — can swing the ribbon's normal far
+     * enough round to point the flank straight at it. Six halvings puts the
+     * flank inside a fifth of a pixel of the spine, which is clear.
+     */
+    /**
+     * Sampled along the ray, not just at its end.
+     *
+     * Testing the outermost point only is not enough, and the reason is a nice
+     * one: clearance is not convex. The rim is drawn at the full width and the
+     * body inside it at 85%, and a ray that leaves the spine, crosses a window
+     * and comes out the far side has a *clear* endpoint and an obscured middle
+     * — so the wider ribbon passed and the narrower one drawn inside it landed
+     * on the glass. Every radius that actually gets drawn is checked.
+     */
+    for (let tries = 0; tries < 6; tries++) {
+      let clear = true;
+      for (const f of [1, 0.85, 0.45]) {
+        if (!isClear(container, obstacles, a.x + cx * w * f, a.y + cy * w * f)
+          || !isClear(container, obstacles, a.x - cx * w * f, a.y - cy * w * f)) {
+          clear = false;
+          break;
+        }
+      }
+      if (clear) {
+        fits = true;
+        break;
+      }
       w *= 0.5;
     }
-    widths[i] = Math.min(widths[i], Math.max(0.8, w));
+    // And if even a sixty-fourth does not fit, pinch to the centreline. The
+    // spine is clear by construction, so a flank *on* it is clear too — which
+    // makes this the one width that is guaranteed correct rather than merely
+    // very likely, and it is the difference between four stray pixels an
+    // evening and none. It costs a nick a fraction of a pixel wide.
+    widths[i] = Math.min(widths[i], fits ? w : 0);
   }
 }
 
@@ -964,12 +1040,24 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
     // appear to slide in and out of its own hole.
     // Capped at 0.3 of the base half-width and scaled by u², which is what
     // keeps the drawn arm inside the clearance the crawl reserved for it.
-    // Capped at 0.3 of the base half-width and scaled by u², which is what
-    // keeps the drawn arm inside the clearance the crawl reserved for it. And
-    // faded in with the joint count: the same lateral offset spread over four
-    // joints is a kink rather than a wave.
-    const smooth = Math.min(1, (n - 3) / 8);
-    const swing = Math.sin(wave - u * 5.5) * base * 0.3 * Math.min(writhe, 2) * u * u * emerge * smooth;
+    /**
+     * The whole body moves, not just the last few centimetres.
+     *
+     * The first version capped the sway at a third of the arm's width and
+     * scaled it by u², which meant a limb that had reached its full extent sat
+     * dead still with a twitching tip. That is the opposite of alive. It is now
+     * a little over a whole width at the far end, falling off close to linearly
+     * rather than quadratically, so an arm holding station against a wall is
+     * visibly thrashing along its length while its base stays put in the hole.
+     *
+     * Two waves rather than one, at different rates and wavelengths, because a
+     * single sine is a skipping rope: it has one belly and it swings like a
+     * pendulum. Beating two against each other gives the irregular, muscular
+     * motion the thing is supposed to have.
+     */
+    const smooth = Math.min(1, (n - 3) / 6);
+    const amp = base * 1.15 * Math.min(writhe, 2) * Math.pow(u, 1.15) * emerge * smooth;
+    const swing = (Math.sin(wave - u * 2.7) * 0.68 + Math.sin(wave * 1.63 - u * 5.6 + arm.phase) * 0.32) * amp;
 
     // Held wide down most of the arm, falling away late, and stopping at a
     // fifth of the base rather than at a point. `1 - u` gives a triangle, and a
@@ -995,11 +1083,27 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
      * the crawl actually validated. It costs one containment test per joint and
      * it is true regardless of what any of the constants are set to.
      */
-    let sx = a.x + Math.cos(dir + Math.PI / 2) * swing;
-    let sy = a.y + Math.sin(dir + Math.PI / 2) * swing;
-    if (container && swing !== 0 && !stepClear(container, obstacles, sx, sy, dir, width)) {
-      sx = a.x;
-      sy = a.y;
+    let sx = a.x;
+    let sy = a.y;
+    if (container && swing !== 0) {
+      // Wound in until it fits, rather than dropped to nothing the moment it
+      // does not. Snapping a joint back to the path while its neighbours stay
+      // swung out puts a kink in the arm; halving lets it lie against a window
+      // frame instead — which is also what it should look like.
+      let reach = swing;
+      for (let tries = 0; tries < 4; tries++) {
+        const tx = a.x + Math.cos(dir + Math.PI / 2) * reach;
+        const ty = a.y + Math.sin(dir + Math.PI / 2) * reach;
+        if (stepClear(container, obstacles, tx, ty, dir, width)) {
+          sx = tx;
+          sy = ty;
+          break;
+        }
+        reach *= 0.5;
+      }
+    } else {
+      sx = a.x + Math.cos(dir + Math.PI / 2) * swing;
+      sy = a.y + Math.sin(dir + Math.PI / 2) * swing;
     }
     joints.push({ x: sx, y: sy });
   }
@@ -1029,15 +1133,62 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
   ramp.addColorStop(0, mixHex(p.armColor, '#000000', 0.35));
   ramp.addColorStop(0.45, p.armColor);
   ramp.addColorStop(1, mixHex(p.armColor, p.armTip, 0.75));
-  g.fillStyle = ramp;
+  /**
+   * A dark rim, then the body inside it.
+   *
+   * A limb on a lit brick wall needs an edge or it reads as a decal, and a
+   * stroked outline is not an option — two pixels of line is nothing on a
+   * projector. So the rim is the full fitted width and the body is drawn at
+   * 85% of it, which leaves a band of shadow all the way round.
+   *
+   * The obvious way round — body at full width, rim *wider* — puts the rim
+   * outside the width that was fitted to the space available, and the arm goes
+   * straight back to painting the windows. Nothing may be drawn wider than
+   * `widths`; that is the whole contract.
+   */
+  g.fillStyle = rgba('#000000', 0.5);
   tentacleRibbon(g, joints, widths);
 
-  // A highlight down one side, as a narrower ribbon rather than a stroked line.
-  // At projector resolution a one-pixel specular line is not there at all; a
-  // shape a third the width of the arm survives being halved.
-  const lit = joints.map((j, i) => ({ x: j.x - widths[i] * 0.32, y: j.y - widths[i] * 0.32 }));
-  g.fillStyle = rgba('#ffffff', 0.1);
-  tentacleRibbon(g, lit, widths.map((v) => v * 0.28));
+  g.fillStyle = ramp;
+  tentacleRibbon(g, joints, widths.map((v) => v * 0.85));
+
+  /**
+   * A highlight down one side, as a narrower ribbon rather than a stroked line.
+   * At projector resolution a one-pixel specular line is not there at all; a
+   * shape a third the width of the arm survives being halved.
+   *
+   * Offset along the arm's own normal, and kept inside the width that has
+   * already been fitted to the space available — 0.32 out plus 0.3 of its own
+   * is 0.62 of the main ribbon, so it cannot reach anywhere the main ribbon has
+   * not already been cleared for. The previous version offset it along a fixed
+   * diagonal, which took no account of which way the arm was pointing and put
+   * it outside the fitted envelope wherever the arm ran at forty-five degrees.
+   */
+  const lit = joints.map((j, i) => {
+    const b = joints[Math.min(i + 1, n - 1)];
+    const prev = joints[Math.max(i - 1, 0)];
+    const nrm = Math.atan2(b.y - prev.y, b.x - prev.x) + Math.PI / 2;
+    const lx = j.x + Math.cos(nrm) * widths[i] * 0.28;
+    const ly = j.y + Math.sin(nrm) * widths[i] * 0.28;
+    // `fitWidths` bounds a ribbon's flanks against its own spine; it cannot
+    // rescue a spine that is itself somewhere it should not be. The main one is
+    // clear by construction — the crawl put it there — but this one is offset
+    // from it, so it gets checked.
+    // With room for its own width, not merely on the right side of the line:
+    // a spine cleared to the last pixel leaves its flanks over the edge.
+    if (container && !stepClear(container, obstacles, lx, ly, nrm - Math.PI / 2, widths[i] * 0.4)) {
+      return { x: j.x, y: j.y };
+    }
+    return { x: lx, y: ly };
+  });
+  const litWidths = widths.map((v) => v * 0.26);
+  // The highlight is a second polygon with its own spine and its own bends, so
+  // it needs the same treatment as the first. Fitting the main ribbon and
+  // assuming the smaller one inside it must be fine is exactly the kind of
+  // reasoning that has been wrong twice already in this file.
+  if (container) fitWidths(container, obstacles, lit, litWidths);
+  g.fillStyle = rgba('#ffffff', 0.09);
+  tentacleRibbon(g, lit, litWidths);
 
   /**
    * Suckers, down one side.
@@ -1050,12 +1201,16 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
    * photograph would show.
    */
   if (p.suckers > 0) {
-    g.fillStyle = rgba(mixHex(p.armTip, '#ffffff', 0.2), 0.4 * p.suckers);
-    for (let i = 1; i < n - 1; i += 1) {
+    // Spaced by the arm's own girth rather than one per joint. The step length
+    // is now well under the width, so one sucker a joint is a solid chain of
+    // overlapping discs — which is most of what read as a row of peas.
+    const gap = Math.max(1, Math.round(base * 0.75 / Math.max(1, base * 0.55)) + 1);
+    g.fillStyle = rgba(mixHex(p.armTip, '#ffffff', 0.12), 0.3 * p.suckers);
+    for (let i = 1; i < n - 1; i += gap) {
       const a = joints[i];
       const b = joints[i + 1];
-      const dir = Math.atan2(b.y - a.y, b.x - a.x) + (Math.PI / 2) * arm.turn;
-      const r = widths[i] * 0.25;
+      const dir = Math.atan2(b.y - a.y, b.x - a.x) + (Math.PI / 2) * arm.side;
+      const r = widths[i] * 0.2;
       if (r < 1.2) continue;
       g.beginPath();
       g.arc(a.x + Math.cos(dir) * widths[i] * 0.42, a.y + Math.sin(dir) * widths[i] * 0.42, r, 0, TAU);
@@ -1065,7 +1220,9 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
 
   // A blunt, rounded end rather than a point with a light on it — that version
   // read as a firefly sitting on a stalk.
-  const tipR = Math.max(2, widths[n - 1]);
+  // Inside the fitted width like everything else — this is a disc centred on
+  // the tip, and the tip is exactly where the fitting is tightest.
+  const tipR = Math.max(0.5, widths[n - 1] * 0.95);
   g.fillStyle = mixHex(p.armColor, p.armTip, 0.75);
   g.beginPath();
   g.arc(tip0.x, tip0.y, tipR, 0, TAU);

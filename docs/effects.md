@@ -149,10 +149,18 @@ from a wave function each frame has no memory: it can be swung across a window
 and off the side of the house, and nothing it does in one frame has any bearing
 on the next. An arm that found its way round a window frame a minute ago is
 still round it now, and the snarl on the brickwork is the record of where it has
-been. What is still computed per frame is a sway — a travelling wave applied
-*sideways* to the stored path, scaled by the square of the distance along it, so
-it is nothing at the base and largest at the tip. The arm breathes and the tip
-feels about, but nothing slides across the wall.
+been. What is still computed per frame is a sway — two travelling waves at different
+rates, applied *sideways* to the stored path and growing along it, so the base
+stays put in its hole while the rest of the arm thrashes. Two waves rather than
+one because a single sine is a skipping rope: one belly, swinging like a
+pendulum. An arm that has reached its full extent goes on moving along its whole
+length; only the part in the hole is still.
+
+Where the sway would take the arm somewhere the crawl refused to go, it is wound
+in until it fits, and where even that leaves an edge over a window the arm is
+*thinned* there rather than moved. A tentacle that narrows as it squeezes past a
+frame is invisible; one that covers the glass is the only thing anybody
+notices.
 
 **Crawl speed**, **Wander**, **Feel round frames** and **Seek bare wall** are the
 steering. Turn Seek bare wall down and a clutch of arms will pile up on top of
@@ -170,7 +178,10 @@ Three more settings are worth knowing:
   single opening, mortar and all.
 - **Suckers** is what stops the tentacles reading as foliage. Turn them off and
   you have vines coming out of a hole, which is also a good look, just a
-  different one.
+  different one. They sit on a fixed flank of each arm — an earlier version put
+  them on whichever side the crawl was currently favouring, which flips every
+  time a step is blocked, so an arm holding station against a window frame
+  strobed its suckers from one side to the other at sixty hertz.
 - **Tentacle thickness** is not free. An arm needs a corridor about three times
   its thickness to pass through, and can only change course on a radius set by
   its own step length, so a very thick arm cannot navigate a facade at all — it

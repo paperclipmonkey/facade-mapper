@@ -321,14 +321,18 @@ function insidePoly(pts, x, y) {
      * distance between the two flanks at the same joint.
      */
     for (const { spine, poly } of spinesIn(g)) {
-      for (let i = 2; i < spine.length; i++) {
-        const a = Math.atan2(spine[i - 1].y - spine[i - 2].y, spine[i - 1].x - spine[i - 2].x);
-        const b = Math.atan2(spine[i].y - spine[i - 1].y, spine[i].x - spine[i - 1].x);
+      // Turn and width taken at the *same* joint: the inner edge inverts where
+      // the bend is, not one joint downstream of it.
+      for (let i = 1; i < spine.length - 1; i++) {
+        const a = Math.atan2(spine[i].y - spine[i - 1].y, spine[i].x - spine[i - 1].x);
+        const b = Math.atan2(spine[i + 1].y - spine[i].y, spine[i + 1].x - spine[i].x);
         const turn = Math.abs(((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
         const step = Math.hypot(spine[i].x - spine[i - 1].x, spine[i].y - spine[i - 1].y);
         const flank = poly[poly.length - 1 - i];
         const half = Math.hypot(flank.x - spine[i].x, flank.y - spine[i].y);
-        if (turn < 1e-6 || !Number.isFinite(turn)) continue;
+        // A segment with no length has no meaningful inner radius, and the
+        // offset curve a highlight rides on does produce them at hairpins.
+        if (turn < 1e-6 || !Number.isFinite(turn) || step < 0.5) continue;
         const innerRadius = step / turn - half;
         sharpest = Math.min(sharpest, innerRadius);
       }
