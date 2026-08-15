@@ -718,7 +718,22 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
   // joint rotates and tries again for a third of a second before giving up on
   // this direction entirely; giving up on the first blocked step leaves it a
   // stub against the first window frame it meets.
-  if (arm.phase2 === 'out' && (arm.path.length >= maxJoints || arm.stuck > 20)) {
+  if (arm.phase2 === 'out' && arm.stuck > 20 && arm.path.length < maxJoints * 0.6) {
+    /**
+     * Wedged early: back off and try another way, rather than settling for it.
+     *
+     * An arm that meets a window frame in its first few steps used to go
+     * straight to holding station, and hold it for ten seconds — so three arms
+     * out of one breach near the roofline, where there is least room, were
+     * three permanent stubs. Giving up a third of what it has grown and setting
+     * off on a new heading costs nothing and is what something feeling its way
+     * would do.
+     */
+    arm.stuck = 0;
+    const drop = Math.max(1, Math.floor(arm.path.length / 3));
+    for (let k = 0; k < drop && arm.path.length > 1; k++) arm.path.pop();
+    arm.angle += (rng() < 0.5 ? -1 : 1) * (0.9 + rng() * 1.2);
+  } else if (arm.phase2 === 'out' && (arm.path.length >= maxJoints || arm.stuck > 20)) {
     arm.phase2 = 'feel';
     arm.timer = 0;
     arm.stuck = 0;
@@ -778,9 +793,17 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
       continue;
     }
     if (arm.phase2 === 'feel' && arm.path.length >= maxJoints) {
-      // Holding station: drop the oldest joint as a new one is added, so the
-      // arm keeps creeping without getting any longer.
-      arm.path.shift();
+      /**
+       * Probe from the far end, keeping the near end where it is.
+       *
+       * This used to drop the *oldest* joint as a new one was added, which does
+       * keep the length constant and has an obvious consequence I missed: the
+       * base creeps forward a step at a time until the whole arm has walked out
+       * of its own hole and is crawling around the wall attached to nothing.
+       * Retiring the newest joint instead lets the tip feel about while the arm
+       * stays rooted in the breach it came out of.
+       */
+      arm.path.pop();
     }
 
     const tip = arm.path[arm.path.length - 1];
@@ -1028,10 +1051,34 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
   const wave = t * p.writhe * arm.rate + arm.phase;
   const writhe = clamp(p.writhe, 0, 3);
 
+  /**
+   * Two different measures of "how far along", because they answer two
+   * different questions.
+   *
+   * How *thick* the arm is at a point is a fact about the limb: a place a metre
+   * from the body is the same thickness whether the arm is half out or fully
+   * extended. Taken as a fraction of the current length — which is what this
+   * did — every joint's thickness changes as the arm grows, so the whole thing
+   * visibly slims down as it reaches out, and thickens again as it retracts.
+   * That is the "width seems a bit odd" of it. Distance from the base, against
+   * the arm's own full reach, is the honest measure.
+   *
+   * How much a point *moves*, on the other hand, really is about position
+   * relative to the free end — the last stretch of a half-grown arm waves as
+   * freely as the last stretch of a fully grown one. So the sway keeps the
+   * fractional measure.
+   */
+  const along = [0];
+  for (let i = 1; i < n; i++) {
+    along.push(along[i - 1] + Math.hypot(arm.path[i].x - arm.path[i - 1].x, arm.path[i].y - arm.path[i - 1].y));
+  }
+  const fullReach = Math.max(1, Math.max(w, h) * 7 * p.reach * arm.length);
+
   const joints = [];
   const widths = [];
   for (let i = 0; i < n; i++) {
-    const u = i / (n - 1);
+    const u = Math.min(1, along[i] / fullReach);
+    const v = i / (n - 1);
     const a = arm.path[i];
     const b = arm.path[Math.min(i + 1, n - 1)];
     const prev = arm.path[Math.max(i - 1, 0)];
@@ -1056,14 +1103,14 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
      * motion the thing is supposed to have.
      */
     const smooth = Math.min(1, (n - 3) / 6);
-    const amp = base * 1.15 * Math.min(writhe, 2) * Math.pow(u, 1.15) * emerge * smooth;
-    const swing = (Math.sin(wave - u * 2.7) * 0.68 + Math.sin(wave * 1.63 - u * 5.6 + arm.phase) * 0.32) * amp;
+    const amp = base * 1.15 * Math.min(writhe, 2) * Math.pow(v, 1.15) * emerge * smooth;
+    const swing = (Math.sin(wave - v * 2.7) * 0.68 + Math.sin(wave * 1.63 - v * 5.6 + arm.phase) * 0.32) * amp;
 
     // Held wide down most of the arm, falling away late, and stopping at a
     // fifth of the base rather than at a point. `1 - u` gives a triangle, and a
     // triangle is a leaf.
     const taper = 1 - 0.8 * Math.pow(u, 2.2);
-    const swell = 1 + 0.16 * Math.sin(u * 7.5 + arm.phase);
+    const swell = 1 + 0.16 * Math.sin(along[i] * 0.035 + arm.phase);
     const width = Math.max(1.5, base * taper * swell * (0.5 + 0.5 * emerge));
     widths.push(width);
 

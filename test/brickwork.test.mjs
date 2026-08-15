@@ -347,6 +347,48 @@ function insidePoly(pts, x, y) {
 }
 
 {
+  /**
+   * Rooted. An arm holds station by probing from its far end, and the near end
+   * has to stay in the breach it came out of — an earlier version retired the
+   * *oldest* joint each step instead, so the base crept forward until the whole
+   * arm had walked out of its own hole and was crawling the wall attached to
+   * nothing.
+   */
+  const { seen, state } = run(breach, { ...base, rate: 60, heal: 0, arms: 2, holes: 1, reach: 0.4 }, 3000);
+  ok('arms were drawn for the whole run', seen.length === 3000);
+  let strayed = 0;
+  for (const hole of state.holes) {
+    for (const arm of hole.arms || []) {
+      const drift = Math.hypot(arm.path[0].x - arm.origin.x, arm.path[0].y - arm.origin.y);
+      if (drift > 1) strayed += 1;
+    }
+  }
+  ok('and every one is still rooted where it came out', strayed === 0, `${strayed} adrift`);
+}
+
+{
+  /**
+   * Thickness is a fact about the limb, not about how far out it happens to be.
+   * Taken as a fraction of the current length it rescales the whole arm as it
+   * grows, and you can watch it slim down as it reaches.
+   */
+  const { seen } = run(breach, { ...base, rate: 60, heal: 0, arms: 1, holes: 1, writhe: 0 }, 1500);
+  const nearBase = [];
+  for (const g of seen.slice(400)) {
+    const s0 = spinesIn(g)[0];
+    if (!s0 || s0.spine.length < 8) continue;
+    // Half-width three joints out from the hole, which is always the same
+    // distance along the arm whatever the arm is doing.
+    const i = 3;
+    const flank = s0.poly[s0.poly.length - 1 - i];
+    nearBase.push(Math.hypot(flank.x - s0.spine[i].x, flank.y - s0.spine[i].y));
+  }
+  const spread = Math.max(...nearBase) - Math.min(...nearBase);
+  ok('a fixed point on the arm keeps a fixed thickness as it grows',
+    nearBase.length > 100 && spread < 1.5, `${spread.toFixed(2)} px of variation`);
+}
+
+{
   // Explorative: an arm that grew, held and pulled back should have covered
   // ground rather than sat still, and should not be where it started.
   const { seen } = run(breach, { ...base, rate: 60, heal: 0, arms: 1, holes: 1 }, 2400);

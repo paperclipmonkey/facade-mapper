@@ -140,9 +140,18 @@ above Brickwork with the same brick dimensions.
 travelled and extends it a step at a time, exactly as the vine does — so it
 steers round the windows instead of across them, stays inside the wall you
 traced, follows a sill when it finds one, and prefers ground the other arms have
-not used. Reaching its limit it holds station and keeps probing, then pulls back
-and sets off somewhere else, so the tangle on the wall goes on changing all
-evening.
+not used. Reaching its limit it holds station and probes with its far end — the near end
+stays in the breach it came out of — then pulls back and sets off somewhere
+else, so the tangle on the wall goes on changing all evening. Wedging against a
+window frame early is not fatal: it gives up a third of what it has grown and
+tries another way, rather than settling for a stub.
+
+Thickness at a point is a fact about the limb — the same distance from the hole
+is the same thickness whether the arm is half out or fully extended — so it is
+measured from the base rather than as a fraction of however long the arm
+currently happens to be. Measured the other way, which is the obvious way, every
+joint changes thickness as the arm grows and you can watch the whole thing slim
+down as it reaches out.
 
 That the path is *remembered* is what makes it read as alive. An arm computed
 from a wave function each frame has no memory: it can be swung across a window
