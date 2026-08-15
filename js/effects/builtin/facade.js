@@ -469,7 +469,7 @@ const vine = {
   init() {
     return { key: '', tips: [], grown: 0 };
   },
-  draw({ g, p, shape, dt, rng, state, shapes, stable }) {
+  draw({ g, p, shape, t, dt, rng, state, shapes, stable }) {
     const container = shape;
     const { bbox } = container;
     if (bbox.w <= 2 || bbox.h <= 2) return;

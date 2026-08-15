@@ -322,6 +322,7 @@ export const HELP_HTML = `
 
 <h2>Keyboard</h2>
 <table>
+  <tr><th><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>K</kbd></th><td>Search everything — add an effect, jump to a shape, play a scene, black the show out. Works from any panel and from inside a text field.</td></tr>
   <tr><th><kbd>V</kbd> <kbd>P</kbd> <kbd>L</kbd> <kbd>R</kbd> <kbd>C</kbd></th><td>Select, Area, Path, Rectangle, Corners</td></tr>
   <tr><th><kbd>Enter</kbd> / <kbd>Esc</kbd></th><td>Finish / cancel the shape being drawn</td></tr>
   <tr><th><kbd>Backspace</kbd></th><td>Remove the last point while drawing; delete the selection otherwise</td></tr>

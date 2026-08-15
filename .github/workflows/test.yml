@@ -54,3 +54,9 @@ jobs:
 
       - name: Figure orientation tests
         run: node test/figures.test.mjs
+
+      - name: Command palette tests
+        run: node test/palette.test.mjs
+
+      - name: Layer diagnostic tests
+        run: node test/diagnostics.test.mjs

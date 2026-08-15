@@ -790,3 +790,105 @@
 .effect-card:hover .effect-name {
   color: var(--text);
 }
+
+/* ------------------------------------------------------------------ *
+ * Command palette
+ *
+ * Anchored near the top rather than centred: the list grows downwards from a
+ * fixed point, so the first result never moves as you type. A palette whose
+ * top result slides up and down under the cursor is unusable at speed.
+ * ------------------------------------------------------------------ */
+
+.palette {
+  width: min(620px, 92vw);
+  padding: 0;
+  overflow: hidden;
+  margin-top: 12vh;
+}
+
+.palette-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+}
+
+.palette-input::placeholder { color: var(--text-faint); }
+
+.palette-list {
+  max-height: min(52vh, 440px);
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.palette-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.palette-row.active { background: var(--accent); color: #140b03; }
+
+.palette-group {
+  flex: none;
+  width: 78px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+.palette-row.active .palette-group,
+.palette-row.active .palette-detail { color: #140b03; opacity: 0.72; }
+
+.palette-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-detail {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.palette-foot {
+  margin: 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.palette-foot kbd { margin-right: 3px; }
+
+.kbd-hint {
+  margin-left: 5px;
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+/* ------------------------------------------------------------------ *
+ * "Why can't I see it?" notes
+ * ------------------------------------------------------------------ */
+
+.panel-note.issue {
+  border-left: 2px solid var(--line-strong);
+  padding-left: 8px;
+  margin: 6px 0;
+}
+
+.panel-note.issue.warn { border-left-color: var(--warn); color: var(--warn); }
+.panel-note.issue.bad { border-left-color: var(--bad); color: var(--bad); }
+.panel-note.issue.info { border-left-color: var(--accent-2); }

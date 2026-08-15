@@ -9,6 +9,7 @@
 
 import { el, clear, escapeHtml } from './ui.js';
 import { getEffect } from '../effects/registry.js';
+import { layerIssues, showIssues } from './diagnostics.js';
 import { formatBytes } from '../core/media.js';
 import { storageUsage } from '../core/storage.js';
 import { PROJECTOR_COLOURS } from './stage.js';
@@ -127,6 +128,13 @@ export function renderLayerList(node, app) {
 
   const selectedIds = new Set(app.selection.type === 'layer' ? app.selection.ids || [] : []);
 
+  // Whatever is wrong with the show as a whole goes at the top of the list, so
+  // "I added six effects and the wall is black" is answered before you start
+  // opening them one at a time.
+  for (const issue of showIssues(app.project, {})) {
+    node.appendChild(el('p', { class: `panel-note issue ${issue.level}`, text: issue.text }));
+  }
+
   layers.forEach((layer, index) => {
     const effect = getEffect(layer.effect);
     const selected = selectedIds.has(layer.id);
@@ -185,6 +193,13 @@ export function renderLayerList(node, app) {
     const named = Boolean(layer.name) && layer.name !== effectName;
     const targets = describeTargets(app, layer);
 
+    // A layer that cannot possibly be putting light on the wall says so, on the
+    // row, with the reason. Bypassed and soloed-out are excluded: those two
+    // already have a lit button on the same row saying exactly that, and a chip
+    // repeating it would cry wolf on every list.
+    const issues = layerIssues(app.project, layer, effect)
+      .filter((i) => i.key !== 'bypassed' && i.key !== 'solo');
+
     const item = el('div', { class: `list-item${selected ? ' selected' : ''}` }, [
       power,
       solo,
@@ -194,6 +209,13 @@ export function renderLayerList(node, app) {
         text: named ? `${effectName} · ${targets}` : targets,
         title: named ? `${effectName} on ${targets}` : `on ${targets}`,
       }),
+      issues.length
+        ? el('span', {
+            class: `chip ${issues[0].level}`,
+            text: issues[0].short,
+            title: issues.map((i) => i.text).join('\n'),
+          })
+        : null,
       up,
       down,
     ]);

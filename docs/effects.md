@@ -42,6 +42,27 @@ lighting it, adds a new effect straight onto it from the gallery, or points one
 you already have at it — so tracing a window and lighting it is one panel rather
 than three.
 
+<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>K</kbd> skips the list entirely. Type three
+letters and press Enter: `snow` adds Snow, `door` selects the door, `black`
+blacks the show out, a scene name plays it. It reaches every effect, shape,
+layer, scene, look and panel in the app, and it works from inside a text field,
+which matters when the laptop is balanced on a wall in the dark and you would
+rather not go looking for a tab.
+
+### Why can't I see it?
+
+There are about eight reasons a layer puts no light on the wall, and until you
+know which one it is you are guessing. The list now says so on the row, and the
+inspector says it in a sentence: bypassed, soloed out by something else, opacity
+left at zero, pointed at a tag no shape carries, pointed at a shape that has
+since been hidden or deleted, or running an effect that no longer compiles. The
+show-wide ones — blacked out, master down, nothing aligned yet — sit at the top
+of the Effects panel.
+
+The one that catches everybody is the fourth: a layer aimed at `#window` before
+any window has been tagged looks completely normal in the list, because it *is*
+completely normal. It just has nothing to draw into.
+
 ## Effects that know where the windows are
 
 Most effects are handed a shape and fill it. The **facade** category is given a

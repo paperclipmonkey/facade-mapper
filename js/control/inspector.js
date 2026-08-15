@@ -10,6 +10,7 @@ import { el, clear, paramRow, toast, fmt } from './ui.js';
 import { SHAPE_TAGS } from '../core/state.js';
 import { getEffect, listByCategory, defaultParams } from '../effects/registry.js';
 import { openEffectPicker } from './effectPicker.js';
+import { layerIssues } from './diagnostics.js';
 
 export function renderInspector(container, app) {
   clear(container);
@@ -379,10 +380,11 @@ function renderLayer(container, app, id) {
   if (effect?.description) {
     container.appendChild(el('p', { class: 'panel-note', text: effect.description }));
   }
-  if (!effect) {
-    container.appendChild(
-      el('p', { class: 'code-status bad', text: `Effect "${layer.effect}" is missing or failed to compile.` })
-    );
+
+  // Everything standing between this layer and the wall, in order, in words.
+  // The chip on the list row is the alarm; this is the explanation.
+  for (const issue of layerIssues(app.project, layer, effect)) {
+    container.appendChild(el('p', { class: `panel-note issue ${issue.level}`, text: issue.text }));
   }
 
   container.appendChild(heading('Targets'));

@@ -455,3 +455,6 @@ input[type="checkbox"] {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #2b3242; border-radius: 5px; border: 2px solid var(--bg-panel); }
 ::-webkit-scrollbar-thumb:hover { background: #3a4356; }
+
+/* A status chip in a list row must not push the row into two lines. */
+.list-item .chip { flex: none; white-space: nowrap; }

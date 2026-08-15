@@ -327,8 +327,14 @@ export function resolveTargets(project, layer) {
     for (const id of layer.targets) push(byId.get(id));
   }
   if (layer.targetTags?.length) {
+    // Case-insensitively, because the tag picker offers a canonical list but
+    // nothing stops a typed tag being "Window". The panels have always matched
+    // that way; when this did not, a layer read as pointing at four windows in
+    // the list and drew on none of them, which is a horrible thing to debug in
+    // the dark.
+    const wanted = layer.targetTags.map((t) => String(t).toLowerCase());
     for (const s of project.shapes) {
-      if (s.tags?.some((t) => layer.targetTags.includes(t))) push(s);
+      if (s.tags?.some((t) => wanted.includes(String(t).toLowerCase()))) push(s);
     }
   }
   return out;

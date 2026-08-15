@@ -32,6 +32,11 @@ The order matters at exactly one point: **align before you trace**. Shapes are
 stored in camera coordinates, so tracing first and aligning afterwards is not a
 different order, it is work you will lose.
 
+<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>K</kbd> does any of the above without
+hunting for the panel it lives in — "align", "projector", "demo", "blackout",
+the name of any effect or shape. It is worth learning before you are outside in
+the cold.
+
 ## Before you have a projector
 
 **Try it on a demo house.** The button is on the empty stage and at the top of

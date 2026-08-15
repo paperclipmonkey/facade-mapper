@@ -28,6 +28,9 @@
       </div>
 
       <div class="app-bar-right">
+        <button type="button" id="btnPalette" class="btn" title="Search everything (Ctrl+K)">
+          Search <kbd class="kbd-hint">⌘K</kbd>
+        </button>
         <button type="button" id="btnOpenProjector" class="btn primary">Open projector tab</button>
         <button type="button" id="btnShows" class="btn">Shows</button>
         <button type="button" id="btnExport" class="btn">Export</button>
@@ -305,6 +308,22 @@
         <button class="btn" value="new" id="btnNewShow" type="button">New show</button>
         <button class="btn">Close</button>
       </form>
+    </dialog>
+
+    <dialog id="paletteDialog" class="dialog palette">
+      <input
+        type="text"
+        id="paletteInput"
+        class="palette-input"
+        placeholder="Add an effect, jump to a shape, black the show out…"
+        aria-label="Search commands"
+        spellcheck="false"
+        autocomplete="off"
+      />
+      <div id="paletteList" class="palette-list" role="listbox"></div>
+      <p class="palette-foot">
+        <kbd>↑</kbd><kbd>↓</kbd> to move · <kbd>Enter</kbd> to run · <kbd>Esc</kbd> to close
+      </p>
     </dialog>
 
     <div id="toast" class="toast" hidden></div>

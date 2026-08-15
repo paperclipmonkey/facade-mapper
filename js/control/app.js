@@ -51,6 +51,7 @@ import { createStage, defaultWorldQuad } from './stage.js';
 import { createAudioAnalyser } from './audio.js';
 import { renderInspector } from './inspector.js';
 import { renderSetupGuide } from './setup.js';
+import { createPalette } from './palette.js';
 import { createShapeNamer } from './shapeNamer.js';
 import {
   renderProjectorList,
@@ -138,6 +139,7 @@ const previewCtx = previewCanvas.getContext('2d');
 const previewGL = document.createElement('canvas');
 let previewWarp = null;
 let previewWarpFailed = false;
+let palette = null;
 
 const worldRenderer = createWorldRenderer({
   mediaPool,
@@ -336,26 +338,33 @@ app.layersBulk = (action) => {
 };
 
 /**
- * A new layer running `effectId`, pointed at one shape.
+ * A new layer running `effectId`, optionally pointed at one shape.
  *
- * Lives here rather than in the inspector because creating a layer touches
- * ordering, selection, undo and the panel refresh, and the inspector should not
- * have to know about any of that.
+ * Lives here rather than in the inspector or the palette because creating a
+ * layer touches ordering, selection, undo and the panel refresh, and neither of
+ * those should have to know about any of that. With no shape it covers the
+ * whole frame, which is what snow and fog want.
  */
-app.addLayerForShape = (effectId, shapeId) => {
+app.addLayer = (effectId, shapeId = null) => {
   app.pushUndo();
   const layer = createLayer(effectId, {
     params: defaultParams(effectId),
     order: app.project.layers.length,
     name: getEffect(effectId)?.name || effectId,
-    targets: [shapeId],
+    targets: shapeId ? [shapeId] : [],
   });
   app.project.layers.push(layer);
   app.select({ type: 'layer', id: layer.id });
+  switchPanel('layers');
   app.commit();
-  const shape = app.project.shapes.find((s) => s.id === shapeId);
-  toast(`${getEffect(effectId)?.name || effectId} added on ${shape?.name || 'the shape'}.`, 'good');
+  const name = getEffect(effectId)?.name || effectId;
+  const shape = shapeId ? app.project.shapes.find((s) => s.id === shapeId) : null;
+  toast(shape ? `${name} added on ${shape.name}.` : `${name} added over the whole frame.`, 'good');
+  return layer;
 };
+
+/** Kept for the inspector's shape view, which always has a shape in hand. */
+app.addLayerForShape = (effectId, shapeId) => app.addLayer(effectId, shapeId);
 
 app.deleteSelection = () => deleteSelection();
 
@@ -1934,6 +1943,39 @@ function wire() {
     toast(`Projector: ${payload.message}`, 'bad');
   });
 
+  /* --- Command palette --- *
+   * Almost every action delegates to the button that already does the job
+   * rather than reimplementing it, so there is exactly one copy of each
+   * behaviour and the palette cannot drift away from the UI it fronts. */
+  palette = createPalette(app, {
+    openProjector: () => $('btnOpenProjector').click(),
+    blackout: () => toggleBlackout(),
+    togglePlay: () => togglePlay(),
+    runShow: () => $('btnRunShow').click(),
+    captureScene: () => $('btnCaptureScene').click(),
+    startCamera: () => $('btnStartCamera').click(),
+    usePhoto: () => $('btnUsePhoto').click(),
+    loadDemo: () => app.loadDemoHouse(),
+    exportShow: () => $('btnExport').click(),
+    importShow: () => $('btnImport').click(),
+    help: () => $('btnHelp').click(),
+    calibrate: () => {
+      const projector = app.selectedProjector() || app.project.projectors[0];
+      if (projector) app.startCalibration(projector.id);
+    },
+    looks: GRADE_PRESETS.map((p) => [p.name, p.name]),
+    applyLook: (name) => {
+      const preset = GRADE_PRESETS.find((p) => p.name === name);
+      if (!preset) return;
+      app.pushUndo();
+      Object.assign(app.project.settings.grade, preset.values);
+      app.commit();
+      refreshLookPanel();
+      toast(`Look: ${preset.name}`);
+    },
+  });
+  $('btnPalette').addEventListener('click', () => palette.open());
+
   document.addEventListener('keydown', onKeyDown);
 }
 
@@ -1984,6 +2026,16 @@ function onKeyDown(ev) {
     target instanceof HTMLInputElement ||
     target instanceof HTMLTextAreaElement ||
     target instanceof HTMLSelectElement;
+
+  // Ahead of the typing guard on purpose: the whole point of Ctrl+K is that it
+  // works from wherever your hands already are, including the middle of a name
+  // field. It is also how you get *out* of the palette's own input.
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
+    ev.preventDefault();
+    if (palette?.isOpen?.()) palette.close();
+    else palette?.open();
+    return;
+  }
 
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z') {
     if (typing) return;
