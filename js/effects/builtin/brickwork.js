@@ -26,8 +26,8 @@
  * not.
  */
 
-import { rgba, clamp, TAU, mixHex, makeRng, pointInPolygon, smoothstep } from '../../core/math.js';
-import { collectObstacles } from '../obstacles.js';
+import { rgba, clamp, TAU, mixHex, makeRng, pointInPolygon } from '../../core/math.js';
+import { collectObstacles, isClear, nearestSurface } from '../obstacles.js';
 import { offscreen, glow } from '../lib.js';
 
 /** Shared with the facade family so the wording stays consistent. */
@@ -295,9 +295,13 @@ const breach = {
     { key: 'arms', type: 'range', label: 'Tentacles per hole', default: 3, min: 0, max: 8, step: 1 },
     { key: 'armColor', type: 'color', label: 'Tentacle', default: '#24402c' },
     { key: 'armTip', type: 'color', label: 'Tentacle tip', default: '#8ccc52' },
-    { key: 'thickness', type: 'range', label: 'Tentacle thickness', default: 34, min: 4, max: 110, step: 1 },
+    { key: 'thickness', type: 'range', label: 'Tentacle thickness', default: 20, min: 4, max: 110, step: 1 },
     { key: 'suckers', type: 'range', label: 'Suckers', default: 0.9, min: 0, max: 1, step: 0.01 },
     { key: 'reach', type: 'range', label: 'Reach', default: 0.9, min: 0.1, max: 3, step: 0.05 },
+    { key: 'crawl', type: 'range', label: 'Crawl speed', default: 130, min: 10, max: 600, step: 5 },
+    { key: 'wander', type: 'range', label: 'Wander', default: 0.5, min: 0, max: 1, step: 0.01 },
+    { key: 'cling', type: 'range', label: 'Feel round frames', default: 0.75, min: 0, max: 1, step: 0.01 },
+    { key: 'explore', type: 'range', label: 'Seek bare wall', default: 0.7, min: 0, max: 1, step: 0.01 },
     { key: 'writhe', type: 'range', label: 'Writhe', default: 1, min: 0, max: 3, step: 0.05 },
     { key: 'dust', type: 'range', label: 'Dust', default: 0.7, min: 0, max: 1, step: 0.01 },
     { key: 'gravity', type: 'range', label: 'Gravity', default: 1400, min: 100, max: 4000, step: 50 },
@@ -452,15 +456,38 @@ const breach = {
       if (!hole.pending.length) {
         hole.openFor += step;
         while (hole.arms.length < armCount) {
+          /**
+           * Spread the origins across the hole rather than stacking every arm
+           * on its centre, which produces a rosette — the most plant-like thing
+           * a clutch of tentacles can do. But check the offset one: the crawl
+           * validates every *step* and had no opinion about where the path
+           * started, so an arm rooted near the edge of a hole by the roofline
+           * had its first joint, and the whole width of ribbon drawn around it,
+           * hanging off the side of the house.
+           */
+          const thick = Math.max(4, p.thickness);
+          let ox = hole.cx + (rng() - 0.5) * w * 0.5;
+          let oy = hole.cy + (rng() - 0.5) * h * 0.3;
+          if (!stepClear(shape, obstacles, ox, oy, 0, thick)
+            || !stepClear(shape, obstacles, ox, oy, Math.PI / 2, thick)) {
+            ox = hole.cx;
+            oy = hole.cy;
+          }
           hole.arms.push({
+            /** Where it comes out of the wall. Every fresh reach starts here. */
+            origin: { x: ox, y: oy },
+            /** The path it has actually crawled, in order. Grows and retracts. */
+            path: [{ x: ox, y: oy }],
+            angle: -Math.PI / 2 + (rng() - 0.5) * 2.2,
             phase: rng() * TAU,
-            lean: (rng() - 0.5) * 1.5,
             rate: 0.55 + rng() * 0.7,
             length: 0.7 + rng() * 0.6,
-            bend: (rng() - 0.5) * 0.9,
-            curl: (rng() < 0.5 ? -1 : 1) * (0.8 + rng() * 0.8),
-            offset: (rng() - 0.5) * 0.8,
             girth: 0.65 + rng() * 0.7,
+            turn: rng() < 0.5 ? 1 : -1,
+            carry: 0,
+            /** 'out' reaching, 'feel' holding station and probing, 'back' retracting. */
+            phase2: 'out',
+            timer: 0,
             bornAt: t + hole.arms.length * 0.35,
           });
         }
@@ -505,6 +532,33 @@ const breach = {
       m.x += m.vx * step;
       m.y += m.vy * step;
       if (m.age > m.life) state.motes.splice(i, 1);
+    }
+
+    /* --- crawl --- */
+
+    // Where the arms have been, coarsely. Shared by every arm on the wall, so
+    // they avoid each other's ground as well as their own and the result is a
+    // tangle spread over the brickwork rather than a bundle in one corner.
+    if (!state.trail || state.trailCell !== Math.max(w, h)) {
+      state.trailCell = Math.max(w, h);
+      state.trailCols = Math.max(1, Math.ceil(bbox.w / state.trailCell));
+      state.trailRows = Math.max(1, Math.ceil(bbox.h / state.trailCell));
+      state.trail = new Uint16Array(state.trailCols * state.trailRows);
+      state.trailAge = 0;
+    }
+    // And it forgets, or an arm that retracts leaves ground poisoned for ever.
+    state.trailAge += step;
+    if (state.trailAge > 3) {
+      state.trailAge = 0;
+      for (let i = 0; i < state.trail.length; i++) state.trail[i] = (state.trail[i] * 0.6) | 0;
+    }
+
+    if (armCount > 0) {
+      for (const hole of state.holes) {
+        for (const arm of hole.arms) {
+          if (t >= arm.bornAt) crawl(arm, p, shape, obstacles, state, step, rng, w, h);
+        }
+      }
     }
 
     /* --- draw --- */
@@ -562,7 +616,7 @@ const breach = {
     if (armCount > 0) {
       for (const hole of state.holes) {
         for (const arm of hole.arms) {
-          drawArm(g, p, hole, arm, t, w, h, 1 - hole.closing);
+          drawArm(g, p, hole, arm, t, w, h, 1 - hole.closing, shape, obstacles);
         }
       }
     }
@@ -589,109 +643,388 @@ const breach = {
   },
 };
 
+
 /**
- * One tentacle, from the hole out into the room.
+ * Feel forward one step at a time, over the wall and around whatever is on it.
  *
- * A travelling wave along the arm rather than a wobble applied to the whole of
- * it: the base stays put in the hole and each joint lags the one before, which
- * is what makes it look like something pushing itself out rather than a piece
- * of rope being shaken. The emergence is the same curve run on the length, so
- * an arm grows out of the wall instead of appearing at full extent.
+ * The previous version computed the whole arm from a wave function every frame,
+ * which is cheap and has one fatal property: the arm has no memory, so it can
+ * be waved straight across a window and off the side of the house, and nothing
+ * it does one frame has any bearing on the next. What reads as *alive* is
+ * precisely the memory — a limb that found its way round a window frame is
+ * still round it a minute later, and the tangle on the wall is the record of
+ * where it has been.
  *
- * The first version of this read as a blade of grass, and the reasons are worth
- * keeping: it was one flat colour, it tapered linearly to a point, and it swung
- * in a smooth arc. A limb is none of those. So the taper is now a curve that
- * keeps the base fat and thins late; the girth breathes along its length so it
- * reads as muscle rather than as a triangle; the outer half is painted a second
- * time towards the tip colour, which does the work of a gradient for the price
- * of a fill; and there is a droop, so the far end has weight.
+ * So an arm now owns a path and extends it, exactly as the vine does. Four
+ * things decide each step, in the order they are applied:
+ *
+ *  1. **Wander.** A slow drift, so nothing travels in a straight line.
+ *  2. **Bare wall.** Of five candidate headings, prefer the one leading to
+ *     ground the arms have used least. This is what spreads a clutch out over
+ *     the brickwork instead of bundling it in one corner.
+ *  3. **Frames.** Near a window or a door, swing towards the tangent of its
+ *     edge, more strongly the closer it is — so an arm runs *along* a sill
+ *     rather than bouncing off it. The hold falls away with distance so it lets
+ *     go at the corner instead of orbiting the opening for ever.
+ *  4. **Somewhere to put it.** Sweep outwards from the intended heading and
+ *     take the smallest turn that is still on the wall and off the glass. If
+ *     nothing within a right angle works, the arm is wedged: it gives up and
+ *     pulls back, which is what stops one dying in a corner with its tip
+ *     jammed in the brickwork.
  */
-function drawArm(g, p, hole, arm, t, w, h, alive = 1) {
+function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
+  const thickness = Math.max(4, p.thickness) * arm.girth;
+  // Long enough that the ribbon cannot pinch on a tight turn: the inside edge
+  // of a bend has radius `step / turn - halfWidth`, and that has to stay
+  // positive. Hence a step near the arm's own width and a hard cap on the turn.
+  const stepPx = Math.max(8, thickness * 0.9);
+  /**
+   * How sharply it can turn, and therefore whether it can get anywhere.
+   *
+   * These three numbers are one design, not three settings. An arm needs a
+   * corridor `2 × ARM_MARGIN × thickness` wide to pass, and can only change
+   * course on a radius of `stepPx / MAX_TURN`. Get the ratio wrong and the
+   * arms wedge against the first window they meet and spend the evening as
+   * stubs — which is exactly what a thickness of 34 did here: a 134-pixel
+   * corridor requirement against a 107-pixel turning circle, on a facade whose
+   * gaps are about 200 pixels wide.
+   */
+  const MAX_TURN = 0.34;
+  const maxLen = Math.max(w, h) * 7 * p.reach * arm.length;
+  const maxJoints = Math.max(4, Math.round(maxLen / stepPx));
+
+  arm.timer += dt;
+
+  // Reaching, then holding station and probing, then pulling back to try
+  // somewhere else. Without the last two an arm reaches its full length in the
+  // first ten seconds and is a fixed piece of scenery for the rest of the show.
+  // Wedged is not the same as finished. An arm that cannot place its next
+  // joint rotates and tries again for a third of a second before giving up on
+  // this direction entirely; giving up on the first blocked step leaves it a
+  // stub against the first window frame it meets.
+  if (arm.phase2 === 'out' && (arm.path.length >= maxJoints || arm.stuck > 20)) {
+    arm.phase2 = 'feel';
+    arm.timer = 0;
+    arm.stuck = 0;
+  } else if (arm.phase2 === 'feel' && arm.timer > 6 + arm.girth * 6) {
+    arm.phase2 = 'back';
+    arm.timer = 0;
+  } else if (arm.phase2 === 'back' && arm.path.length <= 2) {
+    arm.phase2 = 'out';
+    arm.timer = 0;
+    // Back to a single joint at the hole, not to the two-joint stub retraction
+    // happens to leave. Keeping the stub and setting off in a new direction
+    // puts a fold of up to half a turn in the path, and the ribbon drawn over
+    // that fold pinches shut and reads as a crease in the arm.
+    arm.path.length = 0;
+    arm.path.push({ x: arm.origin.x, y: arm.origin.y });
+    // A fresh heading, so the next reach explores rather than retracing.
+    arm.angle = -Math.PI / 2 + (rng() - 0.5) * 2.4;
+  }
+
+  const speed = Math.max(1, p.crawl) * (arm.phase2 === 'back' ? 1.7 : 1);
+  arm.carry += speed * dt;
+  let steps = Math.floor(arm.carry / stepPx);
+  if (steps > 6) {
+    steps = 6;
+    arm.carry = 0;
+  } else {
+    arm.carry -= steps * stepPx;
+  }
+
+  const cellOf = (x, y) => {
+    const cx = Math.floor((x - container.bbox.x) / state.trailCell);
+    const cy = Math.floor((y - container.bbox.y) / state.trailCell);
+    if (cx < 0 || cy < 0 || cx >= state.trailCols || cy >= state.trailRows) return -1;
+    return cy * state.trailCols + cx;
+  };
+  // Off the wall reads as thoroughly used, so nothing steers that way — but as
+  // a finite number, because an infinity there would swamp every comparison.
+  const usedAt = (x, y) => {
+    const i = cellOf(x, y);
+    return i < 0 ? 30 : Math.min(20, state.trail[i]);
+  };
+
+  for (let s = 0; s < steps; s++) {
+    if (arm.phase2 === 'back') {
+      arm.path.pop();
+      if (arm.path.length <= 2) break;
+      continue;
+    }
+    if (arm.path.length < 2) {
+      // Just replanted: nothing to take a heading from yet, so step straight
+      // out on the one it was given.
+      const o = arm.path[0];
+      const nx = o.x + Math.cos(arm.angle) * stepPx;
+      const ny = o.y + Math.sin(arm.angle) * stepPx;
+      if (stepClear(container, obstacles, nx, ny, arm.angle, thickness)) arm.path.push({ x: nx, y: ny });
+      else arm.angle += 0.7;
+      continue;
+    }
+    if (arm.phase2 === 'feel' && arm.path.length >= maxJoints) {
+      // Holding station: drop the oldest joint as a new one is added, so the
+      // arm keeps creeping without getting any longer.
+      arm.path.shift();
+    }
+
+    const tip = arm.path[arm.path.length - 1];
+    let angle = arm.angle + (rng() - 0.5) * p.wander * 0.5;
+
+    if (p.explore > 0) {
+      let best = angle;
+      let bestScore = Infinity;
+      for (const offset of [0, 0.35, -0.35, 0.75, -0.75]) {
+        const a = angle + offset;
+        const dx = Math.cos(a);
+        const dy = Math.sin(a);
+        let score = Math.abs(offset) * 0.5; // all else equal, carry straight on
+        for (const r of [1.2, 3, 6]) {
+          score += usedAt(tip.x + dx * state.trailCell * r, tip.y + dy * state.trailCell * r) / r;
+        }
+        if (score < bestScore) {
+          bestScore = score;
+          best = a;
+        }
+      }
+      angle += angleDelta(angle, best) * p.explore * 0.4;
+    }
+
+    const range = Math.max(10, thickness * 2.2);
+    const near = nearestSurface(obstacles, tip.x, tip.y, range);
+    if (near && p.cling > 0) {
+      const tangent = Math.atan2(near.nx, -near.ny);
+      const alt = tangent + Math.PI;
+      const pick = Math.abs(angleDelta(angle, tangent)) < Math.abs(angleDelta(angle, alt))
+        ? tangent
+        : alt;
+      const hold = p.cling * (1 - near.dist / range);
+      angle += angleDelta(angle, pick) * hold * 0.8;
+    }
+
+    // The smallest turn that keeps the tip on the wall and off the glass.
+    // Committing to one direction — `arm.turn` — rather than taking the best of
+    // each side stops an arm oscillating in a corner, which is a lesson the
+    // serpent learned the hard way.
+    let placed = false;
+    for (const swerve of [0, 0.12, 0.25, 0.4]) {
+      for (const dir of swerve === 0 ? [1] : [arm.turn, -arm.turn]) {
+        // Clamp *before* testing, not after.
+        //
+        // The first version picked a heading, tested the point it led to, and
+        // then stepped in a different direction because the turn cap moved it —
+        // so the point it actually landed on had never been checked, and arms
+        // walked over windows and off the side of the house at a low rate. The
+        // tested point and the placed point have to be the same point.
+        const a = clampTurn(arm.angle, angle + swerve * dir, MAX_TURN);
+        const nx = tip.x + Math.cos(a) * stepPx;
+        const ny = tip.y + Math.sin(a) * stepPx;
+        // Clear of the frames by the arm's own half-width, not just at the
+        // centreline: a ribbon whose spine skims a sill still covers the glass.
+        if (!isClear(container, obstacles, nx, ny)) continue;
+        // Both flanks too, at the widest the drawn ribbon ever gets — spine
+        // clearance alone is not clearance, because a ribbon whose centreline
+        // skims a sill still covers the glass either side of it. `ARM_MARGIN`
+        // is that widest half-width, swell and sway included; see drawArm.
+        const px = Math.cos(a + Math.PI / 2) * thickness * ARM_MARGIN;
+        const py = Math.sin(a + Math.PI / 2) * thickness * ARM_MARGIN;
+        if (!isClear(container, obstacles, nx + px, ny + py)) continue;
+        if (!isClear(container, obstacles, nx - px, ny - py)) continue;
+
+        arm.angle = a;
+        arm.path.push({ x: nx, y: ny });
+        const cell = cellOf(nx, ny);
+        if (cell >= 0 && state.trail[cell] < 65000) state.trail[cell] += 1;
+        placed = true;
+        break;
+      }
+      if (placed) break;
+    }
+    if (!placed) {
+      arm.stuck = (arm.stuck || 0) + 1;
+      arm.turn *= -1;
+      arm.angle += MAX_TURN * arm.turn;
+      break;
+    }
+    arm.stuck = 0;
+  }
+}
+
+/**
+ * Is there room for the whole width of the arm here, not just its centreline?
+ *
+ * A ribbon whose spine skims a sill still covers the glass either side of it,
+ * so both flanks are tested as well — at the widest the drawn arm ever gets.
+ */
+function stepClear(container, obstacles, x, y, angle, thickness) {
+  if (!isClear(container, obstacles, x, y)) return false;
+  const px = Math.cos(angle + Math.PI / 2) * thickness * ARM_MARGIN;
+  const py = Math.sin(angle + Math.PI / 2) * thickness * ARM_MARGIN;
+  return isClear(container, obstacles, x + px, y + py)
+    && isClear(container, obstacles, x - px, y - py);
+}
+
+/**
+ * How far out from the centreline an arm can ever be drawn, in units of its own
+ * base half-width.
+ *
+ * Width peaks at the base at `swell` (1.16) and falls away; the sway peaks at
+ * the tip and is scaled by u², where the width has dropped to about a fifth, so
+ * the two are never both large and their sum stays near 1.16.
+ *
+ * The rest of the allowance is for a mismatch that is easy to miss. Clearance
+ * is tested along the normal to the *step*, and the ribbon is built along the
+ * normal to the *joint* — the average of two consecutive steps. On a bend those
+ * differ by half the turn, which swings the flank by about width × 0.15. Left
+ * at 1.2 that put roughly one drawn point in two thousand over a window: rare
+ * enough to look like an accident and frequent enough to see all evening.
+ *
+ * The crawl keeps this much clear of every opening, which is the only reason a
+ * tentacle can hug a frame without covering it.
+ */
+const ARM_MARGIN = 1.45;
+
+/** Move `from` towards `to` by at most `limit` radians. */
+function clampTurn(from, to, limit) {
+  const d = angleDelta(from, to);
+  return from + clamp(d, -limit, limit);
+}
+
+/** Shortest signed difference between two angles. */
+function angleDelta(from, to) {
+  let d = (to - from) % TAU;
+  if (d > Math.PI) d -= TAU;
+  if (d < -Math.PI) d += TAU;
+  return d;
+}
+
+/**
+ * Pull in the half-width anywhere the ribbon's own outline would not fit.
+ *
+ * Uses exactly the normal `tentacleRibbon` uses, because the whole point is to
+ * measure the outline that gets drawn rather than an approximation of it.
+ */
+function fitWidths(container, obstacles, joints, widths) {
+  const n = joints.length;
+  for (let i = 0; i < n; i++) {
+    const a = joints[i];
+    const b = joints[Math.min(i + 1, n - 1)];
+    const prev = joints[Math.max(i - 1, 0)];
+    const angle = Math.atan2(b.y - prev.y, b.x - prev.x) + Math.PI / 2;
+    const cx = Math.cos(angle);
+    const cy = Math.sin(angle);
+    let w = widths[i];
+    // Three halvings take a full-width arm down to an eighth, which is thinner
+    // than anything survives being projected — past that, give up and pin it to
+    // the centreline, which is clear by construction.
+    for (let tries = 0; tries < 3; tries++) {
+      if (isClear(container, obstacles, a.x + cx * w, a.y + cy * w)
+        && isClear(container, obstacles, a.x - cx * w, a.y - cy * w)) break;
+      w *= 0.5;
+    }
+    widths[i] = Math.min(widths[i], Math.max(0.8, w));
+  }
+}
+
+/**
+ * One tentacle, drawn along the path it has crawled.
+ *
+ * The shape is no longer computed here — `crawl` owns that, and it owns it over
+ * time. What is left is the two things that have to happen every frame: a sway,
+ * and a skin.
+ *
+ * The sway is a travelling wave applied as a *lateral offset* to the stored
+ * path, scaled by the square of the distance along it. That scaling is the
+ * whole trick: it is zero at the base, so the arm stays planted in its hole and
+ * whatever it has wrapped itself around stays wrapped; and it is largest at the
+ * tip, which is the part that should look like it is feeling for something. An
+ * arm that has snarled itself over three metres of brickwork still breathes,
+ * without any of it sliding across the wall.
+ */
+function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacles = []) {
   const age = t - arm.bornAt;
-  if (age < 0 || alive <= 0.02) return;
-  const out = clamp(age / 1.6, 0, 1) * alive;
+  if (age < 0 || alive <= 0.02 || !arm.path || arm.path.length < 3) return;
+  const out = clamp(age / 1.2, 0, 1) * alive;
   const emerge = out * out * (3 - 2 * out); // smoothstep
   if (emerge < 0.01) return;
 
-  const JOINTS = 17;
-  // Shorter and fatter than the first version. A tentacle that is eight times
-  // longer than it is wide is a blade of grass whatever else you do to it; the
-  // ones that read are nearer five.
-  const span = Math.max(w, h) * 2.6 * p.reach * arm.length * emerge;
+  const n = arm.path.length;
   const base = Math.max(4, p.thickness) * arm.girth;
   const wave = t * p.writhe * arm.rate + arm.phase;
   const writhe = clamp(p.writhe, 0, 3);
 
   const joints = [];
   const widths = [];
-  // Spread the origins across the hole rather than stacking every arm on its
-  // centre, which produces a rosette — the single most plant-like thing a
-  // clutch of tentacles can do.
-  let x = hole.cx + arm.offset * w * 0.5;
-  let y = hole.cy + arm.offset * h * 0.3;
-  // Out of the hole and generally upward-ish, leaning by a per-arm amount so a
-  // clutch of them fans out rather than stacking on one another.
-  let angle = -Math.PI / 2 + arm.lean;
-  const heading = angle;
+  for (let i = 0; i < n; i++) {
+    const u = i / (n - 1);
+    const a = arm.path[i];
+    const b = arm.path[Math.min(i + 1, n - 1)];
+    const prev = arm.path[Math.max(i - 1, 0)];
+    const dir = Math.atan2(b.y - prev.y, b.x - prev.x);
+    // Sideways, and only sideways: pushing along the path would make the arm
+    // appear to slide in and out of its own hole.
+    // Capped at 0.3 of the base half-width and scaled by u², which is what
+    // keeps the drawn arm inside the clearance the crawl reserved for it.
+    // Capped at 0.3 of the base half-width and scaled by u², which is what
+    // keeps the drawn arm inside the clearance the crawl reserved for it. And
+    // faded in with the joint count: the same lateral offset spread over four
+    // joints is a kink rather than a wave.
+    const smooth = Math.min(1, (n - 3) / 8);
+    const swing = Math.sin(wave - u * 5.5) * base * 0.3 * Math.min(writhe, 2) * u * u * emerge * smooth;
 
-  for (let i = 0; i < JOINTS; i++) {
-    const u = i / (JOINTS - 1);
-    joints.push({ x, y });
-
-    // Taper: held wide down most of the arm, falling away late, and stopping
-    // at a fifth of the base rather than at a point. `1 - u` gives a triangle,
-    // and a triangle is a leaf; a point with a bright dot on it is a reed.
+    // Held wide down most of the arm, falling away late, and stopping at a
+    // fifth of the base rather than at a point. `1 - u` gives a triangle, and a
+    // triangle is a leaf.
     const taper = 1 - 0.8 * Math.pow(u, 2.2);
-    // And a slow swell along the length, so it is a limb rather than a cone.
     const swell = 1 + 0.16 * Math.sin(u * 7.5 + arm.phase);
-    widths.push(Math.max(1.5, base * taper * swell * (0.5 + 0.5 * emerge)));
+    const width = Math.max(1.5, base * taper * swell * (0.5 + 0.5 * emerge));
+    widths.push(width);
 
-    const seg = span / (JOINTS - 1);
     /**
-     * The heading at each joint, set outright rather than accumulated.
+     * The sway must not put the arm where the crawl refused to go.
      *
-     * Integrating a per-joint turn is the obvious way to do this and it is a
-     * trap: the increments do not cancel, so the arm coils into a hairpin and
-     * reads as a bent drinking straw. Clamping the running total fixes the
-     * coiling and costs all the character — a clamped arm is a straight reed.
+     * The crawl reserves a corridor around the path, and it is tempting to
+     * argue that the sway is small enough to stay inside it — the sum peaks
+     * around 1.1 of the base half-width against a reserved 1.45, so on paper it
+     * cannot reach a window. On paper. In practice this leaked about one drawn
+     * point in a thousand onto the glass, and an argument that predicts zero
+     * and delivers hundreds is an argument with a hole in it, not a margin that
+     * needs widening.
      *
-     * Setting the angle directly cannot drift, because it is a bounded function
-     * of position along the arm rather than a sum of anything. The wave fits
-     * about two thirds of a cycle, which is one lazy S; each joint further out
-     * lags further behind it and swings wider, so the tip does most of the
-     * moving, as it should.
+     * So the drawn position is checked rather than reasoned about: if the
+     * swayed joint is not clear at its own width, the arm is drawn at the joint
+     * the crawl actually validated. It costs one containment test per joint and
+     * it is true regardless of what any of the constants are set to.
      */
-    // And bounded, because the terms can otherwise sum to more than a full
-    // turn at the top of the Writhe and Reach ranges — which puts the coiling
-    // straight back, just only for people who move the sliders. Ninety-odd
-    // degrees off the launch heading is as far as anything needs to bend, and
-    // the clamp is on the deviation rather than on a running total, so it never
-    // flattens an arm that is merely sinuous.
-    const bend = clamp(
-      Math.sin(wave - u * 4.2) * 0.6 * (0.1 + u * 1.1) * writhe
-      + arm.bend * u                 // a fixed lean of its own, so a clutch differs
-      + 0.5 * u * u                  // weight: the far end knows which way is down
-      // And a curl in the last third. This is the single strongest signal that
-      // a thing is a limb and not a leaf: leaves do not hook.
-      + arm.curl * emerge * smoothstep(0.55, 1, u) * 1.5,
-      -1.6,
-      1.6
-    );
-    angle = heading + bend;
-    x += Math.cos(angle) * seg;
-    y += Math.sin(angle) * seg;
+    let sx = a.x + Math.cos(dir + Math.PI / 2) * swing;
+    let sy = a.y + Math.sin(dir + Math.PI / 2) * swing;
+    if (container && swing !== 0 && !stepClear(container, obstacles, sx, sy, dir, width)) {
+      sx = a.x;
+      sy = a.y;
+    }
+    joints.push({ x: sx, y: sy });
   }
+
+  /**
+   * And where even the reduced sway leaves a flank over a window or off the
+   * gable, thin the arm there instead.
+   *
+   * The flanks are laid out along the normal at each *joint* — the bisector of
+   * two adjacent segments — which is not the direction anything upstream tested
+   * against. Rather than add a third approximation, the outline is measured
+   * where it will actually be drawn and the half-width halved until it fits.
+   * A tentacle that narrows slightly as it squeezes past a window frame is
+   * invisible; one that covers the glass is the only thing anybody notices.
+   */
+  if (container) fitWidths(container, obstacles, joints, widths);
 
   /**
    * Base to tip as one gradient down the arm's own axis.
    *
    * The cheap version of this — fill the whole arm dark, then fill the outer
    * half light — puts a hard tonal step across the middle of every tentacle,
-   * and the eye reads that step as a joint in the limb. A gradient object per
-   * arm per frame is a few microseconds and there are never more than a couple
-   * of dozen arms; this is not the expensive part of anything.
+   * and the eye reads that step as a joint in the limb.
    */
-  const tip0 = joints[JOINTS - 1];
+  const tip0 = joints[n - 1];
   const ramp = g.createLinearGradient(joints[0].x, joints[0].y, tip0.x, tip0.y);
   ramp.addColorStop(0, mixHex(p.armColor, '#000000', 0.35));
   ramp.addColorStop(0.45, p.armColor);
@@ -707,41 +1040,39 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1) {
   tentacleRibbon(g, lit, widths.map((v) => v * 0.28));
 
   /**
-   * Suckers, down the inside of the curve.
+   * Suckers, down one side.
    *
-   * The thing that finally stops this reading as foliage. They are placed on
-   * whichever side the tip curls towards, which is where they would be, and
-   * sized off the local width so they thin out with the arm. At the resolution
-   * this is aimed at, the smallest of them is still a couple of projector
-   * pixels across — which is exactly why they are drawn as discs rather than as
-   * the ring-and-centre a photograph would show.
+   * The thing that finally stops this reading as foliage. Sized off the local
+   * width so they thin out with the arm, and spaced by index rather than by
+   * distance because the path is already evenly stepped. At the resolution this
+   * is aimed at, the smallest of them is still a couple of projector pixels
+   * across — which is why they are discs rather than the ring-and-centre a
+   * photograph would show.
    */
   if (p.suckers > 0) {
-    const side = arm.curl >= 0 ? 1 : -1;
     g.fillStyle = rgba(mixHex(p.armTip, '#ffffff', 0.2), 0.4 * p.suckers);
-    for (let i = 2; i < JOINTS - 1; i++) {
+    for (let i = 1; i < n - 1; i += 1) {
       const a = joints[i];
       const b = joints[i + 1];
-      const n = Math.atan2(b.y - a.y, b.x - a.x) + (Math.PI / 2) * side;
+      const dir = Math.atan2(b.y - a.y, b.x - a.x) + (Math.PI / 2) * arm.turn;
       const r = widths[i] * 0.25;
       if (r < 1.2) continue;
       g.beginPath();
-      g.arc(a.x + Math.cos(n) * widths[i] * 0.42, a.y + Math.sin(n) * widths[i] * 0.42, r, 0, TAU);
+      g.arc(a.x + Math.cos(dir) * widths[i] * 0.42, a.y + Math.sin(dir) * widths[i] * 0.42, r, 0, TAU);
       g.fill();
     }
   }
 
   // A blunt, rounded end rather than a point with a light on it — that version
   // read as a firefly sitting on a stalk.
-  const tip = tip0;
-  const tipR = Math.max(2, widths[JOINTS - 1]);
+  const tipR = Math.max(2, widths[n - 1]);
   g.fillStyle = mixHex(p.armColor, p.armTip, 0.75);
   g.beginPath();
-  g.arc(tip.x, tip.y, tipR, 0, TAU);
+  g.arc(tip0.x, tip0.y, tipR, 0, TAU);
   g.fill();
   g.save();
   g.globalCompositeOperation = 'lighter';
-  glow(g, tip.x, tip.y, tipR * 3, p.armTip, 0.22 * emerge);
+  glow(g, tip0.x, tip0.y, tipR * 3, p.armTip, 0.22 * emerge);
   g.restore();
 }
 

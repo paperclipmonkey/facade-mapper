@@ -259,40 +259,107 @@ const voidsIn = (g) => g.rects.filter((r) => r.style === base.void);
 
 console.log('\n— tentacles —');
 
-{
-  const { seen } = run(breach, { ...base, rate: 60, heal: 0, arms: 3, writhe: 3, reach: 3 }, 1500);
+/**
+ * A tentacle is drawn as a ribbon: one edge out along the arm, the other edge
+ * back. Point `i` of the first half and point `n-1-i` of the second are the two
+ * flanks at the same joint, so their midpoint recovers the centreline.
+ */
+function spinesIn(g) {
+  const out = [];
+  for (const poly of g.fills) {
+    if (poly.length < 8 || poly.length % 2) continue; // ribbons only
+    const half = poly.length / 2;
+    const spine = [];
+    for (let i = 0; i < half; i++) {
+      const a = poly[i];
+      const b = poly[poly.length - 1 - i];
+      spine.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    }
+    out.push({ spine, poly });
+  }
+  return out;
+}
 
-  /**
-   * A tentacle is drawn as a ribbon: one edge out, the other edge back. The
-   * first half of the point list is therefore the centreline's left edge, which
-   * is close enough to the arm's path to measure its shape.
-   *
-   * The number that matters is end-to-end distance against path length. A limb
-   * reaching out of a wall scores near one; the hairpin the first version
-   * produced scores near zero, because it doubles back on itself. Anything
-   * under about a half is visibly a bent drinking straw.
-   */
-  let worst = 1;
-  let samples = 0;
-  for (const g of seen.slice(600)) {
-    for (const poly of g.fills) {
-      if (poly.length < 24) continue; // ribbons only, not suckers or bricks
-      const edge = poly.slice(0, Math.floor(poly.length / 2));
-      let path = 0;
-      for (let i = 1; i < edge.length; i++) {
-        path += Math.hypot(edge[i].x - edge[i - 1].x, edge[i].y - edge[i - 1].y);
+function insidePoly(pts, x, y) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+{
+  // Everything drawn, at the top of every range, over half a minute of crawling.
+  const { seen } = run(breach, {
+    ...base, rate: 60, heal: 0, arms: 3, writhe: 3, reach: 3, crawl: 400, wander: 1,
+  }, 1800);
+
+  let ribbons = 0;
+  let overGlass = 0;
+  let offTheWall = 0;
+  let sharpest = Infinity;
+
+  for (const g of seen.slice(300)) {
+    for (const { poly } of spinesIn(g)) {
+      ribbons += 1;
+      // The drawn outline, not the centreline: covering the glass is what
+      // matters and the flanks are what cover it.
+      for (const pt of poly) {
+        for (const win of windows) if (insidePoly(win.points, pt.x, pt.y)) overGlass += 1;
+        if (!insidePoly(wall.points, pt.x, pt.y)) offTheWall += 1;
       }
-      if (path < 1) continue;
-      const span = Math.hypot(
-        edge[edge.length - 1].x - edge[0].x,
-        edge[edge.length - 1].y - edge[0].y
-      );
-      worst = Math.min(worst, span / path);
-      samples += 1;
+    }
+    /**
+     * And no bend is tight enough to turn the ribbon inside out.
+     *
+     * The bare turn angle is the wrong thing to bound: what matters is the
+     * radius of the *inside* edge of the bend, which is the step length over
+     * the turn, less the local half-width. Once that goes negative the inner
+     * flank crosses the spine and the arm pinches shut into a bow-tie. Both
+     * terms are recoverable from the drawn ribbon — the half-width is half the
+     * distance between the two flanks at the same joint.
+     */
+    for (const { spine, poly } of spinesIn(g)) {
+      for (let i = 2; i < spine.length; i++) {
+        const a = Math.atan2(spine[i - 1].y - spine[i - 2].y, spine[i - 1].x - spine[i - 2].x);
+        const b = Math.atan2(spine[i].y - spine[i - 1].y, spine[i].x - spine[i - 1].x);
+        const turn = Math.abs(((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+        const step = Math.hypot(spine[i].x - spine[i - 1].x, spine[i].y - spine[i - 1].y);
+        const flank = poly[poly.length - 1 - i];
+        const half = Math.hypot(flank.x - spine[i].x, flank.y - spine[i].y);
+        if (turn < 1e-6 || !Number.isFinite(turn)) continue;
+        const innerRadius = step / turn - half;
+        sharpest = Math.min(sharpest, innerRadius);
+      }
     }
   }
-  ok('arms were drawn', samples > 20, `${samples} ribbons`);
-  ok('and none of them coils back on itself', worst > 0.5, `worst straightness ${worst.toFixed(2)}`);
+
+  ok('arms were drawn', ribbons > 100, `${ribbons} ribbons`);
+  ok('and none of them covers a window', overGlass === 0, `${overGlass} points on glass`);
+  ok('and none of them leaves the wall', offTheWall === 0, `${offTheWall} points off it`);
+  ok('and no bend turns a ribbon inside out', sharpest > 0,
+    `tightest inner radius ${sharpest.toFixed(1)} px`);
+}
+
+{
+  // Explorative: an arm that grew, held and pulled back should have covered
+  // ground rather than sat still, and should not be where it started.
+  const { seen } = run(breach, { ...base, rate: 60, heal: 0, arms: 1, holes: 1 }, 2400);
+  const lengths = seen.map((g) => {
+    const s0 = spinesIn(g)[0];
+    if (!s0) return 0;
+    let len = 0;
+    for (let i = 1; i < s0.spine.length; i++) {
+      len += Math.hypot(s0.spine[i].x - s0.spine[i - 1].x, s0.spine[i].y - s0.spine[i - 1].y);
+    }
+    return len;
+  });
+  const grew = Math.max(...lengths);
+  ok('an arm reaches out over the wall', grew > 200, `${grew.toFixed(0)} px`);
+  const shortest = Math.min(...lengths.slice(600).filter((l) => l > 0));
+  ok('and pulls back again to try elsewhere', shortest < grew * 0.5,
+    `${shortest.toFixed(0)} px at its shortest, against ${grew.toFixed(0)}`);
 }
 
 {

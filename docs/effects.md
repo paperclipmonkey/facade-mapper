@@ -133,10 +133,33 @@ tooth, where a real wall has a clean reveal.
 **Breach** takes that wall apart. Bricks rattle in their beds for the best part
 of a second before they go, one at a time, tumbling down the wall with a puff of
 dust; the gap left behind is lit from inside by something you cannot see, and
-tentacles push out of it and feel around. Put it directly above Brickwork with
-the same brick dimensions.
+tentacles push out of it and feel their way over the brickwork. Put it directly
+above Brickwork with the same brick dimensions.
 
-Three settings are worth knowing:
+**The arms crawl rather than wave.** Each one owns the path it has actually
+travelled and extends it a step at a time, exactly as the vine does — so it
+steers round the windows instead of across them, stays inside the wall you
+traced, follows a sill when it finds one, and prefers ground the other arms have
+not used. Reaching its limit it holds station and keeps probing, then pulls back
+and sets off somewhere else, so the tangle on the wall goes on changing all
+evening.
+
+That the path is *remembered* is what makes it read as alive. An arm computed
+from a wave function each frame has no memory: it can be swung across a window
+and off the side of the house, and nothing it does in one frame has any bearing
+on the next. An arm that found its way round a window frame a minute ago is
+still round it now, and the snarl on the brickwork is the record of where it has
+been. What is still computed per frame is a sway — a travelling wave applied
+*sideways* to the stored path, scaled by the square of the distance along it, so
+it is nothing at the base and largest at the tip. The arm breathes and the tip
+feels about, but nothing slides across the wall.
+
+**Crawl speed**, **Wander**, **Feel round frames** and **Seek bare wall** are the
+steering. Turn Seek bare wall down and a clutch of arms will pile up on top of
+one another; turn Feel round frames down and they cross open wall instead of
+tracing the edges of things.
+
+Three more settings are worth knowing:
 
 - **Wall heals after (s)** puts the wall back and lets it be broken somewhere
   else. Without it the effect spends its holes in the first minute and then has
@@ -145,9 +168,14 @@ Three settings are worth knowing:
 - **Holes at once** and **Bricks per hole** decide whether this is one enormous
   breach or a wall coming apart everywhere. Neighbouring gaps merge into a
   single opening, mortar and all.
-- **Suckers** is what stops the tentacles reading as foliage. So does the curl
-  at the tip. Turn both down and you have vines coming out of a hole, which is
-  also a good look, just a different one.
+- **Suckers** is what stops the tentacles reading as foliage. Turn them off and
+  you have vines coming out of a hole, which is also a good look, just a
+  different one.
+- **Tentacle thickness** is not free. An arm needs a corridor about three times
+  its thickness to pass through, and can only change course on a radius set by
+  its own step length, so a very thick arm cannot navigate a facade at all — it
+  wedges against the first window frame and spends the evening as a stub. If
+  yours are not going anywhere, that is why.
 
 ## Paths and animation
 
