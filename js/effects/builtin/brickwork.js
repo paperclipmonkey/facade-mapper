@@ -547,6 +547,7 @@ const breach = {
             out = true;
             if (arm.phase2 !== 'back') {
               arm.phase2 = 'back';
+              arm.carry = 0;
               arm.timer = 0;
             }
             // ...and stay back. Without this the arm reaches its stub, decides
@@ -762,26 +763,59 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
     /**
      * Wedged early: back off and try another way, rather than settling for it.
      *
-     * An arm that meets a window frame in its first few steps used to go
-     * straight to holding station, and hold it for ten seconds — so three arms
-     * out of one breach near the roofline, where there is least room, were
-     * three permanent stubs. Giving up a third of what it has grown and setting
-     * off on a new heading costs nothing and is what something feeling its way
-     * would do.
+     * An arm that meets a window frame in its first few steps would otherwise
+     * hold station there for ten seconds, so three arms out of one breach near
+     * the roofline — where there is least room — become three permanent stubs.
+     *
+     * It backs off by *withdrawing*, at the speed it withdraws at. The first
+     * version of this popped a third of the joints in a single frame, which is
+     * the arm visibly restarting half way back along itself several times a
+     * minute. Nothing about a limb changes length instantaneously; setting a
+     * target and letting the existing retract machinery reach it costs one
+     * field and looks like the thing pulling back to try again.
      */
     arm.stuck = 0;
-    const drop = Math.max(1, Math.floor(arm.path.length / 3));
-    for (let k = 0; k < drop && arm.path.length > 1; k++) arm.path.pop();
-    arm.angle += (rng() < 0.5 ? -1 : 1) * (0.9 + rng() * 1.2);
+    arm.phase2 = 'back';
+    arm.carry = 0;
+    arm.backTo = Math.max(2, Math.floor(arm.path.length * 0.62));
+    arm.timer = 0;
   } else if (arm.phase2 === 'out' && (arm.path.length >= maxJoints || arm.stuck > 20)) {
     arm.phase2 = 'feel';
-    arm.timer = 0;
+    arm.carry = 0;
     arm.stuck = 0;
+    // A probe is part of holding station, not a fresh arrival, so it does not
+    // wind the clock back — otherwise an arm that probes every few seconds
+    // never reaches the point of giving up and moving on at all.
+    if (arm.probing) arm.probing = false;
+    else arm.timer = 0;
   } else if (arm.phase2 === 'feel' && arm.timer > 6 + arm.girth * 6) {
     arm.phase2 = 'back';
+    arm.carry = 0;
     arm.timer = 0;
+  } else if (arm.phase2 === 'feel' && arm.timer > (arm.probeAt || 0)) {
+    // A short withdraw and reach, every few seconds, so an arm at full extent
+    // is feeling about rather than parked. Uses the same target-and-retract as
+    // everything else, so nothing jumps.
+    arm.probeAt = arm.timer + 2 + rng() * 3;
+    arm.phase2 = 'back';
+    arm.carry = 0;
+    arm.backTo = Math.max(2, arm.path.length - (3 + Math.floor(rng() * 5)));
+    arm.probing = true;
+  } else if (arm.phase2 === 'back' && arm.backTo && arm.path.length <= arm.backTo) {
+    // Far enough back. Set off again on a new heading, from where it stopped —
+    // the part of the arm still on the wall stays exactly where it was.
+    arm.backTo = null;
+    arm.phase2 = 'out';
+    arm.carry = 0;
+    arm.stuck = 0;
+    arm.turn *= -1;
+    arm.angle += (rng() < 0.5 ? -1 : 1) * (0.7 + rng() * 0.9);
+    // A probe keeps its clock, so the arm still gives up on this spot on
+    // schedule; a genuine wedge starts the clock again.
+    if (!arm.probing) arm.timer = 0;
   } else if (arm.phase2 === 'back' && arm.path.length <= 2 && !arm.holdBack) {
     arm.phase2 = 'out';
+    arm.carry = 0;
     arm.timer = 0;
     // Back to a single joint at the hole, not to the two-joint stub retraction
     // happens to leave. Keeping the stub and setting off in a new direction
@@ -793,7 +827,25 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
     arm.angle = -Math.PI / 2 + (rng() - 0.5) * 2.4;
   }
 
+  // Published for the drawing, which interpolates the leading end between
+  // joints rather than letting it sit on them.
+  /**
+   * Published for the drawing, which interpolates the leading end between
+   * joints rather than letting it sit on one.
+   *
+   * The remainder is spent to zero at every change of phase. It points forward
+   * while the arm is growing and backward while it is withdrawing, so carrying
+   * an unspent one across the transition flips its sign and steps the drawn
+   * length by twice it — which is a thirty-pixel jump at the exact moment an
+   * arm decides to pull back, and therefore the most conspicuous one left.
+   */
+  arm.stepPx = stepPx;
+  arm.growing = arm.phase2 !== 'back';
+
   const speed = Math.max(1, p.crawl) * (arm.pace ?? 1) * (arm.phase2 === 'back' ? 1.6 : 1);
+  const atFull = arm.phase2 === 'feel' && arm.path.length >= maxJoints;
+  if (atFull) return; // nothing to advance, and the remainder must stay put
+
   arm.carry += speed * dt;
   let steps = Math.floor(arm.carry / stepPx);
   if (steps > 6) {
@@ -832,19 +884,18 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
       else arm.angle += 0.7;
       continue;
     }
-    if (arm.phase2 === 'feel' && arm.path.length >= maxJoints) {
-      /**
-       * Probe from the far end, keeping the near end where it is.
-       *
-       * This used to drop the *oldest* joint as a new one was added, which does
-       * keep the length constant and has an obvious consequence I missed: the
-       * base creeps forward a step at a time until the whole arm has walked out
-       * of its own hole and is crawling around the wall attached to nothing.
-       * Retiring the newest joint instead lets the tip feel about while the arm
-       * stays rooted in the breach it came out of.
-       */
-      arm.path.pop();
-    }
+    /**
+     * At full extent it simply stops growing.
+     *
+     * It used to retire the newest joint here and immediately try to place a
+     * replacement, which keeps the length constant only when the replacement
+     * succeeds — and at full extent an arm is usually pressed against something,
+     * so it often did not. Every failure then cost a whole step in a single
+     * frame: measured over three minutes, nine hundred of them. The probing it
+     * was there to provide is now done by the withdraw cycle below, which goes
+     * through the same machinery as everything else that changes length and is
+     * therefore smooth by construction.
+     */
 
     const tip = arm.path[arm.path.length - 1];
     let angle = arm.angle + (rng() - 0.5) * p.wander * 0.5;
@@ -919,6 +970,21 @@ function crawl(arm, p, container, obstacles, state, dt, rng, w, h) {
       if (placed) break;
     }
     if (!placed) {
+      /**
+       * Give the step back.
+       *
+       * The distance for this step was taken out of `carry` before the attempt,
+       * and the attempt added no length — so a blocked step silently shortened
+       * the drawn arm by a whole step, in one frame, every time. An arm pressed
+       * against a window frame is blocked constantly, which is why this was the
+       * largest remaining source of the jumping: four hundred of them in three
+       * minutes, each a clean fifteen pixels.
+       *
+       * Refunded, the leading end simply stays where it is and the wind-in
+       * below trims it to whatever will fit, which is a nudge rather than a
+       * step.
+       */
+      arm.carry = Math.min(arm.carry + stepPx, stepPx * 1.5);
       arm.stuck = (arm.stuck || 0) + 1;
       // Try the other way round every few frames rather than every frame:
       // alternating on each attempt just rocks between two blocked headings.
@@ -994,7 +1060,11 @@ function angleDelta(from, to) {
  * — smoother *and* still provably off the glass.
  */
 function subdivide(joints, widths, k, container, obstacles) {
-  if (k < 2 || joints.length < 3) return { joints, widths };
+  // Copies, not the arrays that were passed in. The caller empties its own
+  // arrays before refilling them from this result, so handing back the same
+  // references leaves it refilling from something it has just cleared. Latent
+  // until an arm was allowed to be two joints long, and then instantly fatal.
+  if (k < 2 || joints.length < 3) return { joints: joints.slice(), widths: widths.slice() };
   const n = joints.length;
   const at = (i) => joints[Math.max(0, Math.min(n - 1, i))];
   const wAt = (i) => widths[Math.max(0, Math.min(n - 1, i))];
@@ -1211,12 +1281,56 @@ function fitWidths(container, obstacles, joints, widths) {
  */
 function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacles = []) {
   const age = t - arm.bornAt;
-  if (age < 0 || alive <= 0.02 || !arm.path || arm.path.length < 3) return;
+  if (age < 0 || alive <= 0.02 || !arm.path || arm.path.length < 2) return;
+
+  /**
+   * The leading end, between joints rather than on one.
+   *
+   * A tentacle's tip could previously only be where a joint was, and joints are
+   * placed two thirds of a width apart — so it advanced and withdrew in visible
+   * lumps of fifteen pixels, fourteen times a second. Measured over three
+   * minutes that is a thousand step changes in length, and it is most of what
+   * still read as mechanical about the motion.
+   *
+   * The crawl already tracks the sub-step remainder it has not spent yet; using
+   * it here puts the end exactly where it should be at this instant. Growing,
+   * that is a little beyond the last joint along the current heading; drawing
+   * back, a little short of it. Both are new positions, so both are checked —
+   * the extended one has not been through the crawl's own placement test yet,
+   * and the interpolated one sits on a line between two cleared joints, which
+   * as established several times over is not the same as being clear.
+   */
+  const path = arm.path.slice();
+  const f = clamp((arm.carry || 0) / Math.max(1, arm.stepPx || 1), 0, 1);
+  if (f > 0.02 && path.length >= 2) {
+    const last = path[path.length - 1];
+    const before = path[path.length - 2];
+    const reach = Math.max(4, p.thickness) * arm.girth;
+    if (arm.growing) {
+      // Wound in until it fits rather than dropped when it does not: dropping
+      // it takes up to a whole step off the drawn length in one frame, which is
+      // the very thing this is here to remove.
+      for (let d = f; d > 0.04; d *= 0.72) {
+        const ex = last.x + Math.cos(arm.angle) * d * arm.stepPx;
+        const ey = last.y + Math.sin(arm.angle) * d * arm.stepPx;
+        if (!container || stepClear(container, obstacles, ex, ey, arm.angle, reach)) {
+          path.push({ x: ex, y: ey });
+          break;
+        }
+      }
+    } else {
+      const rx = last.x + (before.x - last.x) * f;
+      const ry = last.y + (before.y - last.y) * f;
+      if (!container || isClear(container, obstacles, rx, ry)) {
+        path[path.length - 1] = { x: rx, y: ry };
+      }
+    }
+  }
   const out = clamp(age / 1.2, 0, 1) * alive;
   const emerge = out * out * (3 - 2 * out); // smoothstep
   if (emerge < 0.01) return;
 
-  let n = arm.path.length;
+  let n = path.length;
   const base = Math.max(4, p.thickness) * arm.girth;
   const wave = t * p.writhe * arm.rate + arm.phase;
   const writhe = clamp(p.writhe, 0, 3);
@@ -1240,7 +1354,7 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
    */
   const along = [0];
   for (let i = 1; i < n; i++) {
-    along.push(along[i - 1] + Math.hypot(arm.path[i].x - arm.path[i - 1].x, arm.path[i].y - arm.path[i - 1].y));
+    along.push(along[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y));
   }
   const fullReach = Math.max(1, Math.max(w, h) * 7 * p.reach * arm.length);
 
@@ -1249,9 +1363,9 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
   for (let i = 0; i < n; i++) {
     const u = Math.min(1, along[i] / fullReach);
     const v = i / (n - 1);
-    const a = arm.path[i];
-    const b = arm.path[Math.min(i + 1, n - 1)];
-    const prev = arm.path[Math.max(i - 1, 0)];
+    const a = path[i];
+    const b = path[Math.min(i + 1, n - 1)];
+    const prev = path[Math.max(i - 1, 0)];
     const dir = Math.atan2(b.y - prev.y, b.x - prev.x);
     // Sideways, and only sideways: pushing along the path would make the arm
     // appear to slide in and out of its own hole.
