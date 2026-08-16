@@ -135,6 +135,8 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
   const reportedErrors = new Set();
   /** Values effects publish for each other. See `share` in the draw context. */
   const share = new Map();
+  /** `show.sceneChangeAt` as of the last frame, to spot a scene being re-fired. */
+  let lastSceneAt = null;
   let frameShapeCache = null;
   let frameShapeKey = '';
 
@@ -245,6 +247,36 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
     if (frameShapeKey !== `${world.w}x${world.h}`) {
       frameShapeCache = frameShape(world);
       frameShapeKey = `${world.w}x${world.h}`;
+    }
+
+    /**
+     * A scene firing replays whatever it switches on.
+     *
+     * Without this, pressing the same trigger twice does nothing the second
+     * time: the scene is already active, so the layer never goes off and never
+     * comes back on, so its clock never restarts. You had to switch to another
+     * scene and back to get a burst to play again, which is not how anybody
+     * expects a doorbell to behave.
+     *
+     * Driven from `show.sceneChangeAt`, which `activateScene` stamps on every
+     * activation including a repeat, and which is part of the broadcast — so
+     * the projector tabs replay in step rather than needing to be told
+     * separately by a runtime only the control tab runs.
+     *
+     * Only layers the scene explicitly *enables*, so re-firing a scene cannot
+     * quietly wipe the ivy or the frost that some other layer has spent the
+     * evening accumulating.
+     */
+    const sceneAt = project.show?.sceneChangeAt ?? null;
+    if (sceneAt !== lastSceneAt) {
+      lastSceneAt = sceneAt;
+      const active = (project.scenes || []).find((s) => s.id === project.show?.activeScene);
+      for (const [layerId, layerState] of Object.entries(active?.state || {})) {
+        if (!layerState?.enabled) continue;
+        for (const [key, inst] of instanceState) {
+          if (key.startsWith(`${layerId}:`)) inst.enabledAt = null;
+        }
+      }
     }
 
     const layers = effectiveLayers(project).filter((l) => l.enabled !== false);
@@ -405,8 +437,12 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
            * interactive effect. A layer that has simply always been on gets its
            * age from the first frame it drew, which is what an ambient effect
            * would want anyway.
+           *
+           * Set properly a few lines below, once the instance has been checked
+           * for a gap and for a scene re-fire; this is only here so the shape of
+           * the context object is obvious from reading it.
            */
-          age: t - (inst.enabledAt ?? t),
+          age: 0,
           /** Parameters *without* modulation. Key caches on this, never on `p`. */
           stable,
         };
@@ -421,11 +457,10 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
          * frames of slack, because a scene change and a dropped frame should
          * not look like a retrigger.
          */
-        if (inst.lastSeen === undefined || generation - inst.lastSeen > 2) {
-          inst.enabledAt = t;
-          ctx.age = 0;
-        }
+        if (inst.lastSeen === undefined || generation - inst.lastSeen > 2) inst.enabledAt = null;
         inst.lastSeen = generation;
+        if (inst.enabledAt === null || inst.enabledAt === undefined) inst.enabledAt = t;
+        ctx.age = t - inst.enabledAt;
 
         if (!inst.initialised) {
           inst.initialised = true;

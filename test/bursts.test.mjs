@@ -15,7 +15,7 @@ import { boundingBox, buildPathSampler, makeRng } from '../js/core/math.js';
 import { defaultNoise } from '../js/core/noise.js';
 import { createProject } from '../js/core/state.js';
 import { addDemoBursts, DEMO_BURSTS } from '../js/control/presets.js';
-import { effectiveLayers } from '../js/core/scenes.js';
+import { effectiveLayers, activateScene } from '../js/core/scenes.js';
 import { RESERVED_KEYS } from '../js/core/state.js';
 
 let failures = 0;
@@ -133,6 +133,38 @@ console.log('\n— the chain from key to burst —');
   project.show.activeScene = null;
   const back = effectiveLayers(project).filter((l) => l.enabled !== false);
   ok('and it goes away again afterwards', !back.some((l) => burstLayers.includes(l)));
+}
+
+console.log('\n— firing the same trigger again replays it —');
+
+{
+  const project = createProject('t');
+  project.shapes = [{ ...shape, id: 'door', tags: ['door'] }];
+  addDemoBursts(project);
+  const trigger = project.triggers[0];
+
+  activateScene(project, trigger.sceneId, { fade: 0 });
+  const first = project.show.sceneChangeAt;
+  ok('firing a scene stamps the moment', typeof first === 'number');
+
+  /**
+   * The mechanism the replay hangs off. Pressing the same key twice leaves the
+   * scene already active, so the layer never goes off and never comes back on —
+   * and without a stamp that changes anyway, nothing downstream can tell the
+   * difference between "still playing" and "fired again". You had to switch to
+   * another scene and back, which is not how a doorbell behaves.
+   */
+  const at = project.show.sceneChangeAt;
+  project.show.sceneChangeAt = at - 1000;  // pretend a second has passed
+  activateScene(project, trigger.sceneId, { fade: 0 });
+  ok('and firing the same one again stamps it afresh',
+    project.show.sceneChangeAt !== at - 1000);
+  ok('while leaving it the active scene', project.show.activeScene === trigger.sceneId);
+
+  // And the scene names exactly the layers that should replay.
+  const scene = project.scenes.find((s) => s.id === trigger.sceneId);
+  const enables = Object.entries(scene.state).filter(([, st]) => st?.enabled);
+  ok('and names one layer to replay', enables.length === 1, `${enables.length}`);
 }
 
 console.log(failures ? `\n${failures} failing` : '\nall good');

@@ -248,8 +248,11 @@ middle of whatever shape you point them at, so aim one at the door and things
 come out of the door.
 
 **Setting one off.** A trigger fires a scene, the scene switches the layer on,
-and switching on is what restarts the clock — so pressing the key again plays it
-again. Build one as: a layer with the burst, **bypassed**; a scene whose only
+and switching on is what restarts the clock. Firing the same trigger again
+replays it immediately, part-way through or after it has finished — a scene
+activation restarts everything that scene *enables*, whether or not it was
+already the active scene. Only layers it enables, so re-firing cannot wipe the
+ivy or the frost that something else has spent the evening accumulating. Build one as: a layer with the burst, **bypassed**; a scene whose only
 entry is that layer, enabled; a trigger on a key pointing at that scene, with a
 hold a little longer than the burst. After the hold the show goes back to
 whatever it was doing, by itself.
