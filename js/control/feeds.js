@@ -31,6 +31,8 @@ const feeds = new Map();
  */
 export function feed(deviceId) {
   if (!deviceId) return null;
+  if (/^https?:\/\//i.test(deviceId)) return streamFeed(deviceId);
+
   const existing = feeds.get(deviceId);
   if (existing) return existing.ready ? existing.video : null;
 
@@ -58,11 +60,73 @@ export function feed(deviceId) {
   return null;
 }
 
+/**
+ * A network stream, given a URL.
+ *
+ * **Not RTSP.** No browser can open an RTSP URL — there is no RTSP client in
+ * any of them, and `<video>` speaks HTTP progressive, HLS, DASH and WebRTC and
+ * nothing else. That is a platform limit and there is no way round it from
+ * inside a page. What works is putting something on the network that pulls the
+ * RTSP and republishes it in one of those; see docs/effects.md for the recipe.
+ *
+ * Two kinds of URL, told apart by what comes back rather than by the extension,
+ * because a restreamer's URL rarely has one:
+ *
+ * - **MJPEG** — an endless multipart JPEG stream, which is what one line of
+ *   ffmpeg gives you and what every IP camera has spoken since about 2004. It
+ *   goes in an `<img>`, which is drawable to a canvas exactly like a video and
+ *   needs no library at all. `naturalWidth` stands in for `videoWidth`.
+ * - **Everything else** goes in a `<video>`: progressive MP4 or WebM, and HLS
+ *   on Safari, which is the only browser that plays it natively.
+ *
+ * Credentials in the URL — `http://user:pass@host/…` — are passed through and
+ * are how basic auth works here. They are stored in the project file in clear,
+ * which is worth knowing before you put a camera password in one.
+ */
+export function streamFeed(url) {
+  const existing = feeds.get(url);
+  if (existing) return existing.failed ? null : (existing.ready ? existing.el : null);
+
+  const mjpeg = /mjpe?g|\.cgi(\?|$)|action=stream/i.test(url);
+  const entry = { ready: false, failed: false, stream: null };
+
+  if (mjpeg) {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    // The drawing code asks for videoWidth/videoHeight, so an image has to
+    // answer to those too rather than every caller learning about both.
+    Object.defineProperty(img, 'videoWidth', { get: () => img.naturalWidth });
+    Object.defineProperty(img, 'videoHeight', { get: () => img.naturalHeight });
+    img.addEventListener('load', () => { entry.ready = true; });
+    img.addEventListener('error', () => { entry.failed = true; });
+    img.src = url;
+    entry.el = img;
+  } else {
+    const video = document.createElement('video');
+    video.playsInline = true;
+    video.muted = true;
+    video.autoplay = true;
+    video.loop = true;
+    video.crossOrigin = 'anonymous';
+    video.addEventListener('loadeddata', () => { entry.ready = true; });
+    video.addEventListener('error', () => { entry.failed = true; });
+    video.src = url;
+    video.play().catch(() => {});
+    entry.el = video;
+  }
+
+  feeds.set(url, entry);
+  return null;
+}
+
 /** Let go of a device — on project load, or when nothing references it. */
 export function releaseFeed(deviceId) {
   const entry = feeds.get(deviceId);
   if (!entry) return;
   entry.stream?.getTracks?.().forEach((t) => t.stop());
+  // A network stream keeps pulling until its source is cleared, and an MJPEG
+  // `<img>` will happily hold a connection open for the rest of the evening.
+  if (entry.el) entry.el.src = '';
   feeds.delete(deviceId);
 }
 

@@ -150,7 +150,23 @@ export function paramRow(def, value, binding, handlers) {
         }
         select.value = chosen;
       });
-      control.appendChild(select);
+      /**
+       * A URL as well as a device, because a lot of the cameras people already
+       * have on the house are not USB webcams. Anything a browser can play goes
+       * here — see the note on RTSP in docs/effects.md, which it cannot.
+       */
+      const url = el('input', {
+        type: 'text',
+        value: /^https?:/i.test(current) ? current : '',
+        placeholder: 'or a stream URL — http://…',
+        spellcheck: 'false',
+      });
+      url.addEventListener('change', () => {
+        const value = url.value.trim();
+        commit(value);
+        if (value) select.value = '';
+      });
+      control.append(select, url);
       break;
     }
 

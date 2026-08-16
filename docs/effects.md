@@ -304,6 +304,45 @@ pick it from the layer's Camera list, and that layer opens it on its own. Stream
 are shared between layers asking for the same device and closed when the last
 layer stops asking, so the recording light goes out when it should.
 
+### RTSP, and what to do instead
+
+**A browser cannot open an RTSP URL.** There is no RTSP client in any of them,
+and `<video>` speaks HTTP progressive, HLS, DASH and WebRTC and nothing else.
+That is a platform limit; no amount of work in this app changes it. So a Eufy,
+Reolink or any other camera whose only output is `rtsp://…` cannot be pointed at
+directly, basic auth or not.
+
+What does work is putting something on the network that pulls the RTSP and
+republishes it in a form a browser accepts. Both of these are one line:
+
+```
+# MJPEG — works in every browser, no library, ~0.3s behind
+ffmpeg -rtsp_transport tcp -i rtsp://user:pass@camera/live0 \
+  -f mpjpeg -q:v 6 -r 12 listen=1 http://0.0.0.0:8090/cam.mjpg
+```
+
+```
+# Or MediaMTX, a single binary: RTSP in, WebRTC and HLS out
+mediamtx   # with paths: cam: source: rtsp://user:pass@camera/live0
+```
+
+Then put the published URL in the **Camera** box on a Live Camera layer, in
+place of picking a device. MJPEG is detected from the URL and loaded as an
+image, which is drawable exactly like a video and needs nothing else; anything
+else goes to a `<video>`, so progressive MP4 and WebM work everywhere and HLS
+works on Safari.
+
+Two caveats. The page must be served over **http** for it to reach an http
+stream on your own network — the same mixed-content rule as the trigger
+webhooks. And credentials in the URL are stored in the project file in clear,
+so think before putting a camera password in one and exporting it.
+
+**This is for effects, not for alignment.** The alignment camera has to see a
+dot flash and report it back within a fraction of a second, and it wants its
+exposure pinned; a restreamed feed is a second or more behind and re-encoded on
+the way. Align with a webcam on a tripod, and use the network cameras for the
+picture you put *on* the house.
+
 Two related things worth knowing. The picture behind your shapes in the editor is
 the *tracing backdrop* — it is never projected, and no projector tab has a camera
 at all. And the **Camera** tick in the stage toolbar means "show the live view
