@@ -273,6 +273,23 @@ export const HELP_SECTIONS = [
   sounds like a flanger rather than a thunderclap.
 </p>
 
+<h2>Building a series of scenes</h2>
+<p>
+  Switching to a scene <strong>loads</strong> it: the layers take on its values, so the inspector
+  shows the numbers you can actually see on the wall. That is what makes 1, 2, 3 that evolve from one
+  another editable — go to 1, change a few things, save; go to 2, change a few more, save.
+</p>
+<p>
+  The scene you are in is marked <em>live</em>, and picks up an <strong>edited</strong> chip and a
+  <strong>Save</strong> button the moment anything differs from what was stored. Nothing else can
+  drift, because going to a scene loads it. Switching away discards unsaved changes &mdash;
+  <kbd>Ctrl</kbd>+<kbd>Z</kbd> brings them back.
+</p>
+<p>
+  Triggers and the playlist deliberately do <em>not</em> load: an evening of scares must not slowly
+  rewrite the show with whatever the last one happened to look like.
+</p>
+
 <h2>Running it every night</h2>
 <p>
   <strong>Setup &rarr; Nightly schedule</strong> gives on and off times and which days. It drives

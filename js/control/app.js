@@ -44,7 +44,7 @@ import { createWarpRenderer, computeEdgeBlends, projectorsOverlap } from '../ren
 import { GRADE_PRESETS, DEFAULT_GRADE } from '../render/postfx.js';
 import { createMediaPool, importMediaFile, removeMedia } from '../core/media.js';
 import { loadUserEffects, listByCategory, defaultParams, getEffect, getCompileErrors } from '../effects/registry.js';
-import { captureScene, activateScene as applyScene, tickPlaylist, transitionProgress } from '../core/scenes.js';
+import { captureScene, activateScene as applyScene, applySceneToLayers, sceneDrift, tickPlaylist, transitionProgress } from '../core/scenes.js';
 import { createCamera } from './camera.js';
 import { feed as extraFeed, pruneFeeds } from './feeds.js';
 import { runCalibration, checkDrift, solveFromCorners } from './calibration.js';
@@ -823,10 +823,40 @@ app.checkProjectorDrift = async (projectorId) => {
  * Scenes
  * ------------------------------------------------------------------ */
 
+/**
+ * Go to a scene, and load it into the editor.
+ *
+ * Loading is the part that was missing. Scenes are render-time overrides, so
+ * switching used to change the projection and change nothing in the panels —
+ * the inspector went on showing the authored values while the wall showed the
+ * scene's, and building a series of scenes that evolve from one another meant
+ * editing numbers you could not see.
+ *
+ * Undo first, because this overwrites whatever was in the layers. If you had
+ * unsaved changes, Ctrl+Z brings them back.
+ *
+ * Triggers and the playlist deliberately do *not* come through here — they use
+ * the core `activateScene` alone. An evening of scares must not slowly rewrite
+ * the show as it runs.
+ */
 app.activateScene = (sceneId) => {
+  const scene = app.project.scenes.find((s) => s.id === sceneId);
+  if (!scene) return;
+  const drifted = sceneDrift(app.project, app.project.show?.activeScene).length;
+  app.pushUndo();
   applyScene(app.project, sceneId);
+  applySceneToLayers(app.project, sceneId);
+  app.select(null);
   app.commit();
+  toast(
+    drifted
+      ? `${scene.name}. The ${drifted} unsaved change${drifted === 1 ? '' : 's'} to the last scene ${drifted === 1 ? 'is' : 'are'} still in Ctrl+Z.`
+      : scene.name
+  );
 };
+
+/** Layers whose current values differ from the scene that is live. */
+app.sceneDrift = (sceneId) => sceneDrift(app.project, sceneId);
 
 app.recaptureScene = (sceneId) => {
   const scene = app.project.scenes.find((s) => s.id === sceneId);
@@ -1688,6 +1718,15 @@ function wire() {
       state: captureScene(app.project),
     });
     app.project.scenes.push(scene);
+    /**
+     * And you are now in it.
+     *
+     * Saving a look as a scene and then not being in that scene is a state
+     * nobody wants: the panel has no live scene, so it cannot tell you whether
+     * what you go on to change has drifted from what you just saved — and the
+     * first thing anybody does after saving is keep tweaking.
+     */
+    applyScene(app.project, scene.id, { fade: 0 });
     app.select({ type: 'scene', id: scene.id });
     app.commit();
     toast(`Saved as "${scene.name}"${hotkey ? ` — press ${hotkey} to recall it.` : '.'}`, 'good');

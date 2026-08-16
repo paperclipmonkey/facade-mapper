@@ -23,6 +23,66 @@ export function captureScene(project) {
   return state;
 }
 
+/**
+ * Copy a scene's stored values back onto the layers themselves.
+ *
+ * Scenes are overrides applied at render time, which is right for running a
+ * show and quietly wrong for building one: the inspector edits the layer, the
+ * scene overrides it, and the panel therefore shows numbers that are not the
+ * ones on the wall. Switching between two scenes changed the projection and
+ * changed nothing in the UI, which makes a series of scenes that evolve from
+ * one another almost impossible to edit.
+ *
+ * So an explicit switch — clicking a scene, or its hotkey — loads it. After
+ * this the layers *are* the scene, the inspector shows what you can see, and
+ * editing works the way it does at every other moment.
+ *
+ * Only for user-initiated changes. A trigger or a playlist must not rewrite the
+ * project as it runs, or an evening of scares would slowly overwrite the show
+ * with whatever the last scare happened to look like.
+ */
+export function applySceneToLayers(project, sceneId) {
+  const scene = (project.scenes || []).find((s) => s.id === sceneId);
+  if (!scene) return false;
+  for (const layer of project.layers) {
+    const stored = scene.state?.[layer.id];
+    // A layer the scene says nothing about keeps what it has, which is the same
+    // rule the renderer follows.
+    if (!stored) continue;
+    layer.enabled = !!stored.enabled;
+    layer.opacity = stored.opacity ?? 1;
+    if (stored.params) layer.params = { ...layer.params, ...stored.params };
+  }
+  return true;
+}
+
+/**
+ * How far the current layers have drifted from a scene, by layer.
+ *
+ * Used to say "edited" on the scene you are working on. Without it there is no
+ * way to tell a scene you have changed from one you have not, and the only safe
+ * habit is to re-save all of them every time.
+ */
+export function sceneDrift(project, sceneId) {
+  const scene = (project.scenes || []).find((s) => s.id === sceneId);
+  if (!scene) return [];
+  const changed = [];
+  for (const layer of project.layers) {
+    const stored = scene.state?.[layer.id];
+    if (!stored) continue;
+    if (!!layer.enabled !== !!stored.enabled) { changed.push(layer.id); continue; }
+    if (Math.abs((layer.opacity ?? 1) - (stored.opacity ?? 1)) > 1e-6) { changed.push(layer.id); continue; }
+    const keys = new Set([...Object.keys(stored.params || {}), ...Object.keys(layer.params || {})]);
+    for (const key of keys) {
+      const a = stored.params?.[key];
+      const b = layer.params?.[key];
+      const same = typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 1e-6 : a === b;
+      if (!same) { changed.push(layer.id); break; }
+    }
+  }
+  return changed;
+}
+
 /** Blend factor for the running transition, 0 = fully previous, 1 = fully active. */
 export function transitionProgress(show, now = Date.now()) {
   if (!show?.sceneChangeAt) return 1;

@@ -300,11 +300,42 @@ export function renderSceneList(node, app) {
       app.activateScene(scene.id);
     });
 
+    /**
+     * Whether the live scene has been edited since it was saved.
+     *
+     * Only the live one can have drifted — every other scene is exactly what it
+     * was stored as, because switching to one loads it. Without this there is
+     * no way to tell a scene you have changed from one you have not, and the
+     * only safe habit is to re-save all of them every time.
+     */
+    const drift = active ? app.sceneDrift(scene.id) : [];
+
+    const save = drift.length
+      ? el('button', {
+          type: 'button',
+          class: 'btn small primary',
+          text: 'Save',
+          title: `Store the current look back into "${scene.name}"`,
+        })
+      : null;
+    save?.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      app.recaptureScene(scene.id);
+    });
+
     const item = el('div', { class: `list-item${selected ? ' selected' : ''}` }, [
       go,
       el('span', { class: 'item-title', text: scene.name }),
       scene.hotkey ? el('span', { class: 'chip', text: scene.hotkey }) : null,
       active ? el('span', { class: 'chip on', text: 'live' }) : null,
+      drift.length
+        ? el('span', {
+            class: 'chip warn',
+            text: `${drift.length} edited`,
+            title: 'Changed since it was saved. Save to keep it, or switch scenes to lose it.',
+          })
+        : null,
+      save,
     ]);
     item.addEventListener('click', () => app.select({ type: 'scene', id: scene.id }));
     node.appendChild(item);

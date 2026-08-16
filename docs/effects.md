@@ -396,6 +396,22 @@ clamp(low * 2, 0, 1)                     // follow the bass
 base * (0.6 + 0.4 * noise(t * 0.5, i))   // wander
 ```
 
+## Scenes that evolve from each other
+
+Switching to a scene **loads** it — the layers take on its stored values, so the
+inspector shows the numbers you can see on the wall. Without that, a scene is a
+render-time override: switching changes the projection and changes nothing in
+the panels, and building 1, 2, 3 that evolve from one another means editing
+values you cannot see.
+
+The scene you are in is marked *live*, and gains an **edited** chip and a
+**Save** button the moment anything differs from what was stored. Nothing else
+can drift, because going to a scene loads it. Switching away discards unsaved
+changes; <kbd>Ctrl</kbd>+<kbd>Z</kbd> brings them back.
+
+Triggers and the playlist deliberately do *not* load, because an evening of
+scares must not slowly rewrite the show with whatever the last one looked like.
+
 ## Triggers
 
 A trigger jumps to a scene, optionally plays a sound, holds it for a few

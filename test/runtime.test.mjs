@@ -262,5 +262,53 @@ console.log('\n— trigger webhooks —');
     (await fireWebhook({ url: '' }, { key: 'k5' })).skipped === true);
 }
 
+/* ------------------------------------------------------------------ *
+ * Editing a series of scenes
+ * ------------------------------------------------------------------ */
+
+console.log('\n— scenes load, and say when they have drifted —');
+{
+  const { createProject, createLayer, createScene } = await import('../js/core/state.js');
+  const { captureScene, applySceneToLayers, sceneDrift } = await import('../js/core/scenes.js');
+
+  const project = createProject('t');
+  const a = createLayer('fill', { params: { level: 0.2 }, opacity: 1, enabled: true });
+  const b = createLayer('fill', { params: { level: 0.9 }, opacity: 1, enabled: true });
+  project.layers = [a, b];
+
+  const one = createScene({ name: 'One', state: captureScene(project) });
+  project.scenes.push(one);
+  ok('a scene just saved has not drifted', sceneDrift(project, one.id).length === 0);
+
+  a.params.level = 0.75;
+  b.enabled = false;
+  ok('and says so once both are changed', sceneDrift(project, one.id).length === 2);
+
+  const two = createScene({ name: 'Two', state: captureScene(project) });
+  project.scenes.push(two);
+  ok('a second scene saved from here has not drifted', sceneDrift(project, two.id).length === 0);
+
+  /**
+   * The bit that was missing. A scene is a render-time override, so switching
+   * changed the projection and changed nothing in the panels — the inspector
+   * went on showing the authored values while the wall showed the scene's.
+   * Building a series of scenes that evolve from one another meant editing
+   * numbers you could not see.
+   */
+  applySceneToLayers(project, one.id);
+  ok('loading a scene puts its values back on the layers',
+    a.params.level === 0.2 && b.enabled === true);
+  ok('and there is nothing left to save', sceneDrift(project, one.id).length === 0);
+  ok('while the other scene is untouched', two.state[a.id].params.level === 0.75);
+
+  // A layer a scene says nothing about keeps what it has — the same rule the
+  // renderer follows, so loading cannot silently reset a layer added later.
+  const c = createLayer('fill', { params: { level: 0.4 } });
+  project.layers.push(c);
+  applySceneToLayers(project, one.id);
+  ok('a layer the scene predates is left alone', c.params.level === 0.4);
+  ok('and is not counted as drift', sceneDrift(project, one.id).length === 0);
+}
+
 console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILURE(S)`}`);
 process.exit(failures ? 1 : 0);
