@@ -57,7 +57,13 @@ which is a wide low opening quite unlike a flat window. A **flat-roofed store**
 on one side, for snow to settle on. **White render** rather than brick, which is
 why Brickwork exists. And the **neighbour's half** carrying on past the party
 wall, which is the most useful thing about a semi to practise on: the projector
-quad stops at the party wall, because you light your half and not theirs. Nothing about it is a mock-up — the shapes, the effects, the alignment
+quad stops at the party wall, because you light your half and not theirs.
+
+It also ships with three one-shots on keys — **X** for bats out of the door,
+**G** for something knocking, **F** for sparks off the roof. Press one and watch
+the show go back to what it was doing by itself afterwards; that is the whole
+mechanism behind a scare, and it is easier to understand by pressing it than by
+reading about it. Nothing about it is a mock-up — the shapes, the effects, the alignment
 and the preview are all the same code a real show runs, so anything you learn
 there is directly transferable. It opens as its own show, so it never costs you
 one you were working on.

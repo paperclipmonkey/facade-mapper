@@ -154,7 +154,9 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
     if (!inst) {
       // Seeded from the identity of the pairing, so the same window shows the
       // same flame in every tab and across reloads.
-      inst = { state: {}, rng: makeRng(key), noise: createNoise(key), initialised: false };
+      inst = { state: {}, rng: makeRng(key), noise: createNoise(key), initialised: false,
+        /** Show time at which this layer was last switched on. See `age`. */
+        enabledAt: null };
       instanceState.set(key, inst);
     }
     inst.usedAt = generation;
@@ -389,11 +391,41 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
            */
           share,
           preview,
+          /**
+           * Seconds since this layer was switched on.
+           *
+           * The primitive that makes a one-shot possible. A trigger fires a
+           * scene, the scene enables a layer, and the layer needs to know that
+           * it has just started rather than that it has been running all
+           * evening — otherwise a burst of bats is a swarm that has already
+           * flown away by the time anyone rings the bell.
+           *
+           * It restarts every time the layer goes from off to on, so pressing
+           * the key again replays it, which is the whole point of an
+           * interactive effect. A layer that has simply always been on gets its
+           * age from the first frame it drew, which is what an ambient effect
+           * would want anyway.
+           */
+          age: t - (inst.enabledAt ?? t),
           /** Parameters *without* modulation. Key caches on this, never on `p`. */
           stable,
         };
 
         ctx.p = resolveParams(effect, layer, ctx);
+
+        /**
+         * The moment it came on.
+         *
+         * Disabled layers never reach this loop, so a gap between one frame and
+         * the next is exactly "it was switched off and switched on again". Two
+         * frames of slack, because a scene change and a dropped frame should
+         * not look like a retrigger.
+         */
+        if (inst.lastSeen === undefined || generation - inst.lastSeen > 2) {
+          inst.enabledAt = t;
+          ctx.age = 0;
+        }
+        inst.lastSeen = generation;
 
         if (!inst.initialised) {
           inst.initialised = true;

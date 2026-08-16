@@ -72,7 +72,7 @@ import { createTriggerRuntime } from './triggers.js';
 import { scheduleWantsOn, describeSchedule } from './schedule.js';
 import { el, clear, toast, paramRow } from './ui.js';
 import { HELP_HTML, EFFECT_TEMPLATE } from './help.js';
-import { PRESETS, applyPreset } from './presets.js';
+import { PRESETS, applyPreset, addDemoBursts } from './presets.js';
 import { demoShapes, demoWorldQuad, demoFacadeBlob, DEMO_ASPECT } from './demoHouse.js';
 
 const $ = (id) => document.getElementById(id);
@@ -1052,6 +1052,7 @@ app.loadDemoHouse = async (presetId = 'halloween') => {
   }
 
   applyPreset(project, presetId);
+  const bursts = addDemoBursts(project);
 
   app.project = project;
   setCurrentProjectId(project.id);
@@ -1063,7 +1064,10 @@ app.loadDemoHouse = async (presetId = 'halloween') => {
   clock.play();
   updateTransportUI();
   switchPanel('layers');
-  toast('Demo house loaded. Everything here works exactly as it does on a real one.', 'good');
+  toast(
+    `Demo house loaded. Press ${bursts.map((b) => b.key.toUpperCase()).join(', ')} to set things off.`,
+    'good'
+  );
 };
 
 /** Leave the demo behind for an empty show of your own. */

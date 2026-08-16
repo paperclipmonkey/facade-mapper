@@ -12,7 +12,7 @@
  * afterwards.
  */
 
-import { createLayer, createScene } from '../core/state.js';
+import { createLayer, createScene, createTrigger } from '../core/state.js';
 import { defaultParams } from '../effects/registry.js';
 import { captureScene } from '../core/scenes.js';
 import { GRADE_PRESETS } from '../render/postfx.js';
@@ -317,4 +317,115 @@ function nextFreeHotkey(project) {
   const used = new Set(project.scenes.map((s) => String(s.hotkey)));
   for (let i = 1; i <= 9; i++) if (!used.has(String(i))) return String(i);
   return null;
+}
+
+/* ------------------------------------------------------------------ *
+ * One-shots on keys
+ * ------------------------------------------------------------------ */
+
+/**
+ * The three interactive effects the demo ships with, and their keys.
+ *
+ * Everything else in a show loops, which is right for a house that has to hold
+ * up from dusk until the last group has gone and wrong for the moment somebody
+ * actually reaches the door. These are the other kind: they happen once, and
+ * something has to set them off.
+ *
+ * Each is a layer that is **off** in the authored show, a scene that switches
+ * exactly that one on, and a trigger that fires the scene from a key. The
+ * trigger holds it for a moment and then restores whatever was playing, so the
+ * ambient look comes back by itself and the next visitor gets the same thing.
+ * Pressing the key again re-enables the layer, which restarts its clock — that
+ * is what makes them repeatable rather than a one-off.
+ *
+ * A key rather than motion because a key can be pressed by hand, by a doorbell
+ * wired to a USB button, or by anything else that can type — and because it is
+ * the one trigger that works indoors while you are still learning the app.
+ *
+ * The keys avoid the ones the editor has already taken. That is not a detail:
+ * the first draft of this used B for bats, which is Blackout, so pressing it
+ * blacked the show out and never reached the trigger at all. `RESERVED_KEYS`
+ * in core/state.js is the list, and the trigger inspector warns if you pick one.
+ */
+export const DEMO_BURSTS = [
+  {
+    key: 'x',
+    name: 'Bats out of the door',
+    effect: 'bat-burst',
+    tags: ['door'],
+    hold: 3.2,
+    params: {
+      color: '#140a16', count: 46, duration: 2.8, speed: 950, spread: 0.62, aim: -90,
+      size: 44, flap: 9, rise: -240, wander: 0.55, glow: 0.6, glowColor: '#8b00ff',
+    },
+  },
+  {
+    key: 'g',
+    name: 'Something knocks',
+    effect: 'shockwave',
+    tags: ['door'],
+    hold: 2,
+    params: {
+      color: '#ff7a18', color2: '#8b00ff', rings: 4, duration: 1.7,
+      reach: 1500, width: 30, flash: 1.3, gap: 0.11,
+    },
+  },
+  {
+    key: 'f',
+    name: 'Sparks off the roof',
+    effect: 'spark-burst',
+    tags: ['roof'],
+    hold: 2.6,
+    params: {
+      hotTemp: 2800, coolTemp: 1100, count: 120, duration: 2.2, speed: 780,
+      spread: 0.5, aim: -90, gravity: 950, size: 8, trail: 0.7,
+    },
+  },
+];
+
+/**
+ * Add the one-shots to a project, wired to their keys.
+ *
+ * Scenes here are built by hand rather than captured, and deliberately name
+ * only the one layer they switch on: a layer a scene says nothing about keeps
+ * its authored state, so a captured scene would freeze the entire show as it
+ * happened to be at that instant and a hand-built one leaves everything else
+ * alone. Fire it in the middle of anything and only the burst changes.
+ */
+export function addDemoBursts(project) {
+  let order = project.layers.reduce((max, l) => Math.max(max, l.order || 0), 0);
+  const added = [];
+
+  for (const spec of DEMO_BURSTS) {
+    const layer = createLayer(spec.effect, {
+      name: spec.name,
+      targetTags: spec.tags,
+      params: { ...defaultParams(spec.effect), ...spec.params },
+      order: ++order,
+      // Off in the authored show. The scene is the only thing that turns it on.
+      enabled: false,
+    });
+    project.layers.push(layer);
+
+    const scene = createScene({
+      name: spec.name,
+      fade: 0,
+      state: { [layer.id]: { enabled: true, opacity: 1, params: { ...layer.params } } },
+    });
+    project.scenes.push(scene);
+
+    project.triggers.push(createTrigger({
+      name: `${spec.name} (${spec.key.toUpperCase()})`,
+      source: 'hotkey',
+      key: spec.key,
+      sceneId: scene.id,
+      hold: spec.hold,
+      // No cooldown: these are meant to be pressed again the moment they finish.
+      cooldown: 0,
+    }));
+
+    added.push({ key: spec.key, name: spec.name });
+  }
+
+  return added;
 }

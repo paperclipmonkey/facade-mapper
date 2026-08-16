@@ -6,6 +6,7 @@ file is for the ideas behind them.
 
 - [Targeting](#targeting)
 - [Effects that know where the windows are](#effects-that-know-where-the-windows-are)
+- [Effects that happen once](#effects-that-happen-once)
 - [Paths and animation](#paths-and-animation)
 - [Drawing for a projector](#drawing-for-a-projector)
 - [The look](#the-look)
@@ -227,6 +228,46 @@ Three more settings are worth knowing:
   its own step length, so a very thick arm cannot navigate a facade at all — it
   wedges against the first window frame and spends the evening as a stub. If
   yours are not going anywhere, that is why.
+
+## Effects that happen once
+
+Everything above loops, which is right for a house that has to hold up from dusk
+until the last group has gone and wrong for the moment somebody actually reaches
+the door. A swarm always crossing the wall is scenery; a swarm that erupts out
+of the porch the instant the bell goes is an event, and the difference is
+entirely in the timing.
+
+| | |
+| --- | --- |
+| **Bat Burst** | A swarm pours out of the shape and scatters across the house. |
+| **Shockwave** | Rings of light race outwards and fade. The cheapest way to make a house react to something. |
+| **Spark Burst** | A shower of embers thrown out, falling and burning out — blackbody-coloured, so they cool as they go. |
+
+They play once over their **Lasts** and then draw nothing. The origin is the
+middle of whatever shape you point them at, so aim one at the door and things
+come out of the door.
+
+**Setting one off.** A trigger fires a scene, the scene switches the layer on,
+and switching on is what restarts the clock — so pressing the key again plays it
+again. Build one as: a layer with the burst, **bypassed**; a scene whose only
+entry is that layer, enabled; a trigger on a key pointing at that scene, with a
+hold a little longer than the burst. After the hold the show goes back to
+whatever it was doing, by itself.
+
+Build the scene by hand rather than capturing it. A captured scene freezes the
+entire show as it happened to be at that instant, so firing a burst mid-evening
+would quietly revert everything else with it; a scene that names one layer
+leaves the rest alone, because a layer a scene says nothing about keeps its
+authored state.
+
+The demo house ships with three, on **X**, **G** and **F**. Those keys avoid the
+ones the editor already uses — the first draft used **B** for bats, which is
+Blackout, so pressing it blacked the show out and never reached the trigger at
+all. It looked configured and did nothing. The trigger inspector now says so if
+you pick one of those.
+
+Anything that can type can press a key, which includes a doorbell wired to a USB
+button.
 
 ## Paths and animation
 

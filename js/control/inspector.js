@@ -7,7 +7,7 @@
  */
 
 import { el, clear, paramRow, toast, fmt } from './ui.js';
-import { SHAPE_TAGS } from '../core/state.js';
+import { SHAPE_TAGS, RESERVED_KEYS } from '../core/state.js';
 import { getEffect, listByCategory, defaultParams } from '../effects/registry.js';
 import { openEffectPicker } from './effectPicker.js';
 import { layerIssues } from './diagnostics.js';
@@ -1105,9 +1105,28 @@ function renderTrigger(container, app, id) {
     });
     keyRow.appendChild(keyInput);
     container.appendChild(keyRow);
-    container.appendChild(
-      el('p', { class: 'panel-note', text: 'Avoid 1–9 (scene hotkeys) and the tool keys V, P, L, R, C, B.' })
-    );
+
+    /**
+     * Say which key is taken, rather than listing them and hoping.
+     *
+     * The editor's own handler runs first and does not fall through, so a
+     * trigger on a reserved key is simply dead: it looks configured, reads as
+     * configured, and never fires. Worth catching here rather than at eight
+     * o'clock on the thirty-first.
+     */
+    const taken = RESERVED_KEYS[trigger.key];
+    if (taken) {
+      container.appendChild(
+        el('p', {
+          class: 'panel-note issue warn',
+          text: `"${trigger.key}" already does ${taken}, so this trigger will never fire. Pick another key.`,
+        })
+      );
+    } else {
+      container.appendChild(
+        el('p', { class: 'panel-note', text: 'Any single key the editor does not already use. Anything that can type can press it — including a doorbell wired to a USB button.' })
+      );
+    }
   }
 
   if (trigger.source === 'timer') {

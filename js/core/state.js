@@ -141,6 +141,25 @@ export function createScene(overrides = {}) {
  * camera view and fires when something moves through it. That is what turns the
  * house from a loop into something that reacts to whoever walks up the path.
  */
+/**
+ * Single keys the editor itself uses, which a trigger therefore cannot have.
+ *
+ * The editor's own handler runs first and does not fall through, so a trigger
+ * on one of these is simply dead — it looks configured, reads as configured,
+ * and never fires. Worth a warning rather than a puzzle in the dark.
+ */
+export const RESERVED_KEYS = {
+  v: 'the Select tool',
+  p: 'the Area tool',
+  l: 'the Path tool',
+  r: 'the Rectangle tool',
+  c: 'the Corners tool',
+  b: 'Blackout',
+  ' ': 'play/pause',
+  1: 'scene 1', 2: 'scene 2', 3: 'scene 3', 4: 'scene 4', 5: 'scene 5',
+  6: 'scene 6', 7: 'scene 7', 8: 'scene 8', 9: 'scene 9',
+};
+
 export function createTrigger(overrides = {}) {
   return {
     id: uid('trig'),
