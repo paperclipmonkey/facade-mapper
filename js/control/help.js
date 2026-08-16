@@ -51,7 +51,26 @@ export default {
 };
 `;
 
-export const HELP_HTML = `
+/**
+ * Help, in sections rather than as one long scroll.
+ *
+ * It had grown to fourteen headings covering everything from where a tripod
+ * goes to the signature of `draw`, in one column, in the order the features
+ * happened to be written. Somebody trying to remember which key blacks the show
+ * out had to scroll past the blackbody-colour explanation to find out, and
+ * nobody who was not writing an effect ever needed the second half at all.
+ *
+ * Five tabs, ordered by when you need them: setting a house up, making it look
+ * like something, making it react, the keys, and — last, because most people
+ * never open it — the API for writing your own effects. The Code panel's
+ * reference button opens that one directly, which is the only reason it was
+ * ever near the front.
+ */
+export const HELP_SECTIONS = [
+  {
+    id: 'setup',
+    label: 'Set up',
+    html: `
 <h2>Getting a house mapped</h2>
 <p>
   The <strong>Start here</strong> panel walks you through all of this and knows how far you have
@@ -80,75 +99,30 @@ export const HELP_HTML = `
   nudged, use <em>Check for drift</em> rather than guessing.
 </p>
 
-<h2>How the alignment works</h2>
-<p>
-  A projector aimed at a wall and a camera looking at that same wall are two views of one flat
-  surface, and any two views of a plane are related by a single 3&times;3 projective matrix. The
-  nine dots give the app nine known correspondences, which is more than enough to solve for that
-  matrix. After that it can convert anything you draw on the camera picture into the right projector
-  pixels.
-</p>
-<p>
-  The consequence worth knowing: a homography describes a <strong>plane</strong>. A flat front
-  elevation is fine. A bay window, a porch roof, a deep reveal or a corner where faces meet sticks
-  out of that plane — see below.
-</p>
+<h2>Getting a good alignment</h2>
+<ul>
+  <li>Do it after dark. The dots have to out-shine everything else in frame.</li>
+  <li>Make sure the whole projected area is inside the camera view before starting.</li>
+  <li>Turn off the camera's auto-exposure if your browser exposes the control — the app tries, but support varies.</li>
+  <li>Don't move the camera afterwards. The shapes you trace are in camera coordinates.</li>
+  <li>An average error under about 5 px is good; over 20 px means something moved mid-run.</li>
+  <li>No camera, or too bright? Put a test grid up and drag the four corners with the Corners tool.</li>
+</ul>
 
-<h2>The look</h2>
+<h2>When the wall is not flat</h2>
 <p>
-  Everything an effect draws goes through one post-processing stage before it reaches the wall,
-  set in the <strong>Look</strong> panel. Bloom spreads light out of bright areas; a filmic curve
-  rolls off anything past white so stacked layers keep their shape instead of clipping to flat
-  blobs; and exposure, contrast, saturation and temperature grade the whole show at once.
+  The alignment solves a homography, which describes a <em>plane</em>. A flat front elevation is
+  exactly right for that. A corner where two or three faces meet is exactly wrong for it — no single
+  plane fits, so you can line one face up and the others go out, and re-aligning will not help
+  because the problem is the model rather than the fit.
 </p>
 <p>
-  Contrast and gamma matter more here than in ordinary rendering, because a projector cannot emit
-  darkness. Whatever grey it puts in the black parts of the frame lands on your brickwork and greys
-  the whole wall. Crushing the low end is how the surrounding wall disappears.
-</p>
-<p>
-  Six looks are supplied. <strong>Flat</strong> switches the stage off entirely, which is what you
-  want while checking alignment. Each layer also has its own <strong>Softness</strong>, which blurs
-  that layer alone — useful when a hard-edged fill reads as a sticker rather than as light.
-</p>
-
-<h2>Triggers</h2>
-<p>
-  A trigger jumps to a scene, optionally plays a sound, holds it for a few seconds, then puts back
-  whatever was playing. That last part is what makes it a scare rather than a scene change: the
-  ambient loop resumes on its own and the next group gets the same surprise.
-</p>
-<table>
-  <tr><th>Motion</th><td>Something moves in a region of the camera view.</td></tr>
-  <tr><th>Key</th><td>You press a key.</td></tr>
-  <tr><th>Timer</th><td>On an interval, with randomness so it does not become predictable.</td></tr>
-  <tr><th>Manual</th><td>Only when you press the button.</td></tr>
-</table>
-<h3>Aiming a motion trigger</h3>
-<p>
-  The camera is pointed at a building you are actively projecting onto, so the fastest-moving thing
-  in frame is your own show. <strong>Watch ground your projectors do not light</strong> — the path,
-  the drive, the gate. The background model adapts continuously, so a parked car stops registering
-  within seconds, and a change covering nearly the whole region is treated as a light switching on
-  rather than a person.
-</p>
-<p>
-  The Triggers panel shows a live reading of how much of the region is moving and the level it has
-  to beat. That is the only sane way to aim one.
-</p>
-<p class="muted">
-  Sounds are imported into the media library like anything else and play from this tab only —
-  projector tabs usually drive displays with no speakers, and four copies a few milliseconds apart
-  sounds like a flanger rather than a thunderclap.
-</p>
-
-<h2>Running it every night</h2>
-<p>
-  <strong>Setup &rarr; Nightly schedule</strong> gives on and off times and which days. It drives
-  the same blackout the <kbd>B</kbd> key does, so a scheduled "off" leaves the projectors awake and
-  aligned — they simply stop emitting. A window that ends before it starts runs past midnight, and
-  the day filter applies to the day it opened: a Friday 20:00–01:00 slot is still going at half past
-  midnight on Saturday.
+  Set <strong>Wall shape</strong> on the projector to a denser grid. The alignment then steps through
+  25 or 49 dots instead of 9. The extra dots are not fitting a better plane; they are measuring how
+  far the wall departs from one. The homography still does the global mapping, and the error left
+  over at each dot — which <em>is</em> the surface bending away — goes into the warp mesh as a
+  correction. On a flat wall those residuals come out at nothing and the mesh stays flat, so the only
+  cost is the time it takes to step through the dots.
 </p>
 
 <h2>Multiple projectors</h2>
@@ -172,6 +146,32 @@ export const HELP_HTML = `
   dark — that one depends on the projector's own response curve and cannot be derived from geometry.
 </p>
 
+<h2>How the alignment works</h2>
+<p>
+  A projector aimed at a wall and a camera looking at that same wall are two views of one flat
+  surface, and any two views of a plane are related by a single 3&times;3 projective matrix. The
+  nine dots give the app nine known correspondences, which is more than enough to solve for that
+  matrix. After that it can convert anything you draw on the camera picture into the right projector
+  pixels.
+</p>
+<p>
+  The consequence worth knowing: a homography describes a <strong>plane</strong>. A flat front
+  elevation is fine. A bay window, a porch roof, a deep reveal or a corner where faces meet sticks
+  out of that plane — see below.
+</p>
+
+<h2>Storage and backups</h2>
+<p>
+  The show lives in this browser's local storage: same machine, same browser, same site. Clearing
+  site data will delete it. <strong>Export</strong> writes a JSON file — worth doing once the
+  alignment is right, because that file is the only copy that survives a wiped browser.
+</p>
+`,
+  },
+  {
+    id: 'effects',
+    label: 'Effects',
+    html: `
 <h2>Effects that know where the windows are</h2>
 <p>
   Most effects are handed a shape and fill it. The ones in the <strong>facade</strong> category are
@@ -220,6 +220,103 @@ export const HELP_HTML = `
   <code>square</code>, <code>rand</code> and <code>TAU</code>.
 </p>
 
+<h2>The look</h2>
+<p>
+  Everything an effect draws goes through one post-processing stage before it reaches the wall,
+  set in the <strong>Look</strong> panel. Bloom spreads light out of bright areas; a filmic curve
+  rolls off anything past white so stacked layers keep their shape instead of clipping to flat
+  blobs; and exposure, contrast, saturation and temperature grade the whole show at once.
+</p>
+<p>
+  Contrast and gamma matter more here than in ordinary rendering, because a projector cannot emit
+  darkness. Whatever grey it puts in the black parts of the frame lands on your brickwork and greys
+  the whole wall. Crushing the low end is how the surrounding wall disappears.
+</p>
+<p>
+  Six looks are supplied. <strong>Flat</strong> switches the stage off entirely, which is what you
+  want while checking alignment. Each layer also has its own <strong>Softness</strong>, which blurs
+  that layer alone — useful when a hard-edged fill reads as a sticker rather than as light.
+</p>
+`,
+  },
+  {
+    id: 'react',
+    label: 'Make it react',
+    html: `
+<h2>Triggers</h2>
+<p>
+  A trigger jumps to a scene, optionally plays a sound, holds it for a few seconds, then puts back
+  whatever was playing. That last part is what makes it a scare rather than a scene change: the
+  ambient loop resumes on its own and the next group gets the same surprise.
+</p>
+<table>
+  <tr><th>Motion</th><td>Something moves in a region of the camera view.</td></tr>
+  <tr><th>Key</th><td>You press a key.</td></tr>
+  <tr><th>Timer</th><td>On an interval, with randomness so it does not become predictable.</td></tr>
+  <tr><th>Manual</th><td>Only when you press the button.</td></tr>
+</table>
+<h3>Aiming a motion trigger</h3>
+<p>
+  The camera is pointed at a building you are actively projecting onto, so the fastest-moving thing
+  in frame is your own show. <strong>Watch ground your projectors do not light</strong> — the path,
+  the drive, the gate. The background model adapts continuously, so a parked car stops registering
+  within seconds, and a change covering nearly the whole region is treated as a light switching on
+  rather than a person.
+</p>
+<p>
+  The Triggers panel shows a live reading of how much of the region is moving and the level it has
+  to beat. That is the only sane way to aim one.
+</p>
+<p class="muted">
+  Sounds are imported into the media library like anything else and play from this tab only —
+  projector tabs usually drive displays with no speakers, and four copies a few milliseconds apart
+  sounds like a flanger rather than a thunderclap.
+</p>
+
+<h2>Running it every night</h2>
+<p>
+  <strong>Setup &rarr; Nightly schedule</strong> gives on and off times and which days. It drives
+  the same blackout the <kbd>B</kbd> key does, so a scheduled "off" leaves the projectors awake and
+  aligned — they simply stop emitting. A window that ends before it starts runs past midnight, and
+  the day filter applies to the day it opened: a Friday 20:00–01:00 slot is still going at half past
+  midnight on Saturday.
+</p>
+`,
+  },
+  {
+    id: 'keys',
+    label: 'Keyboard',
+    html: `
+<h2>Keyboard</h2>
+<table>
+  <tr><th><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>K</kbd></th><td>Search everything — add an effect, jump to a shape, play a scene, black the show out. Works from any panel and from inside a text field.</td></tr>
+  <tr><th><kbd>V</kbd> <kbd>P</kbd> <kbd>L</kbd> <kbd>R</kbd> <kbd>C</kbd></th><td>Select, Area, Path, Rectangle, Corners</td></tr>
+  <tr><th><kbd>Enter</kbd> / <kbd>Esc</kbd></th><td>Finish / cancel the shape being drawn</td></tr>
+  <tr><th><kbd>Backspace</kbd></th><td>Remove the last point while drawing; delete the selection otherwise</td></tr>
+  <tr><th><kbd>Alt</kbd>-click</th><td>On an edge adds a point, on a point removes it</td></tr>
+  <tr><th><kbd>Shift</kbd>-drag</th><td>Line a point up with its neighbour</td></tr>
+  <tr><th><kbd>Space</kbd></th><td>Play / pause</td></tr>
+  <tr><th><kbd>B</kbd></th><td>Blackout everything</td></tr>
+  <tr><th><kbd>1</kbd>–<kbd>9</kbd></th><td>Jump to a scene</td></tr>
+  <tr><th><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></th><td>Undo / redo</td></tr>
+</table>
+<p>In a projector tab: <kbd>F</kbd> fullscreen, <kbd>I</kbd> status, <kbd>T</kbd> cycle test patterns.</p>
+<p class="muted">
+  Any other single key can be bound to a trigger — the ones above and 1–9 are taken, and the trigger
+  inspector says so if you pick one. Anything that can type can press a key, including a doorbell
+  wired to a USB button.
+</p>
+<p>
+  The demo house ships with three one-shots: <kbd>X</kbd> bats out of the door, <kbd>G</kbd> something
+  knocks, <kbd>F</kbd> sparks off the roof. Each is a bypassed layer, a scene that switches only that
+  layer on, and a key trigger pointed at the scene — copy the pattern for your own.
+</p>
+`,
+  },
+  {
+    id: 'api',
+    label: 'Write an effect',
+    html: `
 <h2>Writing your own effects</h2>
 <p>
   The Code panel compiles a real ES module. Export an object with a
@@ -319,55 +416,11 @@ export const HELP_HTML = `
   the halo and let the bloom in the post stage do the real work. Open
   <code>test/bench.html</code> to measure your own.
 </p>
+`,
+  },
+];
 
-<h2>Keyboard</h2>
-<table>
-  <tr><th><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>K</kbd></th><td>Search everything — add an effect, jump to a shape, play a scene, black the show out. Works from any panel and from inside a text field.</td></tr>
-  <tr><th><kbd>V</kbd> <kbd>P</kbd> <kbd>L</kbd> <kbd>R</kbd> <kbd>C</kbd></th><td>Select, Area, Path, Rectangle, Corners</td></tr>
-  <tr><th><kbd>Enter</kbd> / <kbd>Esc</kbd></th><td>Finish / cancel the shape being drawn</td></tr>
-  <tr><th><kbd>Backspace</kbd></th><td>Remove the last point while drawing; delete the selection otherwise</td></tr>
-  <tr><th><kbd>Alt</kbd>-click</th><td>On an edge adds a point, on a point removes it</td></tr>
-  <tr><th><kbd>Shift</kbd>-drag</th><td>Line a point up with its neighbour</td></tr>
-  <tr><th><kbd>Space</kbd></th><td>Play / pause</td></tr>
-  <tr><th><kbd>B</kbd></th><td>Blackout everything</td></tr>
-  <tr><th><kbd>1</kbd>–<kbd>9</kbd></th><td>Jump to a scene</td></tr>
-  <tr><th><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></th><td>Undo / redo</td></tr>
-</table>
-<p>In a projector tab: <kbd>F</kbd> fullscreen, <kbd>I</kbd> status, <kbd>T</kbd> cycle test patterns.</p>
-<p class="muted">
-  Any other single key can be bound to a trigger. Avoid the ones above and 1–9, which are taken.
-</p>
-
-<h2>When the wall is not flat</h2>
-<p>
-  The alignment solves a homography, which describes a <em>plane</em>. A flat front elevation is
-  exactly right for that. A corner where two or three faces meet is exactly wrong for it — no single
-  plane fits, so you can line one face up and the others go out, and re-aligning will not help
-  because the problem is the model rather than the fit.
-</p>
-<p>
-  Set <strong>Wall shape</strong> on the projector to a denser grid. The alignment then steps through
-  25 or 49 dots instead of 9. The extra dots are not fitting a better plane; they are measuring how
-  far the wall departs from one. The homography still does the global mapping, and the error left
-  over at each dot — which <em>is</em> the surface bending away — goes into the warp mesh as a
-  correction. On a flat wall those residuals come out at nothing and the mesh stays flat, so the only
-  cost is the time it takes to step through the dots.
-</p>
-
-<h2>Getting a good alignment</h2>
-<ul>
-  <li>Do it after dark. The dots have to out-shine everything else in frame.</li>
-  <li>Make sure the whole projected area is inside the camera view before starting.</li>
-  <li>Turn off the camera's auto-exposure if your browser exposes the control — the app tries, but support varies.</li>
-  <li>Don't move the camera afterwards. The shapes you trace are in camera coordinates.</li>
-  <li>An average error under about 5 px is good; over 20 px means something moved mid-run.</li>
-  <li>No camera, or too bright? Put a test grid up and drag the four corners with the Corners tool.</li>
-</ul>
-
-<h2>Storage and backups</h2>
-<p>
-  The show lives in this browser's local storage: same machine, same browser, same site. Clearing
-  site data will delete it. <strong>Export</strong> writes a JSON file — worth doing once the
-  alignment is right, because that file is the only copy that survives a wiped browser.
-</p>
-`;
+/** One section's markup, or the first if the id is unknown. */
+export function helpSection(id) {
+  return HELP_SECTIONS.find((s) => s.id === id) || HELP_SECTIONS[0];
+}

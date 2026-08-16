@@ -71,7 +71,7 @@ import { createSoundPlayer } from './sound.js';
 import { createTriggerRuntime } from './triggers.js';
 import { scheduleWantsOn, describeSchedule } from './schedule.js';
 import { el, clear, toast, paramRow } from './ui.js';
-import { HELP_HTML, EFFECT_TEMPLATE } from './help.js';
+import { HELP_SECTIONS, EFFECT_TEMPLATE } from './help.js';
 import { PRESETS, applyPreset, addDemoBursts } from './presets.js';
 import { demoShapes, demoWorldQuad, demoFacadeBlob, DEMO_ASPECT } from './demoHouse.js';
 
@@ -1542,14 +1542,14 @@ function wire() {
   });
 
   $('btnHelp').addEventListener('click', () => {
-    $('helpBody').innerHTML = HELP_HTML;
-    $('helpDialog').showModal();
+    openHelp('setup');
   });
 
   $('btnEffectDocs').addEventListener('click', () => {
-    $('helpBody').innerHTML = HELP_HTML;
-    $('helpDialog').showModal();
-    $('helpBody').querySelector('h2:nth-of-type(5)')?.scrollIntoView();
+    // Straight to the API, because that is what the button beside the code
+    // editor is for. It used to open the same fourteen-heading scroll as the
+    // Help button and leave you to find the reference in it.
+    openHelp('api');
   });
 
   $('btnShows').addEventListener('click', () => {
@@ -2015,6 +2015,49 @@ function wire() {
   $('btnPalette').addEventListener('click', () => palette.open());
 
   document.addEventListener('keydown', onKeyDown);
+}
+
+/**
+ * The help dialog, opened at a section.
+ *
+ * Tabs rather than one column: the reference for writing an effect and the list
+ * of keyboard shortcuts have nothing to do with each other, and putting them in
+ * the same scroll means everybody pages past most of it every time. The tab
+ * strip is the same control as the left panel's, so it needs no explaining.
+ */
+function openHelp(sectionId = 'setup') {
+  const body = $('helpBody');
+  clear(body);
+
+  const pane = el('div', { class: 'help-pane' });
+  const tabs = el('nav', { class: 'panel-tabs help-tabs', role: 'tablist' });
+
+  const show = (id) => {
+    const section = HELP_SECTIONS.find((s) => s.id === id) || HELP_SECTIONS[0];
+    pane.innerHTML = section.html;
+    // Back to the top on every switch, or a long section leaves the next one
+    // scrolled to somewhere arbitrary.
+    pane.scrollTop = 0;
+    for (const button of tabs.children) {
+      button.classList.toggle('active', button.dataset.section === section.id);
+    }
+  };
+
+  for (const section of HELP_SECTIONS) {
+    const button = el('button', {
+      type: 'button',
+      class: 'panel-tab',
+      role: 'tab',
+      text: section.label,
+      dataset: { section: section.id },
+    });
+    button.addEventListener('click', () => show(section.id));
+    tabs.appendChild(button);
+  }
+
+  body.append(tabs, pane);
+  show(sectionId);
+  $('helpDialog').showModal();
 }
 
 function onAudioLevels(levels) {

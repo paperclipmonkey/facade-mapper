@@ -892,3 +892,30 @@
 .panel-note.issue.warn { border-left-color: var(--warn); color: var(--warn); }
 .panel-note.issue.bad { border-left-color: var(--bad); color: var(--bad); }
 .panel-note.issue.info { border-left-color: var(--accent-2); }
+
+/* ------------------------------------------------------------------ *
+ * Help dialog
+ *
+ * A tab strip and one scrolling pane, rather than one very long column. The
+ * strip is the same control as the left panel's so it needs no explaining, and
+ * only the pane scrolls — the tabs stay put, which is the whole point of having
+ * them.
+ * ------------------------------------------------------------------ */
+
+.dialog-wide .help-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-panel);
+  margin: -18px -18px 12px;
+  padding: 14px 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.help-pane {
+  max-height: 64vh;
+  overflow-y: auto;
+  padding: 4px 6px 0 0;
+}
+
+.help-pane > h2:first-child { margin-top: 0; }
