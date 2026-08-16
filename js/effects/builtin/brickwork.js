@@ -1171,28 +1171,25 @@ function fitWidths(container, obstacles, joints, widths) {
     const cy = Math.sin(angle);
 
     /**
-     * No wider than the bend can carry.
+     * There is deliberately no cap on width from the bend here.
      *
-     * On the inside of a turn the flank sits at radius `step / turn − width`;
-     * once that goes negative the inner edge has crossed the centreline and the
-     * ribbon is drawn inside out, as a bow-tie. Bounding the *turn* to keep it
-     * positive is the tempting fix and it costs all the movement, because the
-     * turn is mostly the sway and the sway is the life in the thing. Bounding
-     * the *width* costs nothing anybody can see: an arm thins slightly where it
-     * flexes hardest, which is what a limb does.
+     * There used to be. The reasoning was that on the inside of a turn the
+     * flank sits at radius `step / turn − width`, and once that goes negative
+     * the inner edge has crossed the centreline — so the ribbon must be thinned
+     * or it draws itself inside out as a bow-tie.
+     *
+     * The premise was wrong, and I never checked it. A canvas fill uses nonzero
+     * winding, so a ribbon that overlaps itself at a fold fills *solid* — the
+     * union, which is exactly the shape a real tube makes when you bend it back
+     * on itself. Drawn side by side against a deliberate 180-degree hairpin,
+     * the uncapped ribbon comes out at constant width all the way round and the
+     * capped one comes to a point in the middle of the bend.
+     *
+     * So the cap was not preventing an artefact, it *was* the artefact, and the
+     * fix is to delete it. What stays is the clearance fitting below, which is
+     * about windows rather than geometry, and the slope limiter after it, which
+     * stops that fitting leaving square-cut notches.
      */
-    if (i > 0 && i < n - 1) {
-      const inA = Math.atan2(a.y - prev.y, a.x - prev.x);
-      const outA = Math.atan2(b.y - a.y, b.x - a.x);
-      const turn = Math.abs(((outA - inA + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
-      const step = Math.hypot(a.x - prev.x, a.y - prev.y);
-      // No floor worth speaking of: on a hairpin in an offset curve `step` can
-      // be very nearly zero, and a floor there is precisely the case that
-      // inverts. A tentacle with a sub-pixel pinch point is invisible; one
-      // drawn as a bow-tie is not.
-      if (turn > 1e-4) widths[i] = Math.min(widths[i], Math.max(0.15, (step / turn) * 0.8));
-    }
-
     let w = widths[i];
     let fits = false;
     /**

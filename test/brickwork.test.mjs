@@ -318,30 +318,33 @@ function insidePoly(pts, x, y) {
       }
     }
     /**
-     * And no bend is tight enough to turn the ribbon inside out.
+     * And the thickness never steps.
      *
-     * The bare turn angle is the wrong thing to bound: what matters is the
-     * radius of the *inside* edge of the bend, which is the step length over
-     * the turn, less the local half-width. Once that goes negative the inner
-     * flank crosses the spine and the arm pinches shut into a bow-tie. Both
-     * terms are recoverable from the drawn ribbon — the half-width is half the
-     * distance between the two flanks at the same joint.
+     * This used to assert that no bend was tight enough to turn the ribbon
+     * inside out, on the theory that a self-overlapping fill draws as a
+     * bow-tie. It does not — a canvas fill is nonzero-winding, so the overlap
+     * fills solid and a folded ribbon comes out as a constant-width tube, which
+     * is what a real one does. The test was enforcing the thing that *caused*
+     * the visible fault: an arm that came to a point in the middle of a tight
+     * bend.
+     *
+     * What matters instead is that the width changes smoothly, so the clearance
+     * fitting cannot leave a square-cut notch. That is a real guarantee of the
+     * code — the slope limiter bounds how fast the half-width may fall away per
+     * pixel of arc — and it is what "even thickness" actually means.
      */
     for (const { spine, poly } of spinesIn(g)) {
-      // Turn and width taken at the *same* joint: the inner edge inverts where
-      // the bend is, not one joint downstream of it.
-      for (let i = 1; i < spine.length - 1; i++) {
-        const a = Math.atan2(spine[i].y - spine[i - 1].y, spine[i].x - spine[i - 1].x);
-        const b = Math.atan2(spine[i + 1].y - spine[i].y, spine[i + 1].x - spine[i].x);
-        const turn = Math.abs(((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+      const halfAt = (i) => {
+        const f = poly[poly.length - 1 - i];
+        return Math.hypot(f.x - spine[i].x, f.y - spine[i].y);
+      };
+      for (let i = 1; i < spine.length; i++) {
         const step = Math.hypot(spine[i].x - spine[i - 1].x, spine[i].y - spine[i - 1].y);
-        const flank = poly[poly.length - 1 - i];
-        const half = Math.hypot(flank.x - spine[i].x, flank.y - spine[i].y);
-        // A segment with no length has no meaningful inner radius, and the
-        // offset curve a highlight rides on does produce them at hairpins.
-        if (turn < 1e-6 || !Number.isFinite(turn) || step < 0.5) continue;
-        const innerRadius = step / turn - half;
-        sharpest = Math.min(sharpest, innerRadius);
+        if (step < 0.5) continue;
+        // The limiter allows 0.55 per pixel; a little headroom for the taper
+        // and the sway riding on top of it.
+        const jump = Math.abs(halfAt(i) - halfAt(i - 1)) / step;
+        sharpest = Math.min(sharpest, 0.9 - jump);
       }
     }
   }
@@ -349,8 +352,8 @@ function insidePoly(pts, x, y) {
   ok('arms were drawn', ribbons > 100, `${ribbons} ribbons`);
   ok('and none of them covers a window', overGlass === 0, `${overGlass} points on glass`);
   ok('and none of them leaves the wall', offTheWall === 0, `${offTheWall} points off it`);
-  ok('and no bend turns a ribbon inside out', sharpest > 0,
-    `tightest inner radius ${sharpest.toFixed(1)} px`);
+  ok('and the thickness never steps, however tight the bend', sharpest > 0,
+    `worst width change ${(0.9 - sharpest).toFixed(2)} per px against a 0.55 limit`);
 }
 
 {
