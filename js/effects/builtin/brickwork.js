@@ -315,6 +315,7 @@ const breach = {
     { key: 'void', type: 'color', label: 'Behind the wall', default: '#08040c' },
     { key: 'innerGlow', type: 'color', label: 'Light from inside', default: '#4bff8f' },
     { key: 'glowAmount', type: 'range', label: 'Inner glow', default: 0.8, min: 0, max: 3, step: 0.05 },
+    { key: 'throat', type: 'range', label: 'Depth of the opening', default: 0.9, min: 0, max: 1, step: 0.01 },
     { key: 'arms', type: 'range', label: 'Tentacles per hole', default: 3, min: 0, max: 8, step: 1 },
     { key: 'armColor', type: 'color', label: 'Tentacle', default: '#243026' },
     { key: 'armTip', type: 'color', label: 'Tentacle tip', default: '#597a37' },
@@ -662,16 +663,6 @@ const breach = {
       }
       g.globalAlpha = 1;
 
-      if (p.glowAmount > 0 && solidity > 0.02) {
-        const pulse = 0.55 + 0.45 * Math.sin(t * 1.7 + hole.cx * 0.01);
-        g.save();
-        g.beginPath();
-        for (const brick of hole.gone) g.rect(brick.x - gap, brick.y - gap, w + gap * 2, h + gap * 2);
-        g.clip();
-        g.globalCompositeOperation = 'lighter';
-        glow(g, hole.cx, hole.cy, Math.max(w, h) * 1.6, p.innerGlow, 0.5 * p.glowAmount * pulse * solidity);
-        g.restore();
-      }
     }
 
     // Bricks that are still in the wall but on their way out get a shudder and
@@ -699,6 +690,50 @@ const breach = {
           drawArm(g, p, hole, arm, t, w, h, 1 - hole.closing, shape, obstacles);
         }
       }
+    }
+
+    /**
+     * The mouth: darkness over the roots, then the light behind them.
+     *
+     * An arm is a ribbon, and a ribbon has to start somewhere — so its base was
+     * a flat cut end sitting in the middle of a lit opening, which reads as a
+     * length of something lying on the wall rather than as anything coming out
+     * of it. No amount of work on the arm itself fixes that, because the fault
+     * is that you can see where it begins.
+     *
+     * So the opening is drawn twice. Once underneath, as the hole; and once
+     * over the top of the arms, as a shadow strongest at the middle and gone by
+     * the rim — which swallows the roots exactly where they are flattest and
+     * leaves the arm emerging from black. The glow then goes over that rather
+     * than under it, so the light from inside spills across the arms at the
+     * mouth and settles the whole thing into the wall.
+     */
+    for (const hole of state.holes) {
+      if (!hole.gone.length) continue;
+      const solidity = 1 - hole.closing;
+      if (solidity <= 0.02) continue;
+
+      g.save();
+      g.beginPath();
+      for (const brick of hole.gone) g.rect(brick.x - gap, brick.y - gap, w + gap * 2, h + gap * 2);
+      g.clip();
+
+      if (p.throat > 0) {
+        const reach = Math.max(w, h) * 1.35;
+        const shade = g.createRadialGradient(hole.cx, hole.cy, 0, hole.cx, hole.cy, reach);
+        shade.addColorStop(0, rgba(p.void, 0.97 * p.throat * solidity));
+        shade.addColorStop(0.5, rgba(p.void, 0.8 * p.throat * solidity));
+        shade.addColorStop(1, rgba(p.void, 0));
+        g.fillStyle = shade;
+        g.fillRect(hole.cx - reach, hole.cy - reach, reach * 2, reach * 2);
+      }
+
+      if (p.glowAmount > 0) {
+        const pulse = 0.55 + 0.45 * Math.sin(t * 1.7 + hole.cx * 0.01);
+        g.globalCompositeOperation = 'lighter';
+        glow(g, hole.cx, hole.cy, Math.max(w, h) * 1.6, p.innerGlow, 0.5 * p.glowAmount * pulse * solidity);
+      }
+      g.restore();
     }
 
     for (const b of state.falling) {
@@ -1250,58 +1285,73 @@ function fitWidths(container, obstacles, joints, widths) {
    * becomes a smooth taper into it and out the other side, which is what a limb
    * squeezing past something looks like anyway.
    */
-  const SLOPE = 0.55;
-  for (let i = 1; i < n; i++) {
-    const step = Math.hypot(joints[i].x - joints[i - 1].x, joints[i].y - joints[i - 1].y);
-    widths[i] = Math.min(widths[i], widths[i - 1] + SLOPE * step);
-  }
-  for (let i = n - 2; i >= 0; i--) {
-    const step = Math.hypot(joints[i + 1].x - joints[i].x, joints[i + 1].y - joints[i].y);
-    widths[i] = Math.min(widths[i], widths[i + 1] + SLOPE * step);
-  }
-
   /**
-   * Then check the smoothed widths, because *reducing* one is not safe either.
+   * Smooth, verify, smooth, verify.
    *
-   * That reads as nonsense and is the third time this exact property has bitten
-   * this file: clearance is not convex, so a flank pulled *in* can land inside
-   * a window that the wider one cleared by passing over it and out the far
-   * side. The fit above samples a few radii along each ray for exactly that
-   * reason, and the smoothing then moves the width to one it never sampled.
+   * The limiter bounds how fast the width may fall away; the verify then trims
+   * whatever still does not fit, and in doing so can undo the limiter at that
+   * one vertex. One round therefore leaves the occasional step — measured at
+   * around one per px of arc against a limit of 0.55, always within a few
+   * pixels of the tip where the arm is thinnest.
    *
-   * So the final answer is verified, and pinches to the centreline if it has
-   * to. A notch here is rare — it needs the smoothing to have lowered a width
-   * into an obstructed band — and its neighbours are already tapered, so what
-   * survives is a narrowing rather than the square-cut gap this pass exists to
-   * remove.
+   * A second round smooths that trim and re-checks the result, which converges
+   * because each round can only reduce. Two is enough; a third changes nothing
+   * measurable and this runs per arm per frame.
    */
-  for (let i = 0; i < n; i++) {
-    const a = joints[i];
-    const b = joints[Math.min(i + 1, n - 1)];
-    const prev = joints[Math.max(i - 1, 0)];
-    const angle = Math.atan2(b.y - prev.y, b.x - prev.x) + Math.PI / 2;
-    const cx = Math.cos(angle);
-    const cy = Math.sin(angle);
-    let w = widths[i];
-    // Only a width of exactly nothing is accepted unchecked. A fifth of a pixel
-    // sounds like nothing and is still a pixel wide once it is projected.
-    let fits = w <= 0;
-    for (let tries = 0; tries < 6 && !fits; tries++) {
-      // Every radius that gets drawn, not just the outermost: the rim goes at
-      // the full width and the body inside it at 85%, and a ray that crosses a
-      // window and comes out the far side clears at one and not the other.
-      let clear = true;
-      for (const f of [1, 0.85, 0.45]) {
-        if (!isClear(container, obstacles, a.x + cx * w * f, a.y + cy * w * f)
-          || !isClear(container, obstacles, a.x - cx * w * f, a.y - cy * w * f)) {
-          clear = false;
-          break;
-        }
-      }
-      if (clear) fits = true;
-      else w *= 0.6;
+  for (let round = 0; round < 2; round++) {
+    const SLOPE = 0.55;
+    for (let i = 1; i < n; i++) {
+      const step = Math.hypot(joints[i].x - joints[i - 1].x, joints[i].y - joints[i - 1].y);
+      widths[i] = Math.min(widths[i], widths[i - 1] + SLOPE * step);
     }
-    widths[i] = fits ? w : 0;
+    for (let i = n - 2; i >= 0; i--) {
+      const step = Math.hypot(joints[i + 1].x - joints[i].x, joints[i + 1].y - joints[i].y);
+      widths[i] = Math.min(widths[i], widths[i + 1] + SLOPE * step);
+    }
+
+    /**
+     * Then check the smoothed widths, because *reducing* one is not safe either.
+     *
+     * That reads as nonsense and is the third time this exact property has bitten
+     * this file: clearance is not convex, so a flank pulled *in* can land inside
+     * a window that the wider one cleared by passing over it and out the far
+     * side. The fit above samples a few radii along each ray for exactly that
+     * reason, and the smoothing then moves the width to one it never sampled.
+     *
+     * So the final answer is verified, and pinches to the centreline if it has
+     * to. A notch here is rare — it needs the smoothing to have lowered a width
+     * into an obstructed band — and its neighbours are already tapered, so what
+     * survives is a narrowing rather than the square-cut gap this pass exists to
+     * remove.
+     */
+    for (let i = 0; i < n; i++) {
+      const a = joints[i];
+      const b = joints[Math.min(i + 1, n - 1)];
+      const prev = joints[Math.max(i - 1, 0)];
+      const angle = Math.atan2(b.y - prev.y, b.x - prev.x) + Math.PI / 2;
+      const cx = Math.cos(angle);
+      const cy = Math.sin(angle);
+      let w = widths[i];
+      // Only a width of exactly nothing is accepted unchecked. A fifth of a pixel
+      // sounds like nothing and is still a pixel wide once it is projected.
+      let fits = w <= 0;
+      for (let tries = 0; tries < 6 && !fits; tries++) {
+        // Every radius that gets drawn, not just the outermost: the rim goes at
+        // the full width and the body inside it at 85%, and a ray that crosses a
+        // window and comes out the far side clears at one and not the other.
+        let clear = true;
+        for (const f of [1, 0.85, 0.45]) {
+          if (!isClear(container, obstacles, a.x + cx * w * f, a.y + cy * w * f)
+            || !isClear(container, obstacles, a.x - cx * w * f, a.y - cy * w * f)) {
+            clear = false;
+            break;
+          }
+        }
+        if (clear) fits = true;
+        else w *= 0.6;
+      }
+      widths[i] = fits ? w : 0;
+    }
   }
 }
 
@@ -1342,6 +1392,50 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
    * as established several times over is not the same as being clear.
    */
   const path = arm.path.slice();
+
+  /**
+   * A root that carries on back into the hole.
+   *
+   * The spine starts at the origin, so without this the ribbon's first vertex
+   * is the flat end of a tube, sitting right at the point where the opening is
+   * widest and best lit. Continuing it backwards by a couple of widths — along
+   * the reverse of its own first segment, so it looks like the same limb — puts
+   * that end deep in the shadow the mouth pass lays over the middle of the
+   * hole, and what you see is an arm coming out of somewhere rather than an arm
+   * that begins.
+   *
+   * It goes into the void, which is not an obstacle and is inside the wall, so
+   * there is nothing to check it against.
+   */
+  if (path.length >= 2) {
+    const a = path[0];
+    const b = path[1];
+    const back = Math.atan2(a.y - b.y, a.x - b.x);
+    const girth = Math.max(4, p.thickness) * arm.girth;
+    // As far back as fits. A hole near the eaves or a corner has wall behind it
+    // for only part of that, and a root point outside the shape gets its width
+    // pinched to nothing by the clearance pass, which is a notch at the base —
+    // the exact thing this is here to remove.
+    let reach = girth * 2.2;
+    // Both points, not just the far one. Clearance is not convex — the outer
+    // one can clear a window by passing over it and out the far side while the
+    // one between is inside it — and a root point that gets its width pinched
+    // to nothing is a notch at the base, the exact thing this is here to remove.
+    const rootFits = (d) => {
+      if (!container) return true;
+      for (const at of [d, d * 0.55]) {
+        if (!stepClear(container, obstacles,
+          a.x + Math.cos(back) * at, a.y + Math.sin(back) * at, back, girth)) return false;
+      }
+      return true;
+    };
+    while (reach > girth * 0.4 && !rootFits(reach)) reach *= 0.6;
+    if (reach > girth * 0.4) {
+      path.unshift({ x: a.x + Math.cos(back) * reach * 0.55, y: a.y + Math.sin(back) * reach * 0.55 });
+      path.unshift({ x: a.x + Math.cos(back) * reach, y: a.y + Math.sin(back) * reach });
+    }
+  }
+
   const f = clamp((arm.carry || 0) / Math.max(1, arm.stepPx || 1), 0, 1);
   if (f > 0.02 && path.length >= 2) {
     const last = path[path.length - 1];
