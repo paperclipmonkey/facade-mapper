@@ -14,6 +14,7 @@ behind it.
 - [When the wall is not flat](#when-the-wall-is-not-flat)
 - [Several projectors](#several-projectors)
 - [Tracing](#tracing)
+- [Reading the building from a scan](#reading-the-building-from-a-scan)
 - [Matching the show to the projector and the wall](#matching-the-show-to-the-projector-and-the-wall)
 - [Running it every night](#running-it-every-night)
 - [Where everything is stored](#where-everything-is-stored)
@@ -214,6 +215,51 @@ While drawing: <kbd>Enter</kbd> finishes, <kbd>Esc</kbd> cancels,
 <kbd>Backspace</kbd> removes the last point. Afterwards, <kbd>Alt</kbd>-click an
 edge to add a point or a point to remove it, and <kbd>Shift</kbd>-drag to line a
 point up with its neighbour.
+
+## Reading the building from a scan
+
+Optional, and worth it if you want light that lands on the real surface rather
+than on a flat rectangle. Walk round the front of the house with a scanning app —
+Polycam, Scaniverse, anything that exports `.glb` — and drop the file into
+**Setup › Depth scan**. Export with compression turned off; Draco and meshopt are
+both named rather than swallowed if they turn up.
+
+The app fits the wall's own plane, builds a metric relief map of it — how far
+every point stands in front of or behind that plane — and finds the windows, the
+door, the sills and anything else that is not flush. **Trace shapes from the
+scan** turns those into ordinary shapes, tagged and measured in metres. Tracing
+again after moving the relief slider replaces them and keeps their ids, so layers
+pointed at a window stay pointed at it.
+
+### Placing it
+
+The scan knows the shape of the wall and nothing about where that wall is in the
+camera's picture, so you have to say. **Point at the same feature in both
+pictures**: the app shows you the scan, you click a window corner, it shows you
+the camera, you click the same corner. Four of those place it exactly; more than
+four improve it.
+
+Resist the urge to look for the scan's corners. They are wherever the scanning
+happened to stop — blank render, a strip of path, sky — and there is nothing in
+the photograph to line them up against. A scan that does not reach the roof has
+its true top edge somewhere across the middle of the building, and one that runs
+past the doorstep has its bottom edge below the frame entirely. Features do not
+have that problem: a window is a window in both pictures.
+
+Afterwards the four corners are still draggable if you want to nudge it, and the
+relief is drawn over the camera view the whole time so you can see what you are
+lining up.
+
+Two things worth knowing before you scan:
+
+- **Get the roofline in.** Whatever the scan does not cover cannot be lit from
+  it, and it is easy to end up with a scan that stops at the upstairs windows.
+- **Photogrammetry, not LiDAR, for a whole house.** The depth sensor gives up
+  around five metres and portrait-mode depth well before that. A walk-around
+  photo scan has no such limit and needs no special hardware.
+
+The placement is stored against the camera picture, so squaring up the wall
+afterwards leaves the scan where it was.
 
 ## Matching the show to the projector and the wall
 

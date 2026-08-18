@@ -50,8 +50,17 @@ import {
   defaultRectifyQuad,
   createRectify,
 } from '../core/rectify.js';
-import { mat3Inverse, applyH } from '../core/math.js';
-import { fitPlane, orientPlane, bakeRelief, levelRelief, fillHoles, findOpenings } from '../core/depth.js';
+import { mat3Inverse, applyH, solveHomography, homographyError } from '../core/math.js';
+import {
+  fitPlane,
+  orientPlane,
+  bakeRelief,
+  levelRelief,
+  fillHoles,
+  findOpenings,
+  meanNormalNear,
+  planeExtent,
+} from '../core/depth.js';
 import { readGltfTriangles, meanNormal } from '../core/glb.js';
 import {
   createScanSource,
@@ -175,6 +184,7 @@ const scanSource = createScanSource({
   onError: (message) => toast(message, 'bad'),
   onLoaded: () => {
     scanOpeningsKey = '';
+    scanGhostKey = '';
     app.renderScanPanel?.();
   },
 });
@@ -591,7 +601,7 @@ const TOOL_HINTS = {
   rect: 'Drag out a rectangle.',
   corners: 'Drag the four yellow handles to where the selected projector’s corners land on the house.',
   square: 'Drag the four handles onto something you know is rectangular, then say what shape it really is in the Setup panel.',
-  depth: 'Drag the handles onto the corners of the scanned wall. The outlines are what the scan found — line them up with the real windows.',
+  depth: 'Point at the same feature in both pictures — a window corner on the scan, then the same corner on the camera view.',
 };
 
 function setTool(tool) {
@@ -600,9 +610,11 @@ function setTool(tool) {
   // time the tool was opened, showing the last thing dragged rather than what
   // the project says.
   const leavingDepth = app.tool === 'depth' && tool !== 'depth';
+  const leavingCorners = app.tool === 'corners' && tool !== 'corners';
   if (leavingDepth) app.scanDraft = null;
   app.tool = tool;
   if (leavingDepth) app.renderScanPanel?.();
+  if (leavingCorners) endCornersSession();
   for (const button of document.querySelectorAll('.tool')) {
     button.classList.toggle('active', button.dataset.tool === tool);
   }
@@ -624,6 +636,9 @@ function setTool(tool) {
     app.rectifyDraft = null;
   }
   renderSquaringPanel();
+  // The manual alignment button doubles as this tool's way out, so it has to
+  // know which state it is in.
+  refreshInspector();
 }
 
 /* ------------------------------------------------------------------ *
@@ -646,16 +661,58 @@ app.commandProjector = (projectorId, action) => {
   bus.post(MSG.COMMAND, { projectorId, action });
 };
 
+/**
+ * What manual alignment switched on, so leaving can switch it back off.
+ *
+ * The tool puts a test pattern on the projector, and the pattern is the whole
+ * point — you are dragging handles onto corners you can only see because it is
+ * up there. But that makes leaving the tool and taking the pattern down two
+ * separate acts, and every way out of the tool used to do only the first. You
+ * would click Select to escape and the projector would carry on showing a grid
+ * over the show.
+ *
+ * Null unless a session is open, and it records what the projector was showing
+ * beforehand rather than assuming 'off' — the tool can be opened on a projector
+ * somebody had deliberately put on a white field.
+ */
+app.cornersSession = null;
+
+function endCornersSession() {
+  const session = app.cornersSession;
+  app.cornersSession = null;
+  if (!session) return;
+  const projector = app.project.projectors.find((p) => p.id === session.projectorId);
+  if (!projector || projector.testPattern === session.previous) return;
+  projector.testPattern = session.previous;
+  app.commit();
+}
+
 app.beginManualCorners = (projectorId) => {
   const projector = app.project.projectors.find((p) => p.id === projectorId);
   if (!projector) return;
   app.pushUndo();
   projector.calibration.worldQuad = projector.calibration.worldQuad || defaultWorldQuad();
+  app.cornersSession = { projectorId, previous: projector.testPattern || 'off' };
   projector.testPattern = 'corners';
   app.select({ type: 'projector', id: projectorId });
   setTool('corners');
   app.commit();
-  toast('Drag the yellow handles onto the projected corners, then switch the test pattern off.');
+  toast('Drag the yellow handles onto the projected corners. Done, Escape, or switching the test pattern off all finish.');
+};
+
+/**
+ * Leave manual alignment.
+ *
+ * There is nothing to apply: the corners solve into a homography as they are
+ * dragged, so the alignment is already live. This only closes the tool and
+ * takes the test pattern down.
+ */
+app.finishManualCorners = (projectorId) => {
+  if (app.tool !== 'corners') return;
+  // Ignore a projector other than the one being aligned, so changing a second
+  // projector's pattern from the same panel does not close the tool.
+  if (projectorId && app.cornersSession && app.cornersSession.projectorId !== projectorId) return;
+  setTool('select');
 };
 
 /**
@@ -961,6 +1018,61 @@ app.scanThreshold = () => {
   return (mm > 1 ? mm : 20) / 1000;
 };
 
+/**
+ * The relief map as an image, for the placement tool to lay over the camera.
+ *
+ * Blue where the wall is set back, amber where it stands proud, transparent
+ * where the scan saw nothing — the same reading as the study page, so what you
+ * see here and what you see there are the same picture.
+ *
+ * Built once per relief map and cached: it is one pixel per relief cell, which
+ * is a fifth of a megapixel of `putImageData` and not something to do while
+ * somebody is dragging a handle.
+ */
+let scanGhost = null;
+let scanGhostKey = '';
+
+app.scanGhost = () => {
+  const relief = scanSource.reliefMap();
+  if (!relief) return null;
+  const key = `${relief.w}x${relief.h}|${app.scanThreshold()}`;
+  if (key === scanGhostKey) return scanGhost;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = relief.w;
+  canvas.height = relief.h;
+  const g = canvas.getContext('2d');
+  const image = g.createImageData(relief.w, relief.h);
+  const range = 0.3;
+
+  for (let i = 0; i < relief.data.length; i++) {
+    const v = relief.data[i];
+    const o = i * 4;
+    if (!(v === v)) {
+      image.data[o + 3] = 0;
+      continue;
+    }
+    const t = Math.min(1, Math.abs(v) / range) ** 0.55;
+    if (v < 0) {
+      image.data[o] = 76 + (1 - t) * 90;
+      image.data[o + 1] = 160 + (1 - t) * 20;
+      image.data[o + 2] = 235;
+    } else {
+      image.data[o] = 255;
+      image.data[o + 1] = 176 + (1 - t) * 30;
+      image.data[o + 2] = 74 + (1 - t) * 120;
+    }
+    // Flat wall stays faint so the photograph shows through it; only relief
+    // asserts itself, which is what you are lining up.
+    image.data[o + 3] = 40 + t * 175;
+  }
+
+  g.putImageData(image, 0, 0);
+  scanGhost = canvas;
+  scanGhostKey = key;
+  return scanGhost;
+};
+
 app.scanOpenings = () => {
   const relief = scanSource.reliefMap();
   if (!relief) return null;
@@ -982,6 +1094,35 @@ function renderScanPanel() {
   fields.hidden = !has;
   $('btnClearScan').hidden = !has;
   $('scanPlaceFields').hidden = !app.scanDraft;
+
+  const draft = app.scanDraft;
+  if (draft) {
+    const need = SCAN_PAIRS_NEEDED - draft.pairs.length;
+    const step = $('scanPlaceStep');
+    if (step) {
+      step.textContent = draft.error
+        ? draft.error
+        : draft.picking
+          ? `Now click the same thing on the camera view. (${draft.pairs.length + 1} of ${SCAN_PAIRS_NEEDED})`
+          : draft.view === 'relief'
+            ? `Click a feature on the scan — a window corner, the door. (${draft.pairs.length + 1} of ${SCAN_PAIRS_NEEDED})`
+            : need > 0
+              ? `${need} more pair${need === 1 ? '' : 's'} needed.`
+              : `Placed from ${draft.pairs.length} pairs${
+                draft.residual > 0 ? `, agreeing to ${(draft.residual * 100).toFixed(1)}% of the frame` : ''
+              }. Drag a corner to nudge it, or point at another feature to improve it.`;
+      step.className = draft.error ? 'panel-note issue bad' : 'panel-note';
+    }
+    const add = $('btnScanAddPair');
+    if (add) {
+      add.hidden = draft.view === 'relief' || !!draft.picking;
+      add.textContent = draft.pairs.length >= SCAN_PAIRS_NEEDED ? 'Point at another feature' : 'Point at a feature';
+    }
+    const undo = $('btnScanUndoPair');
+    if (undo) undo.hidden = !draft.pairs.length && !draft.picking;
+    const apply = $('btnApplyScanPlace');
+    if (apply) apply.disabled = draft.pairs.length < SCAN_PAIRS_NEEDED && !app.project.scan?.H;
+  }
 
   const slider = $('scanThreshold');
   if (slider && document.activeElement !== slider) {
@@ -1036,13 +1177,47 @@ async function importScan(file) {
     for (let i = 0; i < mesh.positions.length; i += 3 * stride) {
       cloud.push([mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]]);
     }
-    const fitted = fitPlane(cloud, { tolerance: 0.025, iterations: 220 });
-    if (!fitted) throw new Error('No flat wall in this scan. Is it the front of a building?');
-    const plane = orientPlane(fitted, { meshNormal: meanNormal(mesh), points: cloud });
+    /**
+     * Up is worth insisting on.
+     *
+     * The largest plane in a scan of the front of a house is very often the
+     * ground — it is bigger than the facade and scanned from closer. Asking for
+     * the largest plane gets you the drive; asking for the largest *vertical*
+     * plane gets you the wall.
+     */
+    const UP = [0, 1, 0];
+    const fitted = fitPlane(cloud, { tolerance: 0.025, iterations: 260, up: UP });
+    if (!fitted) {
+      throw new Error('No wall in this scan — nothing vertical and flat enough. Is it the front of a building?');
+    }
+    // Which way it faces, from the wall's own triangles. The mean over the whole
+    // scan is dominated by ground and neighbours and says nothing about this.
+    const plane = orientPlane(fitted, {
+      meshNormal: meanNormalNear(mesh, fitted, 0.05) || meanNormal(mesh),
+      points: cloud,
+    });
 
     toast('Baking the relief map…');
     await new Promise((r) => setTimeout(r, 16));
-    const relief = levelRelief(fillHoles(bakeRelief(mesh, plane, { resolution: 460 }), 6));
+    // Only the wall, and only the depths a wall can have. Without the crop the
+    // map covers the garden and the neighbour too, and the four corners you
+    // drag onto the building are then the corners of a garden.
+    const crop = planeExtent(cloud, plane, fitted.inlierIndices, { up: UP });
+    const relief = levelRelief(fillHoles(bakeRelief(mesh, plane, {
+      resolution: 460,
+      up: UP,
+      crop,
+      band: 1.2,
+      /**
+       * A little past the wall's own edges.
+       *
+       * The crop comes from the points that lie *on* the plane, and the things
+       * worth finding are by definition not on it — a gutter along the eaves is
+       * proud of the brickwork, so the last course of inliers is below it and
+       * cropping tight shaves the gutter off the top of the map.
+       */
+      margin: 0.05,
+    })));
     if (!relief) throw new Error('The wall came out empty. The scan may be a single flat surface.');
 
     await putBlob(scanKey(app.project.id), encodeRelief(relief));
@@ -1068,8 +1243,11 @@ async function importScan(file) {
     app.commit();
     bus.post(MSG.SCAN, { placed: true });
     beginScanPlacement();
+    const across = relief.w * relief.scale;
+    const high = relief.h * relief.scale;
     toast(
-      `Scan imported: a wall ${(relief.w * relief.scale).toFixed(1)} m across, ${Math.round(fitted.inliers / fitted.total * 100)}% of it flat. Now drag the handles onto its corners.`,
+      `Scan imported: a wall ${across.toFixed(1)} × ${high.toFixed(1)} m, cut out of ${mesh.triangles.toLocaleString()} triangles. `
+      + 'Now drag the handles onto its corners — the outlines show what it found.',
       'good'
     );
   } catch (err) {
@@ -1077,17 +1255,122 @@ async function importScan(file) {
   }
 }
 
+/**
+ * Placing a scan by pointing at the same thing twice.
+ *
+ * Dragging the four corners of the scan onto the camera picture is the obvious
+ * tool and a bad one, for a reason that only shows up on a real scan: the
+ * corners of a relief map are not features. They are wherever the scanned wall
+ * happened to stop — a patch of blank render, a strip of path, sky — and there
+ * is nothing in the photograph to line them up against. Worse, a scan that does
+ * not reach the roof has its true top edge somewhere across the middle of the
+ * building, so the natural thing to do, dragging the handles onto the corners of
+ * the house, stretches everything by twenty per cent.
+ *
+ * Features do not have that problem. A window is a window in both pictures. So
+ * the tool alternates: it shows the scan, you click something on it, it shows
+ * the camera, you click the same thing. Four of those determine the placement
+ * exactly, and more than four improve it in the least-squares sense.
+ *
+ * The pairs are only an input method. What comes out is the same four-corner
+ * quad as before, so everything downstream — the stored matrix, the effects,
+ * the tracing — is unchanged, and the corners stay draggable afterwards for a
+ * nudge.
+ */
 function beginScanPlacement() {
   const scan = app.project.scan;
   if (!scan?.enabled) return;
   const aspect = (scan.w * scan.scale) / (scan.h * scan.scale);
-  const quad = Array.isArray(scan.quad) && scan.quad.length === 4
-    ? scan.quad.map((p) => ({ x: p.x, y: p.y }))
-    : defaultScanQuad(aspect, app.backdropAspect());
-  app.scanDraft = { quad };
+  const placed = scan.placed && Array.isArray(scan.quad) && scan.quad.length === 4;
+  app.scanDraft = {
+    quad: placed
+      ? scan.quad.map((p) => ({ x: p.x, y: p.y }))
+      : defaultScanQuad(aspect, app.backdropAspect()),
+    /** { relief:{x,y}, camera:{x,y} } — the same feature in both pictures. */
+    pairs: [],
+    /** A point clicked on the scan, waiting for its twin on the camera. */
+    picking: null,
+    /** Which picture the stage is showing: 'relief' or 'camera'. */
+    view: placed ? 'camera' : 'relief',
+    error: null,
+  };
   setTool('depth');
   switchPanel('settings');
   renderScanPanel();
+}
+
+/** How many pairs it takes before a placement can be solved at all. */
+const SCAN_PAIRS_NEEDED = 4;
+
+/**
+ * A click landed. Which picture it was on decides what it means.
+ *
+ * Returns true if it was consumed, so the stage can fall through to dragging a
+ * corner when no pair is in progress.
+ */
+app.scanPointAt = (point, where) => {
+  const draft = app.scanDraft;
+  if (!draft) return false;
+
+  if (where === 'relief') {
+    draft.picking = { x: point.x, y: point.y };
+    draft.view = 'camera';
+    renderScanPanel();
+    return true;
+  }
+
+  if (!draft.picking) return false;
+  draft.pairs.push({ relief: draft.picking, camera: { x: point.x, y: point.y } });
+  draft.picking = null;
+  draft.view = draft.pairs.length >= SCAN_PAIRS_NEEDED ? 'camera' : 'relief';
+  resolveScanPairs();
+  renderScanPanel();
+  return true;
+};
+
+/** Throw away the last pair, or an unfinished half of one. */
+app.scanUndoPair = () => {
+  const draft = app.scanDraft;
+  if (!draft) return;
+  if (draft.picking) draft.picking = null;
+  else draft.pairs.pop();
+  if (draft.pairs.length < SCAN_PAIRS_NEEDED) draft.view = 'relief';
+  resolveScanPairs();
+  renderScanPanel();
+};
+
+/** Go back to the scan to point at another feature. */
+app.scanAddPair = () => {
+  const draft = app.scanDraft;
+  if (!draft) return;
+  draft.picking = null;
+  draft.view = 'relief';
+  renderScanPanel();
+};
+
+function resolveScanPairs() {
+  const draft = app.scanDraft;
+  if (!draft) return;
+  draft.error = null;
+  if (draft.pairs.length < SCAN_PAIRS_NEEDED) return;
+
+  const H = solveHomography(draft.pairs.map((p) => p.relief), draft.pairs.map((p) => p.camera));
+  if (!H) {
+    // Four points on a line, or three in the same place. Worth saying, because
+    // the fix is to pick features further apart rather than to try again.
+    draft.error = 'Those points do not describe a flat wall seen from one place. Spread them further apart — corners of different windows, not four corners of one.';
+    return;
+  }
+
+  draft.quad = [[0, 0], [1, 0], [1, 1], [0, 1]].map(([u, v]) => {
+    const q = applyH(H, u, v);
+    return q ? { x: q.x, y: q.y } : { x: 0, y: 0 };
+  });
+  // How far the pairs disagree with the placement they imply. With exactly four
+  // this is zero by construction; past that it is the only honest signal that
+  // one of them was put in the wrong place.
+  const { mean } = homographyError(H, draft.pairs.map((p) => p.relief), draft.pairs.map((p) => p.camera));
+  draft.residual = mean;
 }
 
 function applyScanPlacement() {
@@ -1102,6 +1385,7 @@ function applyScanPlacement() {
   app.project.scan = {
     ...app.project.scan,
     enabled: true,
+    placed: true,
     quad: draft.quad.map((p) => ({ x: p.x, y: p.y })),
     H,
   };
@@ -2611,6 +2895,8 @@ function wire() {
     setTool('select');
     renderScanPanel();
   });
+  $('btnScanAddPair').addEventListener('click', () => app.scanAddPair());
+  $('btnScanUndoPair').addEventListener('click', () => app.scanUndoPair());
   $('btnTraceScan').addEventListener('click', () => traceScanShapes());
   $('scanThreshold').addEventListener('input', (ev) => {
     if (!app.project.scan?.enabled) return;
@@ -2911,7 +3197,16 @@ function onKeyDown(ev) {
       stage.finishDraft();
       break;
     case 'Escape':
-      stage.cancelDraft();
+      /**
+       * A drawing in progress is the first thing Escape should abandon. With
+       * nothing being drawn it means "get me out of this tool", which is what
+       * anybody reaches for when a modal tool has taken over the canvas — and
+       * until now the modal tools were the only ones it did not work on.
+       */
+      // A half-finished correspondence is the innermost thing to abandon, before
+      // the tool it belongs to.
+      if (app.tool === 'depth' && app.scanDraft?.picking) app.scanUndoPair();
+      else if (!stage.cancelDraft() && app.tool !== 'select') setTool('select');
       break;
     case 'Backspace':
     case 'Delete':

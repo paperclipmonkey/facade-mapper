@@ -182,7 +182,27 @@ export const planeDistance = (plane, p) => dot3(plane.n, p) - plane.d;
  * right for a real house. Too tight and the render pass hunts one course of
  * bricks; too loose and it swallows the window reveals it exists to find.
  */
-export function fitPlane(points, { tolerance = 0.025, iterations = 200, seed = 1, maxSamples = 40000 } = {}) {
+export function fitPlane(points, {
+  tolerance = 0.025,
+  iterations = 200,
+  seed = 1,
+  maxSamples = 40000,
+  /**
+   * Which way is up, when you know. Supplying it restricts the search to planes
+   * that could be a wall.
+   *
+   * Outdoors this is not a refinement, it is the difference between working and
+   * not: the largest plane in a scan of the front of a house is very often the
+   * *ground*, which is bigger than the facade, flatter than the facade, and
+   * scanned from close up. RANSAC answers the question it was asked, picks it,
+   * and everything downstream is then a plan view of a garden with the windows
+   * nowhere. A facade is vertical; say so and the ground stops being a
+   * candidate.
+   */
+  up = null,
+  /** How far off vertical a wall is allowed to lean. */
+  maxTilt = Math.PI / 5,
+} = {}) {
   if (points.length < 3) return null;
 
   /**
@@ -222,6 +242,9 @@ export function fitPlane(points, { tolerance = 0.025, iterations = 200, seed = 1
     // infinitely many contain them.
     if (len < 1e-9) continue;
     const plane = { n: [n[0] / len, n[1] / len, n[2] / len], d: 0 };
+    // A wall's normal is horizontal, so it is perpendicular to up. The ground's
+    // is parallel to it.
+    if (up && Math.abs(dot3(plane.n, up)) > Math.sin(maxTilt)) continue;
     plane.d = dot3(plane.n, a);
 
     let count = 0;
@@ -245,7 +268,87 @@ export function fitPlane(points, { tolerance = 0.025, iterations = 200, seed = 1
   const refined = planeThrough(points, inliers) || best;
   refined.inliers = inliers.length;
   refined.total = points.length;
+  /** Which points are on the wall. The wall's own extent is derived from these. */
+  refined.inlierIndices = inliers;
   return refined;
+}
+
+/**
+ * The scan's own opinion of which way the wall faces, taken from the wall alone.
+ *
+ * `orientPlane` can use the area-weighted mean of every triangle normal, and on
+ * a tidy mesh that is right. On a real scan it is not even close: the ground in
+ * front contributes a large horizontal slab pointing at the sky, the neighbour's
+ * wall points somewhere else entirely, and the mean of all that says nothing
+ * about the facade. Averaging only the triangles that are *on* the plane asks
+ * the question of the surface actually in question.
+ */
+export function meanNormalNear(mesh, plane, tolerance = 0.05) {
+  const { positions } = mesh;
+  const indices = mesh.indices || null;
+  const count = indices ? indices.length / 3 : positions.length / 9;
+  let nx = 0;
+  let ny = 0;
+  let nz = 0;
+
+  for (let t = 0; t < count; t++) {
+    const i0 = (indices ? indices[t * 3] : t * 3) * 3;
+    const i1 = (indices ? indices[t * 3 + 1] : t * 3 + 1) * 3;
+    const i2 = (indices ? indices[t * 3 + 2] : t * 3 + 2) * 3;
+
+    // The centroid is enough — a triangle straddling the tolerance either way
+    // is at the very edge of the wall and contributes almost nothing.
+    const cx = (positions[i0] + positions[i1] + positions[i2]) / 3;
+    const cy = (positions[i0 + 1] + positions[i1 + 1] + positions[i2 + 1]) / 3;
+    const cz = (positions[i0 + 2] + positions[i1 + 2] + positions[i2 + 2]) / 3;
+    if (Math.abs(planeDistance(plane, [cx, cy, cz])) > tolerance) continue;
+
+    const ax = positions[i1] - positions[i0];
+    const ay = positions[i1 + 1] - positions[i0 + 1];
+    const az = positions[i1 + 2] - positions[i0 + 2];
+    const bx = positions[i2] - positions[i0];
+    const by = positions[i2 + 1] - positions[i0 + 1];
+    const bz = positions[i2 + 2] - positions[i0 + 2];
+    nx += ay * bz - az * by;
+    ny += az * bx - ax * bz;
+    nz += ax * by - ay * bx;
+  }
+
+  const len = Math.hypot(nx, ny, nz);
+  return len > 1e-12 ? [nx / len, ny / len, nz / len] : null;
+}
+
+/**
+ * How far the wall runs, in its own plane, from the points that lie on it.
+ *
+ * This is what the relief map should cover. The alternative — and what it used
+ * to do — is the bounding box of the whole mesh, which on any real scan is the
+ * garden, the neighbour's house and a slice of sky. Everything then comes out
+ * at the wrong scale, and the four corners somebody drags onto the building are
+ * the corners of a garden rather than of a wall.
+ */
+export function planeExtent(points, plane, indices, { up = [0, 1, 0], percentile = 0.01 } = {}) {
+  const list = indices || points.map((_, i) => i);
+  if (list.length < 3) return null;
+  const { right, up: upv } = planeBasis(plane, up);
+
+  const across = [];
+  const along = [];
+  for (const i of list) {
+    const p = points[i];
+    across.push(dot3(p, right));
+    along.push(dot3(p, upv));
+  }
+  across.sort((a, b) => a - b);
+  along.sort((a, b) => a - b);
+
+  // Trimmed rather than absolute: one stray inlier forty metres down the road —
+  // a fence panel that happens to be coplanar with the front of the house — is
+  // enough to double the extent and halve the resolution of everything real.
+  const cut = Math.min(Math.floor(list.length * percentile), Math.floor(list.length / 4));
+  const lo = (arr) => arr[cut];
+  const hi = (arr) => arr[arr.length - 1 - cut];
+  return { minX: lo(across), maxX: hi(across), minY: lo(along), maxY: hi(along) };
 }
 
 /**
@@ -345,7 +448,29 @@ export const isSeen = (v) => v === v;
  * @param {object} plane  from fitPlane, already oriented
  * @param {object} options  resolution: longest side in pixels; up: world up
  */
-export function bakeRelief(mesh, plane, { resolution = 512, up = [0, 1, 0], margin = 0 } = {}) {
+export function bakeRelief(mesh, plane, {
+  resolution = 512,
+  up = [0, 1, 0],
+  margin = 0,
+  /**
+   * The patch of the plane to cover, in wall metres, from `planeExtent`.
+   *
+   * Without it the map covers everything the scan contains, and on a real scan
+   * that is mostly not the building.
+   */
+  crop = null,
+  /**
+   * How far off the plane a surface can be and still be part of this wall, in
+   * metres.
+   *
+   * The buffer keeps whatever is nearest the viewer, which is right for a bay
+   * or a porch and wrong for the hedge in front of them: a bush a metre and a
+   * half proud wins every pixel it covers and arrives as a large, ragged
+   * feature with the wall hidden behind it. Nothing on a facade stands a metre
+   * out of it, so anything that does is not facade.
+   */
+  band = 1.2,
+} = {}) {
   const { positions } = mesh;
   const indices = mesh.indices || null;
   const vertexCount = positions.length / 3;
@@ -378,6 +503,13 @@ export function bakeRelief(mesh, plane, { resolution = 512, up = [0, 1, 0], marg
     if (a > maxX) maxX = a;
     if (b < minY) minY = b;
     if (b > maxY) maxY = b;
+  }
+
+  if (crop) {
+    minX = crop.minX;
+    maxX = crop.maxX;
+    minY = crop.minY;
+    maxY = crop.maxY;
   }
 
   const spanX = (maxX - minX) || 1e-3;
@@ -441,6 +573,7 @@ export function bakeRelief(mesh, plane, { resolution = 512, up = [0, 1, 0], marg
         if (wa < 0 || wb < 0 || wc < 0) continue;
 
         const z = wa * az + wb * bz + wc * cz;
+        if (z > band || z < -band) continue;
         const idx = py * w + px;
         const prev = data[idx];
         if (!isSeen(prev) || z > prev) data[idx] = z;
@@ -461,11 +594,17 @@ export function bakeRelief(mesh, plane, { resolution = 512, up = [0, 1, 0], marg
  * time fills them from their own reveals, which is the correct answer: the pane
  * really is at about the depth of the frame it sits in.
  *
- * Bounded on purpose. Beyond a few centimetres of wall it stops being inference
- * and starts being invention, and a relief map that quietly invents a facade
- * where the scan saw sky is worse than one with holes in it.
+ * Bounded on purpose — but the bound has to be big enough to cross a window.
+ * Each pass grows the known values by one pixel, so eight passes closed about a
+ * hundred millimetres: plenty for the speckle a test fixture has, and nowhere
+ * near enough for a real one, where the hole is the whole pane and a metre
+ * across. A window that stays a hole is not detected as a window, because the
+ * region it would form is missing from the middle out. The default now closes
+ * about two-thirds of a metre from each side at a typical bake resolution,
+ * which crosses any real window and still stops well short of inventing a
+ * facade where the scan saw sky.
  */
-export function fillHoles(relief, passes = 8) {
+export function fillHoles(relief, passes = 40) {
   const { w, h, data } = relief;
   const next = new Float32Array(data.length);
   for (let pass = 0; pass < passes; pass++) {
@@ -867,6 +1006,24 @@ export function findOpenings(relief, {
   simplify = 0.03,
   snapRectangles = true,
   rectangleFill = 0.86,
+  /**
+   * How much a region's surface may wobble, in metres, before it stops counting
+   * as architecture.
+   *
+   * A hedge in front of a bay window is the same distance out of the wall as
+   * the bay, the same size, the same sign and — since it is a solid mass — very
+   * nearly the same silhouette. Outline shape does not separate them. What does
+   * is that a bay's front is a made surface and flat to a millimetre, while a
+   * hedge varies by a foot over the width of your hand. Measured as the mean
+   * disagreement between each cell and its neighbours *within the same region*,
+   * so the step at the region's own edge does not count against it.
+   *
+   * Brickwork and render come in around four millimetres and scan noise adds a
+   * few more, so this is an order of magnitude above anything built.
+   */
+  maxRoughness = 0.035,
+  /** How much of its own bounding box a region must fill to count. */
+  minFill = 0.35,
 } = {}) {
   const { w, h, data, scale } = relief;
   const minPixels = Math.max(9, Math.round(minArea / (scale * scale)));
@@ -904,6 +1061,33 @@ export function findOpenings(relief, {
       }
       const boxPixels = (maxX - minX) * (maxY - minY);
       const fill = boxPixels > 0 ? region.pixels.length / boxPixels : 0;
+      if (fill < minFill) continue;
+
+      /**
+       * Only neighbours inside the same region count.
+       *
+       * Two regions of the same sign cannot be adjacent — four-connectivity
+       * would have merged them — so the mask *is* this region wherever it
+       * touches these pixels, and no separate membership test is needed.
+       */
+      let wobble = 0;
+      let wobbleCount = 0;
+      for (const idx of region.pixels) {
+        const v = data[idx];
+        const px = idx % w;
+        const py = (idx / w) | 0;
+        let sum = 0;
+        let n = 0;
+        if (px > 0 && mask[idx - 1]) { sum += data[idx - 1]; n++; }
+        if (px < w - 1 && mask[idx + 1]) { sum += data[idx + 1]; n++; }
+        if (py > 0 && mask[idx - w]) { sum += data[idx - w]; n++; }
+        if (py < h - 1 && mask[idx + w]) { sum += data[idx + w]; n++; }
+        if (n < 2) continue;
+        wobble += Math.abs(v - sum / n);
+        wobbleCount++;
+      }
+      const roughness = wobbleCount ? wobble / wobbleCount : 0;
+      if (roughness > maxRoughness) continue;
 
       // The depth of the region itself, as a median: the mean is dragged by the
       // sloping reveal around the edge of every opening, so a 100mm window
@@ -943,6 +1127,7 @@ export function findOpenings(relief, {
       });
 
       found.push({
+        roughness,
         points: points.map((p) => ({ x: p.x / w, y: p.y / h })),
         pixels: points,
         tag: guess.tag,

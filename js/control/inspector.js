@@ -662,17 +662,28 @@ function renderProjector(container, app, id) {
     );
   }
 
+  // The same button opens the tool and closes it. A modal tool with no visible
+  // way out is the thing being fixed here, and a second button somewhere else
+  // would only be a second thing to fail to find.
+  const editingCorners = app.tool === 'corners' && app.selection?.id === projector.id;
   const cornersBtn = el('button', {
     type: 'button',
-    class: 'btn small',
-    text: projector.calibration?.worldQuad ? 'Edit corners by hand' : 'Align by hand instead',
+    class: editingCorners ? 'btn small primary' : 'btn small',
+    text: editingCorners
+      ? 'Done aligning by hand'
+      : (projector.calibration?.worldQuad ? 'Edit corners by hand' : 'Align by hand instead'),
   });
-  cornersBtn.addEventListener('click', () => app.beginManualCorners(projector.id));
+  cornersBtn.addEventListener('click', () => {
+    if (editingCorners) app.finishManualCorners(projector.id);
+    else app.beginManualCorners(projector.id);
+  });
   container.appendChild(el('div', { class: 'panel-actions' }, [cornersBtn]));
   container.appendChild(
     el('p', {
       class: 'panel-note',
-      text: 'Manual mode: put the projector on a test grid, then drag its four corners to where they land on the camera view.',
+      text: editingCorners
+        ? 'Drag the four handles to where the projector’s corners land on the wall. The alignment updates as you drag, so there is nothing to apply — Done, Escape, or switching the test pattern off all finish.'
+        : 'Manual mode: put the projector on a test grid, then drag its four corners to where they land on the camera view. No camera needed — a photograph of the house works, as long as you can see where the corners fall.',
     })
   );
 
@@ -727,6 +738,10 @@ function renderProjector(container, app, id) {
   patternSelect.addEventListener('change', () => {
     projector.testPattern = patternSelect.value;
     app.commitLive();
+    // Manual alignment tells you that switching the pattern off finishes it.
+    // That was simply untrue: the tool stayed open, the handles stayed on the
+    // canvas, and the only way out was to guess at another tool button.
+    if (patternSelect.value === 'off') app.finishManualCorners?.(projector.id);
   });
   patternRow.append(el('div', { class: 'param-control' }, [patternSelect]), el('span'));
   container.appendChild(patternRow);

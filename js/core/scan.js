@@ -52,6 +52,16 @@ export function createScan() {
     quad: null,
     /** relief (0..1) -> camera (0..1), solved from `quad`. */
     H: null,
+    /**
+     * Whether somebody has actually placed this, as opposed to it carrying the
+     * starting quad an import gives it.
+     *
+     * Only the placement tool cares, and only to decide what to show first: a
+     * scan nobody has placed should open on the scan, ready to be pointed at,
+     * rather than on a camera view with a rectangle sitting in the middle of it
+     * that means nothing.
+     */
+    placed: false,
     /** Relief threshold for tracing openings, in metres. */
     threshold: 0.02,
     /** Provenance, for the panel and for knowing whether the blob is stale. */

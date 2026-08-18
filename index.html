@@ -242,9 +242,16 @@
               </div>
               <div id="scanPlaceFields" hidden>
                 <p class="panel-note">
-                  Drag the four handles onto the corners of the scanned wall. The outlines the
-                  scan found are drawn as you go — when they sit on the real windows, it is placed.
+                  Point at the same thing in both pictures. The scan’s own corners are blank
+                  render and sky with nothing to line them up against, and a scan that stops
+                  short of the roof has its top edge across the middle of the house — so
+                  features are the only reliable thing to aim at.
                 </p>
+                <p id="scanPlaceStep" class="panel-note"></p>
+                <div class="panel-actions">
+                  <button type="button" class="btn small" id="btnScanAddPair">Point at a feature</button>
+                  <button type="button" class="btn small" id="btnScanUndoPair" hidden>Undo last</button>
+                </div>
                 <div class="panel-actions">
                   <button type="button" class="btn small primary" id="btnApplyScanPlace">Apply</button>
                   <button type="button" class="btn small" id="btnCancelScanPlace">Cancel</button>

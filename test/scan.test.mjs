@@ -34,6 +34,7 @@ import {
 } from '../js/core/scan.js';
 import { createProject, migrateProject, worldSize } from '../js/core/state.js';
 import { solveRectify } from '../js/core/rectify.js';
+import { solveHomography, applyH } from '../js/core/math.js';
 
 let failures = 0;
 const ok = (name, cond, detail = '') => {
@@ -339,6 +340,76 @@ const worldPixel = (u, v) => {
   ok('a missing relief map is reported once, not every frame', errors.length === 1, `${errors.length} times`);
   ok('and leaves no handle behind', source.get() === null);
   ok('and the message says what to do', /import the scan again/i.test(errors[0] || ''), errors[0]);
+}
+
+/* ------------------------------------------------------------------ *
+ * Placing it by pointing at things
+ *
+ * The tool collects pairs — the same feature in the scan and on the camera —
+ * and turns them into the same four-corner quad the drag tool produced, so
+ * everything downstream is unchanged. That hand-off is the part that can go
+ * quietly wrong: if the quad did not carry the pairs' homography exactly, the
+ * placement you see while pointing and the placement that gets stored would be
+ * different, by a little, with nothing to show for it.
+ * ------------------------------------------------------------------ */
+
+{
+  /**
+   * Four real correspondences, read off a scan of a house and the photograph
+   * it was aligned against: the front door, both upstairs windows, and a pane
+   * of the bay. Relief coordinates are normalised over a map 6.86 m wide and
+   * 4.52 m tall.
+   */
+  const PAIRS = [
+    { relief: { x: 1.70 / 6.86, y: 1 - 1.30 / 4.52 }, camera: { x: 0.476, y: 0.756 } },
+    { relief: { x: 1.70 / 6.86, y: 1 - 4.20 / 4.52 }, camera: { x: 0.479, y: 0.348 } },
+    { relief: { x: 5.60 / 6.86, y: 1 - 4.20 / 4.52 }, camera: { x: 0.694, y: 0.353 } },
+    { relief: { x: 5.40 / 6.86, y: 1 - 1.60 / 4.52 }, camera: { x: 0.725, y: 0.688 } },
+  ];
+
+  const fromPairs = solveHomography(PAIRS.map((p) => p.relief), PAIRS.map((p) => p.camera));
+  ok('four features determine a placement', !!fromPairs);
+
+  const quad = [[0, 0], [1, 0], [1, 1], [0, 1]].map(([u, v]) => applyH(fromPairs, u, v));
+  const fromQuad = solveScanPlacement(quad);
+  ok('which survives the trip through a quad', !!fromQuad);
+
+  // Compared by what they do rather than by their entries: two homographies
+  // that differ only by scale are the same map, and solveHomography normalises
+  // in a way that need not agree between the two routes.
+  let worst = 0;
+  for (let u = 0; u <= 1; u += 0.25) {
+    for (let v = 0; v <= 1; v += 0.25) {
+      const a = applyH(fromPairs, u, v);
+      const b = applyH(fromQuad, u, v);
+      worst = Math.max(worst, Math.hypot(a.x - b.x, a.y - b.y));
+    }
+  }
+  ok('and lands every point in the same place', worst < 1e-9, `worst ${worst.toExponential(1)}`);
+
+  // The placement this actually produced, kept as a regression: the quad's
+  // bottom-left falls *below* the photograph. That is the whole reason this
+  // tool exists — that corner cannot be dragged onto anything, because there is
+  // nothing there.
+  const bottomLeft = applyH(fromPairs, 0, 1);
+  ok('a real placement can put a corner outside the picture', bottomLeft.y > 1, `bottom-left y = ${bottomLeft.y.toFixed(4)}`);
+
+  const topLeft = applyH(fromPairs, 0, 0);
+  ok(
+    'and its top edge is nowhere near the roofline',
+    topLeft.y > 0.25 && topLeft.y < 0.4,
+    `top-left y = ${topLeft.y.toFixed(4)}`
+  );
+
+  // Four points on a line describe every homography and none of them.
+  const collinear = [0, 0.3, 0.6, 0.9].map((t) => ({
+    relief: { x: t, y: t },
+    camera: { x: 0.2 + t * 0.5, y: 0.2 + t * 0.5 },
+  }));
+  ok(
+    'four points on a line are refused',
+    !solveHomography(collinear.map((p) => p.relief), collinear.map((p) => p.camera))
+  );
 }
 
 console.log(failures ? `\n${failures} failing` : '\nAll passing');

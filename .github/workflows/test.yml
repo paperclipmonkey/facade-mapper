@@ -75,3 +75,6 @@ jobs:
 
       - name: Depth scan storage, placement and field tests
         run: node test/scan.test.mjs
+
+      - name: Scan pipeline against a realistic garden
+        run: node test/scanreal.test.mjs

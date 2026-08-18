@@ -126,10 +126,11 @@ export function createStage({ canvas, wrap, app }) {
    * canvas-only render loop was showing style-recalculation time at all.
    */
   let bodyFont = null;
-  const labelFont = (px) => {
+  const fontFamily = () => {
     if (!bodyFont) bodyFont = getComputedStyle(document.body).fontFamily;
-    return `${px}px ${bodyFont}`;
+    return bodyFont;
   };
+  const labelFont = (px) => `${px}px ${fontFamily()}`;
 
   /* ---------------------------------------------------------------- *
    * Hit testing
@@ -156,6 +157,7 @@ export function createStage({ canvas, wrap, app }) {
     // The scan placement quad, likewise. Same shape of tool as squaring, and
     // for the same reason: it is a statement about the camera picture.
     if (app.tool === 'depth') {
+      if (app.scanDraft?.view === 'relief') return result;
       const quad = app.scanDraft?.quad;
       if (quad) {
         for (let i = 0; i < quad.length; i++) {
@@ -252,6 +254,15 @@ export function createStage({ canvas, wrap, app }) {
     }
 
     if (app.tool === 'depth') {
+      const draft = app.scanDraft;
+      if (draft?.view === 'relief') {
+        const point = intoRelief(cam);
+        if (point) app.scanPointAt?.(point, 'relief');
+        return;
+      }
+      // A pair waiting for its other half takes the click; otherwise the
+      // corners are still there to be nudged.
+      if (draft?.picking && app.scanPointAt?.(cam, 'camera')) return;
       const hit = hitTest(cam);
       if (hit.corner >= 0) gesture = { kind: 'scan', index: hit.corner };
       return;
@@ -507,8 +518,13 @@ export function createStage({ canvas, wrap, app }) {
     drafting = null;
   }
 
+  /** Abandon a shape being drawn. Reports whether there was one, so a caller
+   *  can fall through to something else — Escape means "abandon this drawing"
+   *  when there is one and "get me out of this tool" when there is not. */
   function cancelDraft() {
+    if (!drafting) return false;
     drafting = null;
+    return true;
   }
 
   function undoDraftPoint() {
@@ -547,6 +563,14 @@ export function createStage({ canvas, wrap, app }) {
       g.globalCompositeOperation = 'lighter';
       g.drawImage(previewCanvas, 0, 0, w, h);
       g.globalCompositeOperation = 'source-over';
+    }
+
+    // Picking a feature on the scan replaces the picture entirely. A thumbnail
+    // would be tidier and useless: you are trying to click the corner of a
+    // window, and the whole point of doing it at full size is that you can.
+    if (app.tool === 'depth' && app.scanDraft?.view === 'relief') {
+      drawScanPicker(w, h);
+      return;
     }
 
     drawProjectorOutlines(w, h);
@@ -832,6 +856,21 @@ export function createStage({ canvas, wrap, app }) {
       g.fillStyle = '#4cc2ff';
       g.fillText(labels[i], c.x + 13 * dpr, c.y);
     });
+
+    // Where each feature was said to be. Kept on screen after solving, because
+    // a pair in the wrong place is much easier to spot than to deduce from a
+    // placement that is slightly off.
+    const draft = app.scanDraft;
+    if (draft) {
+      draft.pairs.forEach((pair, i) => {
+        drawPin(pair.camera.x * w, pair.camera.y * h, String(i + 1), '#7ee081');
+      });
+      if (draft.picking) {
+        g.fillStyle = '#ffd166';
+        g.font = labelFont(13 * dpr);
+        g.fillText(`Click feature ${draft.pairs.length + 1} here`, 14 * dpr, 20 * dpr);
+      }
+    }
     g.restore();
   }
 
@@ -855,6 +894,176 @@ export function createStage({ canvas, wrap, app }) {
     return placementCache.H;
   }
 
+  /**
+   * Draw an image through a homography, on a context that has no such thing.
+   *
+   * Canvas 2D transforms are affine, and an affine map cannot express a
+   * perspective quad — the whole point of the placement being four independent
+   * corners. The standard way round it is to cut the image into small triangles
+   * and give each its own affine transform: over a small enough patch the
+   * projective and affine maps agree, and the seams disappear. A 16x16 grid is
+   * 512 triangles, which the canvas draws in well under a millisecond and which
+   * is visually exact at any placement anyone would actually make.
+   *
+   * The clip per triangle is what stops the neighbouring texels bleeding
+   * through: each affine draw covers the whole image, and only the clip keeps
+   * its own patch.
+   */
+  function drawWarped(image, H, w, h, alpha, steps = 16) {
+    const at = (u, v) => {
+      const p = applyH(H, u, v);
+      return p ? { x: p.x * w, y: p.y * h } : null;
+    };
+
+    g.save();
+    g.globalAlpha = alpha;
+    for (let j = 0; j < steps; j++) {
+      for (let i = 0; i < steps; i++) {
+        const u0 = i / steps;
+        const v0 = j / steps;
+        const u1 = (i + 1) / steps;
+        const v1 = (j + 1) / steps;
+        const a = at(u0, v0);
+        const b = at(u1, v0);
+        const c = at(u0, v1);
+        const d = at(u1, v1);
+        if (!a || !b || !c || !d) continue;
+
+        // Source rectangle for this patch, in image pixels.
+        const sx0 = u0 * image.width;
+        const sy0 = v0 * image.height;
+        const sx1 = u1 * image.width;
+        const sy1 = v1 * image.height;
+
+        for (const [p, q, r, su, sv, tu, tv, ru, rv] of [
+          [a, b, c, sx0, sy0, sx1, sy0, sx0, sy1],
+          [d, c, b, sx1, sy1, sx0, sy1, sx1, sy0],
+        ]) {
+          // The affine map taking the three source corners onto the three
+          // destination ones. Solved directly; the determinant is the source
+          // triangle's area, which is fixed and non-zero by construction.
+          const det = (tu - su) * (rv - sv) - (ru - su) * (tv - sv);
+          if (Math.abs(det) < 1e-9) continue;
+          const m11 = ((q.x - p.x) * (rv - sv) - (r.x - p.x) * (tv - sv)) / det;
+          const m12 = ((q.y - p.y) * (rv - sv) - (r.y - p.y) * (tv - sv)) / det;
+          const m21 = ((r.x - p.x) * (tu - su) - (q.x - p.x) * (ru - su)) / det;
+          const m22 = ((r.y - p.y) * (tu - su) - (q.y - p.y) * (ru - su)) / det;
+
+          g.save();
+          g.beginPath();
+          g.moveTo(p.x, p.y);
+          g.lineTo(q.x, q.y);
+          g.lineTo(r.x, r.y);
+          g.closePath();
+          g.clip();
+          g.transform(m11, m12, m21, m22, p.x - m11 * su - m21 * sv, p.y - m12 * su - m22 * sv);
+          g.drawImage(image, 0, 0);
+          g.restore();
+        }
+      }
+    }
+    g.restore();
+  }
+
+  /**
+   * Where the relief map sits on the canvas when it is being shown, in
+   * normalised canvas coordinates.
+   *
+   * The canvas is sized to the camera's aspect, and the scan has its own, so it
+   * is letterboxed inside. One function so the drawing and the hit-testing
+   * cannot disagree about where it went.
+   */
+  function reliefViewport() {
+    const scan = app.project.scan;
+    const aspect = scan?.w > 0 && scan?.h > 0 ? (scan.w * scan.scale) / (scan.h * scan.scale) : 1;
+    const canvasAspect = canvas.width / canvas.height;
+    const pad = 0.04;
+    let vw = 1 - pad * 2;
+    let vh = (vw * canvasAspect) / aspect;
+    if (vh > 1 - pad * 2) {
+      vh = 1 - pad * 2;
+      vw = (vh * aspect) / canvasAspect;
+    }
+    return { x: (1 - vw) / 2, y: (1 - vh) / 2, w: vw, h: vh };
+  }
+
+  /** Canvas-normalised point -> relief-normalised, or null if outside. */
+  function intoRelief(cam) {
+    const vp = reliefViewport();
+    const x = (cam.x - vp.x) / vp.w;
+    const y = (cam.y - vp.y) / vp.h;
+    return x < 0 || y < 0 || x > 1 || y > 1 ? null : { x, y };
+  }
+
+  /** A numbered pin, for a correspondence. */
+  function drawPin(x, y, label, colour) {
+    g.beginPath();
+    g.arc(x, y, 9 * dpr, 0, Math.PI * 2);
+    g.fillStyle = colour;
+    g.fill();
+    g.strokeStyle = '#000';
+    g.lineWidth = 1.5 * dpr;
+    g.stroke();
+    // A cross through it, because the dot is the thing being placed precisely
+    // and a disc hides its own centre.
+    g.beginPath();
+    g.moveTo(x - 14 * dpr, y);
+    g.lineTo(x + 14 * dpr, y);
+    g.moveTo(x, y - 14 * dpr);
+    g.lineTo(x, y + 14 * dpr);
+    g.strokeStyle = colour;
+    g.lineWidth = 1.5 * dpr;
+    g.stroke();
+    g.fillStyle = '#000';
+    g.font = `600 ${11 * dpr}px ${fontFamily()}`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(label, x, y);
+    g.textAlign = 'start';
+  }
+
+  function drawScanPicker(w, h) {
+    const draft = app.scanDraft;
+    const ghost = app.scanGhost?.();
+    g.fillStyle = '#0d1114';
+    g.fillRect(0, 0, w, h);
+    if (!ghost || !draft) return;
+
+    const vp = reliefViewport();
+    const x = vp.x * w;
+    const y = vp.y * h;
+    const vw = vp.w * w;
+    const vh = vp.h * h;
+
+    g.imageSmoothingEnabled = true;
+    g.drawImage(ghost, x, y, vw, vh);
+    g.strokeStyle = 'rgba(255,255,255,0.35)';
+    g.lineWidth = 1 * dpr;
+    g.strokeRect(x, y, vw, vh);
+
+    // What the scan found, so there is something crisp to aim at.
+    for (const opening of app.scanOpenings?.() || []) {
+      g.strokeStyle = opening.depth > 0 ? 'rgba(255,176,74,0.8)' : 'rgba(76,194,255,0.8)';
+      g.lineWidth = 1.5 * dpr;
+      g.beginPath();
+      opening.points.forEach((p, i) => {
+        const px = x + p.x * vw;
+        const py = y + p.y * vh;
+        if (i) g.lineTo(px, py);
+        else g.moveTo(px, py);
+      });
+      g.closePath();
+      g.stroke();
+    }
+
+    draft.pairs.forEach((pair, i) => {
+      drawPin(x + pair.relief.x * vw, y + pair.relief.y * vh, String(i + 1), '#7ee081');
+    });
+    if (draft.picking) {
+      drawPin(x + draft.picking.x * vw, y + draft.picking.y * vh, String(draft.pairs.length + 1), '#ffd166');
+    }
+  }
+
   function drawScanPlacement(w, h) {
     if (app.tool !== 'depth') return;
     const quad = app.scanDraft?.quad;
@@ -862,6 +1071,12 @@ export function createStage({ canvas, wrap, app }) {
 
     const H = placementMatrix(quad);
     g.save();
+
+    // The relief itself, under the outlines. Four handles and a scatter of
+    // rectangles is not enough to place a scan by — you need to see the wall
+    // the scan is of, sitting on the wall in the photograph.
+    const ghost = H ? app.scanGhost?.() : null;
+    if (ghost) drawWarped(ghost, H, w, h, 0.55);
 
     if (H) {
       const openings = app.scanOpenings?.() || [];
