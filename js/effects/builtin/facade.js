@@ -80,7 +80,7 @@ const bounce = {
   init() {
     return { balls: [] };
   },
-  draw({ g, p, shape, dt, rng, state, shapes }) {
+  step({ p, shape, dt, rng, state, shapes }) {
     const container = shape;
     if (container.bbox.w <= 2 || container.bbox.h <= 2) return;
 
@@ -102,10 +102,10 @@ const bounce = {
     }
     if (state.balls.length > target) state.balls.length = target;
 
-    // A long frame — a tab that was backgrounded, a garbage collection — must
-    // not teleport a ball through a window. Clamping the step loses a little
-    // motion and keeps every collision honest.
-    const step = Math.min(dt, 1 / 30);
+    // Fixed by the renderer, so a ball can no longer be teleported through a
+    // window by a tab that was backgrounded — the step is the same length every
+    // time regardless of how long the frame took.
+    const step = dt;
     const trailLength = Math.round(2 + p.trail * 16);
 
     /**
@@ -124,10 +124,6 @@ const bounce = {
       + p.gravity * step;
     const sub = Math.min(8, Math.max(1, Math.ceil((fastest * step) / (radius * 0.6))));
     const h = step / sub;
-
-    g.save();
-    g.clip(container.path);
-    g.globalCompositeOperation = 'lighter';
 
     for (const b of state.balls) {
       for (let s = 0; s < sub; s++) {
@@ -168,7 +164,18 @@ const bounce = {
 
       b.trail.push(b.x, b.y);
       if (b.trail.length > trailLength * 2) b.trail.splice(0, b.trail.length - trailLength * 2);
+    }
+  },
+  draw({ g, p, shape, state }) {
+    const container = shape;
+    if (container.bbox.w <= 2 || container.bbox.h <= 2) return;
+    const radius = Math.max(1, p.size);
 
+    g.save();
+    g.clip(container.path);
+    g.globalCompositeOperation = 'lighter';
+
+    for (const b of state.balls) {
       const colour = mixHex(p.color, p.color2, b.tint);
 
       if (p.trail > 0 && b.trail.length >= 4) {
@@ -251,7 +258,7 @@ const serpent = {
   init() {
     return { snakes: [] };
   },
-  draw({ g, p, shape, t, dt, rng, state, shapes, noise }) {
+  step({ p, shape, t, dt, rng, state, shapes, noise }) {
     const container = shape;
     if (container.bbox.w <= 2 || container.bbox.h <= 2) return;
 
@@ -275,10 +282,9 @@ const serpent = {
     }
     if (state.snakes.length > target) state.snakes.length = target;
 
-    const step = Math.min(dt, 1 / 30);
-
-    g.save();
-    g.clip(container.path);
+    // Fixed by the renderer, so the path a snake crawls is a property of the
+    // show rather than of how fast the tab happened to be drawing.
+    const step = dt;
 
     for (const s of state.snakes) {
       /* --- steer --- */
@@ -328,8 +334,17 @@ const serpent = {
         s.hist.unshift({ x: s.x, y: s.y });
         if (s.hist.length > samples) s.hist.length = samples;
       }
+    }
+  },
+  draw({ g, p, shape, t, state }) {
+    const container = shape;
+    if (container.bbox.w <= 2 || container.bbox.h <= 2) return;
+    const half = Math.max(1, p.thickness) / 2;
 
-      /* --- draw --- */
+    g.save();
+    g.clip(container.path);
+
+    for (const s of state.snakes) {
       const body = s.hist;
       if (body.length < 3) continue;
       const n = body.length;
@@ -469,7 +484,7 @@ const vine = {
   init() {
     return { key: '', tips: [], grown: 0 };
   },
-  draw({ g, p, shape, t, dt, rng, state, shapes, stable }) {
+  step({ p, shape, t, dt, rng, state, shapes, stable }) {
     const container = shape;
     const { bbox } = container;
     if (bbox.w <= 2 || bbox.h <= 2) return;
@@ -921,7 +936,20 @@ const vine = {
       }
     }
 
-    /* --- draw --- */
+  },
+  /**
+   * The plant is grown into an offscreen bitmap by `step` and blitted here.
+   *
+   * That division was already most of the way there — growth accumulates into a
+   * canvas and the frame is one `drawImage` — so all that moved is where the
+   * growing happens. Which matters: a runner's path is a chain of decisions, and
+   * a tab taking bigger steps than another grows a different plant.
+   */
+  draw({ g, p, shape, state }) {
+    const container = shape;
+    const { bbox } = container;
+    if (bbox.w <= 2 || bbox.h <= 2 || !state.canvas) return;
+
     g.save();
     g.clip(container.path);
     g.drawImage(state.canvas, bbox.x, bbox.y, bbox.w, bbox.h);

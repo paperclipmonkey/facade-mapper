@@ -136,6 +136,8 @@ function drawAt(effect, shape, params, t) {
     p: { ...defaultParams(effect.id), ...params },
   };
   if (effect.init) Object.assign(state, effect.init(ctx) || {});
+  // Simulation first, then paint — the order the renderer uses.
+  effect.step?.({ ...ctx, g: null });
   effect.draw(ctx);
   return g.calls;
 }
@@ -294,12 +296,14 @@ console.log('\n— blood drip —');
 
   for (let f = 0; f < 7200; f++) {
     t += 1 / 60;
-    effect.draw({
+    const ctx = {
       g: recordingContext(), p, stable: p, shape, shapes: () => [],
       t, dt: 1 / 60, rng, state, noise: defaultNoise,
       i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120,
       audio: { level: 0, low: 0, mid: 0, high: 0 },
-    });
+    };
+    effect.step?.({ ...ctx, g: null });
+    effect.draw(ctx);
     const d = state.drips[0];
     if (prev !== null) {
       if (d.pos < prev - 1e-9 && d.pos !== 0) back += 1;

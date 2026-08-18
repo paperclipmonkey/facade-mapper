@@ -109,11 +109,15 @@ function run(effect, params, frames, { dt = 1 / 60 } = {}) {
   for (let f = 0; f < frames; f++) {
     t += dt;
     g = recordingContext();
-    effect.draw({
+    const ctx = {
       g, p: params, stable: params, shape: wall, shapes: shapesFor,
       t, dt, rng, state, i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120,
       audio: { level: 0, low: 0, mid: 0, high: 0 },
-    });
+    };
+    // The renderer simulates at a fixed rate and then paints once. Anything
+    // driving an effect by hand has to do the same or it is testing half of it.
+    effect.step?.({ ...ctx, g: null });
+    effect.draw(ctx);
     // The withdrawal invariant, checked every frame rather than sampled: a hole
     // may not start closing while any of its arms is still out on the wall.
     for (const hole of state.holes || []) {
@@ -461,6 +465,7 @@ console.log('\n— the two layers agree about the bricks —');
       i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120, audio: { level: 0, low: 0, mid: 0, high: 0 }, share };
     brickwork.draw({ ...common, g: recordingContext(), p: brickP, stable: brickP, state: bState });
     g = recordingContext();
+    breach.step?.({ ...common, g: null, p: breachP, stable: breachP, state: xState });
     breach.draw({ ...common, g, p: breachP, stable: breachP, state: xState });
   }
 
@@ -504,8 +509,10 @@ console.log('\n— the two layers agree about the bricks —');
   for (let f = 0; f < 900; f++) {
     t += 1 / 60;
     g = recordingContext();
-    breach.draw({ g, p, stable: p, shape: wall, shapes: () => [], t, dt: 1 / 60, rng, state,
-      i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120, audio: { level: 0, low: 0, mid: 0, high: 0 }, share });
+    const ctx = { p, stable: p, shape: wall, shapes: () => [], t, dt: 1 / 60, rng, state,
+      i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120, audio: { level: 0, low: 0, mid: 0, high: 0 }, share };
+    breach.step?.({ ...ctx, g: null });
+    breach.draw({ ...ctx, g });
   }
   const voids = g.rects.filter((r) => r.style === p.void);
   ok('with matching off it uses its own brick size',

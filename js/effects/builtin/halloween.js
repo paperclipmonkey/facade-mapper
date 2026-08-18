@@ -38,7 +38,7 @@ const bloodDrip = {
   init() {
     return { drips: null, count: 0 };
   },
-  draw({ g, p, shape, t, dt, rng, state, noise }) {
+  step({ p, shape, t, dt, rng, state, noise }) {
     const { bbox } = shape;
     if (bbox.h <= 0) return;
     const count = Math.max(1, Math.round(p.count));
@@ -59,23 +59,9 @@ const bloodDrip = {
       }));
     }
 
-    g.save();
-    g.clip(shape.path);
-
-    if (p.pool > 0) {
-      const poolH = bbox.h * p.pool;
-      const grad = g.createLinearGradient(0, bbox.y, 0, bbox.y + poolH * 1.6);
-      grad.addColorStop(0, p.color);
-      grad.addColorStop(1, rgba(p.color, 0));
-      g.fillStyle = grad;
-      g.fillRect(bbox.x, bbox.y, bbox.w, poolH * 1.6);
-    }
-
-    const step = Math.min(dt, 1 / 20);
-
     for (const drip of state.drips) {
       if (drip.wait > 0) {
-        drip.wait -= step;
+        drip.wait -= dt;
         continue;
       }
 
@@ -98,27 +84,44 @@ const bloodDrip = {
         ? clamp(1 - p.stickSlip * (0.5 + 0.5 * noise.noise2(t * 1.6 + drip.seed, 0)), 0.04, 1)
         : 1;
       // And it accelerates as it goes, because it is falling.
-      drip.pos += p.speed * drip.rate * gate * (0.45 + 0.9 * drip.pos) * step;
+      drip.pos += p.speed * drip.rate * gate * (0.45 + 0.9 * drip.pos) * dt;
 
       if (drip.pos >= 1) {
         drip.pos = 1;
         // Landed. Fade out where it is, rather than snapping back to the top:
         // the old loop reset the position outright, so every drip vanished from
         // the bottom of the door and reappeared at the top in the same frame.
-        if (p.fade > 0) drip.alpha -= step / p.fade;
+        if (p.fade > 0) drip.alpha -= dt / p.fade;
         else drip.alpha = 0;
-        if (drip.alpha <= 0) {
-          if (!p.restart) continue;
+        if (drip.alpha <= 0 && p.restart) {
           drip.pos = 0;
           drip.alpha = 1;
           drip.wait = rng() * 5;
           drip.rate = 1 - p.variation * rng();
           drip.thickness = 0.6 + rng() * 0.8;
           drip.seed = rng() * 100;
-          continue;
         }
       }
-      if (drip.alpha <= 0) continue;
+    }
+  },
+  draw({ g, p, shape, t, state, noise }) {
+    const { bbox } = shape;
+    if (bbox.h <= 0 || !state.drips) return;
+
+    g.save();
+    g.clip(shape.path);
+
+    if (p.pool > 0) {
+      const poolH = bbox.h * p.pool;
+      const grad = g.createLinearGradient(0, bbox.y, 0, bbox.y + poolH * 1.6);
+      grad.addColorStop(0, p.color);
+      grad.addColorStop(1, rgba(p.color, 0));
+      g.fillStyle = grad;
+      g.fillRect(bbox.x, bbox.y, bbox.w, poolH * 1.6);
+    }
+
+    for (const drip of state.drips) {
+      if (drip.wait > 0 || drip.alpha <= 0) continue;
 
       const progress = drip.pos;
       const headY = bbox.y + drip.pos * bbox.h;
@@ -398,7 +401,51 @@ const fire = {
   init() {
     return { parts: [], count: 0 };
   },
-  draw({ g, p, shape, t, dt, rng, state, noise }) {
+  /**
+   * The sparks, and only the sparks.
+   *
+   * The flame itself is a density field sampled from noise at time `t` — a pure
+   * function, identical in every tab, with nothing to carry between frames.
+   * These are the one part that genuinely is discrete, and so the one part that
+   * had to move here.
+   */
+  step({ p, shape, t, dt, rng, state, noise }) {
+    const { bbox } = shape;
+    if (bbox.w <= 2 || bbox.h <= 2) return;
+    if (!(p.sparks > 0)) {
+      state.parts.length = 0;
+      return;
+    }
+
+    const target = Math.round(p.sparks);
+    const spawn = (part = {}) => {
+      part.x = bbox.cx + (rng() - 0.5) * bbox.w * p.width;
+      part.y = p.downward ? bbox.y : bbox.y + bbox.h;
+      part.vx = (rng() - 0.5) * bbox.w * 0.12;
+      part.vy = (p.downward ? 1 : -1) * bbox.h * (0.25 + rng() * 0.4);
+      part.life = 0.6 + rng() * 1.4;
+      part.age = rng() * part.life;
+      part.seed = rng() * 100;
+      return part;
+    };
+    while (state.parts.length < target) state.parts.push(spawn({}));
+    if (state.parts.length > target) state.parts.length = target;
+
+    const step = dt * p.speed;
+    for (const part of state.parts) {
+      part.age += step;
+      if (part.age >= part.life) {
+        spawn(part);
+        part.age = 0;
+      }
+      const turb = noise.noise3(part.x * 0.006, part.y * 0.006, t * 0.6 + part.seed);
+      part.x += (part.vx + turb * bbox.w * 0.35) * step;
+      part.y += part.vy * step;
+      // Sparks decelerate as they rise, then fall back.
+      part.vy *= 1 - 0.9 * step;
+    }
+  },
+  draw({ g, p, shape, t, state, noise }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2) return;
 
@@ -465,34 +512,8 @@ const fire = {
     field.blit(g, bbox.x, bbox.y, bbox.w, bbox.h);
 
     // Sparks are the one part that genuinely is discrete, so they stay particles.
-    if (p.sparks > 0) {
-      const target = Math.round(p.sparks);
-      const spawn = (part = {}) => {
-        part.x = bbox.cx + (rng() - 0.5) * bbox.w * p.width;
-        part.y = p.downward ? bbox.y : bbox.y + bbox.h;
-        part.vx = (rng() - 0.5) * bbox.w * 0.12;
-        part.vy = (p.downward ? 1 : -1) * bbox.h * (0.25 + rng() * 0.4);
-        part.life = 0.6 + rng() * 1.4;
-        part.age = rng() * part.life;
-        part.seed = rng() * 100;
-        return part;
-      };
-      while (state.parts.length < target) state.parts.push(spawn({}));
-      if (state.parts.length > target) state.parts.length = target;
-
-      const step = dt * p.speed;
+    if (p.sparks > 0 && state.parts.length) {
       for (const part of state.parts) {
-        part.age += step;
-        if (part.age >= part.life) {
-          spawn(part);
-          part.age = 0;
-        }
-        const turb = noise.noise3(part.x * 0.006, part.y * 0.006, t * 0.6 + part.seed);
-        part.x += (part.vx + turb * bbox.w * 0.35) * step;
-        part.y += part.vy * step;
-        // Sparks decelerate as they rise, then fall back.
-        part.vy *= 1 - 0.9 * step;
-
         const f = clamp(part.age / part.life, 0, 1);
         // A spark cools as it flies: 2400K white-hot down to 1000K dull red.
         const kelvin = lerp(2400, 1000, f);
@@ -586,19 +607,22 @@ const eyes = {
   init() {
     return { eyes: null, count: 0 };
   },
-  draw({ g, p, shape, t, rng, state, noise }) {
-    const { bbox } = shape;
+  /** Placed on step one, so the same eyes are in the same window in every tab. */
+  step({ p, rng, state }) {
     const pairs = Math.max(1, Math.round(p.pairs));
-    if (state.count !== pairs) {
-      state.count = pairs;
-      state.eyes = Array.from({ length: pairs }, () => ({
-        x: 0.15 + rng() * 0.7,
-        y: 0.15 + rng() * 0.7,
-        scale: 0.7 + rng() * 0.6,
-        phase: rng() * 100,
-        blinkOffset: rng() * 10,
-      }));
-    }
+    if (state.count === pairs) return;
+    state.count = pairs;
+    state.eyes = Array.from({ length: pairs }, () => ({
+      x: 0.15 + rng() * 0.7,
+      y: 0.15 + rng() * 0.7,
+      scale: 0.7 + rng() * 0.6,
+      phase: rng() * 100,
+      blinkOffset: rng() * 10,
+    }));
+  },
+  draw({ g, p, shape, t, state, noise }) {
+    const { bbox } = shape;
+    if (!state.eyes) return;
 
     const eyeR = Math.min(bbox.w, bbox.h) * p.size * 0.5;
     g.save();

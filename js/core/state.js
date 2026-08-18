@@ -12,6 +12,7 @@
  */
 
 import { DEFAULT_GRADE } from '../render/postfx.js';
+import { createRectify } from './rectify.js';
 
 export const PROJECT_VERSION = 4;
 
@@ -104,6 +105,15 @@ export function createLayer(effectId, overrides = {}) {
     /** Optional tag filter, applied on top of `targets`. */
     targetTags: [],
     enabled: true,
+    /**
+     * Wall-clock ms at which this layer's switch last went up, or 0 for "it has
+     * simply always been on".
+     *
+     * Stamped by the control tab and read by every tab, so `age` — and with it
+     * every one-shot — means the same thing in all of them. See
+     * `stampLayerSwitchOns` and `enabledAtFor`.
+     */
+    onAt: 0,
     solo: false,
     opacity: 1,
     blend: 'source-over',
@@ -211,8 +221,18 @@ export function createProject(name = 'Untitled show') {
     createdAt: Date.now(),
     updatedAt: Date.now(),
 
-    /** Aspect ratio of the camera the shapes were drawn against (w/h). */
+    /** Aspect ratio of the space the shapes were drawn against (w/h). */
     worldAspect: 16 / 9,
+
+    /**
+     * The camera's point of view, factored out.
+     *
+     * Off by default, in which case world space is the camera image and nothing
+     * below this line matters. Switched on, world space is the wall seen
+     * square-on and `rectify.H` is how you get from one to the other. See
+     * core/rectify.js for why that is worth doing.
+     */
+    rectify: createRectify(),
 
     projectors: [projector],
     shapes: [],
@@ -280,6 +300,14 @@ export function migrateProject(raw) {
   const base = createProject(raw.name || 'Untitled show');
   const p = { ...base, ...raw };
 
+  p.rectify = { ...base.rectify, ...(raw.rectify || {}) };
+  // A rectification without a solved matrix cannot be applied, and half-applying
+  // it would put every shape in the wrong place.
+  if (!Array.isArray(p.rectify.H) || p.rectify.H.length !== 9) {
+    p.rectify.enabled = false;
+    p.rectify.H = null;
+  }
+
   p.settings = { ...base.settings, ...(raw.settings || {}) };
   p.settings.grade = { ...DEFAULT_GRADE, ...(raw.settings?.grade || {}) };
   p.show = { ...base.show, ...(raw.show || {}) };
@@ -335,7 +363,9 @@ export function migrateProject(raw) {
 
 /** World buffer dimensions in virtual pixels, from the stored camera aspect. */
 export function worldSize(project) {
-  const aspect = project?.worldAspect > 0.1 ? project.worldAspect : 16 / 9;
+  const rectified = project?.rectify?.enabled ? project.rectify.worldAspect : 0;
+  const stored = rectified > 0.1 ? rectified : project?.worldAspect;
+  const aspect = stored > 0.1 ? stored : 16 / 9;
   return { w: WORLD_WIDTH, h: Math.round(WORLD_WIDTH / aspect), aspect };
 }
 

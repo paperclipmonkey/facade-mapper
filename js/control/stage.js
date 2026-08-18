@@ -1,17 +1,27 @@
 /**
  * The stage: camera view, live preview, and all shape editing.
  *
- * Everything you draw here is stored in normalised camera coordinates, which is
+ * Everything you draw here is stored in normalised *world* coordinates, which is
  * what lets one traced window drive several projectors at once — each projector
  * converts world coordinates into its own output through its homography, so the
  * geometry is authored once and warped many times.
+ *
+ * The stage itself is the camera's picture, and stays the camera's picture even
+ * once the wall has been squared up. Two reasons. Resampling somebody's
+ * photograph so the wall looks square would throw away sharpness at exactly the
+ * end of the building where there is least of it to spare. And squaring the wall
+ * is a thing you do *to* the camera view, so the tool for it has to be able to
+ * see the camera view. So world coordinates are converted at the boundary —
+ * `intoWorld` on the way in from a pointer, `ontoCamera` on the way out to a
+ * pixel — and the conversion is the identity until somebody squares the wall.
  *
  * The preview deliberately runs the real renderer rather than a simplified
  * version, so what you tune indoors is what appears on the wall.
  */
 
-import { clamp, distToSegment, pointInPolygon, boundingBox } from '../core/math.js';
+import { clamp, distToSegment, pointInPolygon, boundingBox, applyH, solveHomography } from '../core/math.js';
 import { worldSize, createShape } from '../core/state.js';
+import { rectifyMatrix, rectifyInverse, worldToProjector } from '../core/rectify.js';
 import { projectorOutline } from './calibration.js';
 
 const HANDLE_RADIUS = 5;
@@ -38,16 +48,19 @@ export function createStage({ canvas, wrap, app }) {
    * ---------------------------------------------------------------- */
 
   function resize() {
-    const world = worldSize(app.project);
+    // The camera's aspect, not the world's: the backdrop is what fills this
+    // canvas, and letterboxing it to a rectified world aspect would squash the
+    // photograph everything is traced against.
+    const aspect = app.backdropAspect?.() || worldSize(app.project).aspect;
     const rect = wrap.getBoundingClientRect();
     const available = { w: Math.max(80, rect.width - 16), h: Math.max(60, rect.height - 16) };
 
-    // Letterbox the world aspect inside whatever space the layout gives us.
+    // Letterbox that aspect inside whatever space the layout gives us.
     let w = available.w;
-    let h = w / world.aspect;
+    let h = w / aspect;
     if (h > available.h) {
       h = available.h;
-      w = h * world.aspect;
+      w = h * aspect;
     }
 
     dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -63,8 +76,8 @@ export function createStage({ canvas, wrap, app }) {
    * Coordinate conversion
    * ---------------------------------------------------------------- */
 
-  /** Pointer event -> normalised world coordinates. */
-  function toWorld(ev) {
+  /** Pointer event -> normalised camera coordinates, which is what the canvas is. */
+  function toCamera(ev) {
     const rect = canvas.getBoundingClientRect();
     return {
       x: (ev.clientX - rect.left) / rect.width,
@@ -72,7 +85,34 @@ export function createStage({ canvas, wrap, app }) {
     };
   }
 
-  /** Distance in world units that corresponds to a screen-pixel radius. */
+  /** Camera -> world, for anything about to be stored. */
+  function intoWorld(p) {
+    const inv = rectifyInverse(app.project);
+    if (!inv) return { x: p.x, y: p.y };
+    return applyH(inv, p.x, p.y) || { x: p.x, y: p.y };
+  }
+
+  /** World -> camera, for anything about to be drawn or hit-tested. */
+  function ontoCamera(p) {
+    const H = rectifyMatrix(app.project);
+    if (!H) return { x: p.x, y: p.y };
+    return applyH(H, p.x, p.y) || { x: p.x, y: p.y };
+  }
+
+  const camPoints = (points) => points.map(ontoCamera);
+
+  /** Pointer event -> normalised world coordinates. */
+  const toWorld = (ev) => intoWorld(toCamera(ev));
+
+  /**
+   * Distance in camera units that corresponds to a screen-pixel radius.
+   *
+   * Hit testing happens in camera space rather than world space precisely so
+   * that this stays one number. Rectification scales the two axes differently
+   * and by a different amount at each end of the wall, so a tolerance expressed
+   * in world units would make handles at the far end of an oblique wall
+   * unclickable and handles at the near end grab from a mile off.
+   */
   const hitTolerance = (px) => px / Math.max(1, cssWidth);
 
   /**
@@ -94,9 +134,23 @@ export function createStage({ canvas, wrap, app }) {
    * Hit testing
    * ---------------------------------------------------------------- */
 
-  function hitTest(world) {
+  function hitTest(cam) {
     const tol = hitTolerance(HIT_RADIUS);
     const result = { shapeId: null, vertex: -1, edge: -1, corner: -1 };
+
+    // The squaring handles own the canvas while that tool is active.
+    if (app.tool === 'square') {
+      const quad = app.rectifyDraft?.quad;
+      if (quad) {
+        for (let i = 0; i < quad.length; i++) {
+          if (Math.hypot(quad[i].x - cam.x, quad[i].y - cam.y) < tol * 1.6) {
+            result.corner = i;
+            return result;
+          }
+        }
+      }
+      return result;
+    }
 
     // Manual projector corners take precedence while the corners tool is active.
     if (app.tool === 'corners') {
@@ -104,7 +158,8 @@ export function createStage({ canvas, wrap, app }) {
       const quad = projector?.calibration?.worldQuad;
       if (quad) {
         for (let i = 0; i < quad.length; i++) {
-          if (Math.hypot(quad[i].x - world.x, quad[i].y - world.y) < tol * 1.4) {
+          const c = ontoCamera(quad[i]);
+          if (Math.hypot(c.x - cam.x, c.y - cam.y) < tol * 1.4) {
             result.corner = i;
             return result;
           }
@@ -122,10 +177,13 @@ export function createStage({ canvas, wrap, app }) {
       return bSel - aSel;
     });
 
+    // One conversion per shape, reused by all three passes below.
+    const projected = new Map(ordered.map((shape) => [shape.id, camPoints(shape.points)]));
+
     for (const shape of ordered) {
-      for (let i = 0; i < shape.points.length; i++) {
-        const pt = shape.points[i];
-        if (Math.hypot(pt.x - world.x, pt.y - world.y) < tol) {
+      const pts = projected.get(shape.id);
+      for (let i = 0; i < pts.length; i++) {
+        if (Math.hypot(pts[i].x - cam.x, pts[i].y - cam.y) < tol) {
           result.shapeId = shape.id;
           result.vertex = i;
           return result;
@@ -134,12 +192,12 @@ export function createStage({ canvas, wrap, app }) {
     }
 
     for (const shape of ordered) {
-      const pts = shape.points;
+      const pts = projected.get(shape.id);
       const last = shape.closed ? pts.length : pts.length - 1;
       for (let i = 0; i < last; i++) {
         const a = pts[i];
         const b = pts[(i + 1) % pts.length];
-        if (distToSegment(world, a, b).dist < tol * 0.8) {
+        if (distToSegment(cam, a, b).dist < tol * 0.8) {
           result.shapeId = shape.id;
           result.edge = i;
           return result;
@@ -148,7 +206,8 @@ export function createStage({ canvas, wrap, app }) {
     }
 
     for (const shape of ordered) {
-      if (shape.closed && shape.points.length > 2 && pointInPolygon(world, shape.points)) {
+      const pts = projected.get(shape.id);
+      if (shape.closed && pts.length > 2 && pointInPolygon(cam, pts)) {
         result.shapeId = shape.id;
         return result;
       }
@@ -164,7 +223,17 @@ export function createStage({ canvas, wrap, app }) {
   function onPointerDown(ev) {
     if (ev.button === 2) return;
     canvas.setPointerCapture(ev.pointerId);
-    const world = clampWorld(toWorld(ev));
+    const cam = toCamera(ev);
+    const world = clampWorld(intoWorld(cam));
+
+    // The squaring quad is marked on the camera picture and never leaves it:
+    // it is the description of that picture's point of view, so it cannot be
+    // expressed in a space that only exists once it has been applied.
+    if (app.tool === 'square') {
+      const hit = hitTest(cam);
+      if (hit.corner >= 0) gesture = { kind: 'square', index: hit.corner };
+      return;
+    }
 
     if (app.tool === 'polygon' || app.tool === 'path') {
       addDraftPoint(world, ev.shiftKey);
@@ -176,7 +245,7 @@ export function createStage({ canvas, wrap, app }) {
       return;
     }
 
-    const hit = hitTest(world);
+    const hit = hitTest(cam);
 
     if (app.tool === 'corners') {
       if (hit.corner >= 0) {
@@ -229,12 +298,15 @@ export function createStage({ canvas, wrap, app }) {
   }
 
   function onPointerMove(ev) {
-    const world = clampWorld(toWorld(ev));
+    const cam = toCamera(ev);
+    const world = clampWorld(intoWorld(cam));
     pointerWorld = world;
     app.onPointerWorld?.(world);
 
     if (!gesture) {
-      hover = app.tool === 'select' || app.tool === 'corners' ? hitTest(world) : hover;
+      hover = app.tool === 'select' || app.tool === 'corners' || app.tool === 'square'
+        ? hitTest(cam)
+        : hover;
       if (drafting) drafting.preview = world;
       return;
     }
@@ -271,12 +343,24 @@ export function createStage({ canvas, wrap, app }) {
         app.commitLive();
         break;
       }
+      case 'square': {
+        const quad = app.rectifyDraft?.quad;
+        if (!quad) break;
+        quad[gesture.index] = { x: clamp(cam.x, -0.4, 1.4), y: clamp(cam.y, -0.4, 1.4) };
+        app.onRectifyDraftChanged?.();
+        break;
+      }
       default:
         break;
     }
   }
 
   function onPointerUp(ev) {
+    if (gesture?.kind === 'square') {
+      gesture = null;
+      if (canvas.hasPointerCapture?.(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
+      return;
+    }
     if (gesture?.kind === 'rect') {
       const a = gesture.origin;
       const b = gesture.current;
@@ -352,13 +436,17 @@ export function createStage({ canvas, wrap, app }) {
         : { x: last.x, y: world.y }
       : world;
 
-    // Clicking the first point again closes the shape.
-    if (
-      drafting.points.length > 2 &&
-      Math.hypot(point.x - drafting.points[0].x, point.y - drafting.points[0].y) < hitTolerance(HIT_RADIUS)
-    ) {
-      finishDraft();
-      return;
+    // Clicking the first point again closes the shape. Measured on the canvas,
+    // like every other tolerance here — the points are in world coordinates, and
+    // comparing those against a screen-pixel radius would make the first point
+    // uncatchable at the far end of a squared-up wall.
+    if (drafting.points.length > 2) {
+      const here = ontoCamera(point);
+      const start = ontoCamera(drafting.points[0]);
+      if (Math.hypot(here.x - start.x, here.y - start.y) < hitTolerance(HIT_RADIUS)) {
+        finishDraft();
+        return;
+      }
     }
 
     drafting.points.push(point);
@@ -432,6 +520,7 @@ export function createStage({ canvas, wrap, app }) {
     drawDraft(w, h);
     drawRectGesture(w, h);
     drawCorners(w, h);
+    drawSquaring(w, h);
   }
 
   function drawProjectorOutlines(w, h) {
@@ -443,7 +532,7 @@ export function createStage({ canvas, wrap, app }) {
     g.textBaseline = 'top';
 
     app.project.projectors.forEach((projector, index) => {
-      const outline = projectorOutline(projector.calibration?.H, 6);
+      const outline = projectorOutline(worldToProjector(app.project, projector), 6);
       if (!outline) return;
       const colour = PROJECTOR_COLOURS[index % PROJECTOR_COLOURS.length];
       const selected = app.selection.type === 'projector' && app.selection.id === projector.id;
@@ -451,8 +540,9 @@ export function createStage({ canvas, wrap, app }) {
       g.strokeStyle = colour;
       g.globalAlpha = selected ? 1 : 0.5;
       g.lineWidth = (selected ? 2.5 : 1.4) * dpr;
+      const seen = camPoints(outline);
       g.beginPath();
-      outline.forEach((p, i) => {
+      seen.forEach((p, i) => {
         const c = { x: p.x * w, y: p.y * h };
         if (i === 0) g.moveTo(c.x, c.y);
         else g.lineTo(c.x, c.y);
@@ -460,7 +550,7 @@ export function createStage({ canvas, wrap, app }) {
       g.closePath();
       g.stroke();
 
-      const bb = boundingBox(outline);
+      const bb = boundingBox(seen);
       g.setLineDash([]);
       g.fillStyle = colour;
       g.globalAlpha = selected ? 1 : 0.75;
@@ -485,7 +575,7 @@ export function createStage({ canvas, wrap, app }) {
       // rather than by reading names off a list.
       const linked = app.highlightedShapes?.includes(shape.id);
       const hovered = hover.shapeId === shape.id || linked;
-      const points = shape.points.map((p) => ({ x: p.x * w, y: p.y * h }));
+      const points = camPoints(shape.points).map((p) => ({ x: p.x * w, y: p.y * h }));
       if (!points.length) continue;
 
       g.beginPath();
@@ -534,8 +624,9 @@ export function createStage({ canvas, wrap, app }) {
 
   function drawDraft(w, h) {
     if (!drafting) return;
-    const points = drafting.points.map((p) => ({ x: p.x * w, y: p.y * h }));
-    const preview = drafting.preview ? { x: drafting.preview.x * w, y: drafting.preview.y * h } : null;
+    const points = camPoints(drafting.points).map((p) => ({ x: p.x * w, y: p.y * h }));
+    const previewCam = drafting.preview ? ontoCamera(drafting.preview) : null;
+    const preview = previewCam ? { x: previewCam.x * w, y: previewCam.y * h } : null;
 
     g.save();
     g.strokeStyle = '#4cc2ff';
@@ -562,16 +653,25 @@ export function createStage({ canvas, wrap, app }) {
     if (gesture?.kind !== 'rect') return;
     const a = gesture.origin;
     const b = gesture.current;
+    // Drawn as a quad rather than a rect: it is a rectangle in world space, and
+    // once the wall is squared up that is not a rectangle on the camera picture.
+    const corners = camPoints([
+      { x: a.x, y: a.y },
+      { x: b.x, y: a.y },
+      { x: b.x, y: b.y },
+      { x: a.x, y: b.y },
+    ]);
     g.save();
     g.strokeStyle = '#4cc2ff';
     g.setLineDash([5 * dpr, 4 * dpr]);
     g.lineWidth = 1.8 * dpr;
-    g.strokeRect(
-      Math.min(a.x, b.x) * w,
-      Math.min(a.y, b.y) * h,
-      Math.abs(b.x - a.x) * w,
-      Math.abs(b.y - a.y) * h
-    );
+    g.beginPath();
+    corners.forEach((p, i) => {
+      if (i === 0) g.moveTo(p.x * w, p.y * h);
+      else g.lineTo(p.x * w, p.y * h);
+    });
+    g.closePath();
+    g.stroke();
     g.restore();
   }
 
@@ -581,11 +681,12 @@ export function createStage({ canvas, wrap, app }) {
     const quad = projector?.calibration?.worldQuad;
     if (!quad) return;
 
+    const seen = camPoints(quad);
     g.save();
     g.strokeStyle = '#ffd60a';
     g.lineWidth = 2 * dpr;
     g.beginPath();
-    quad.forEach((p, i) => {
+    seen.forEach((p, i) => {
       const c = { x: p.x * w, y: p.y * h };
       if (i === 0) g.moveTo(c.x, c.y);
       else g.lineTo(c.x, c.y);
@@ -596,7 +697,7 @@ export function createStage({ canvas, wrap, app }) {
     const labels = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
     g.font = labelFont(11 * dpr);
     g.textBaseline = 'middle';
-    quad.forEach((p, i) => {
+    seen.forEach((p, i) => {
       const c = { x: p.x * w, y: p.y * h };
       g.beginPath();
       g.arc(c.x, c.y, (hover.corner === i ? 9 : 7) * dpr, 0, Math.PI * 2);
@@ -607,6 +708,94 @@ export function createStage({ canvas, wrap, app }) {
       g.stroke();
       g.fillStyle = '#ffd60a';
       g.fillText(labels[i], c.x + 12 * dpr, c.y);
+    });
+    g.restore();
+  }
+
+  /**
+   * The squaring quad, and a grid ruled inside it.
+   *
+   * The grid is the part that does the work. Four handles on four corners tell
+   * you nothing about whether you have found a rectangle — a quadrilateral looks
+   * plausible from almost anywhere — but a grid ruled across it in perspective
+   * lands its lines on the brick courses when the marking is right and visibly
+   * skews off them when it is not. It is the same reason a spirit level has a
+   * bubble rather than a number.
+   */
+  let gridCache = { key: '', H: null };
+
+  function squaringGrid(quad) {
+    const key = quad.map((p) => `${p.x.toFixed(5)},${p.y.toFixed(5)}`).join(';');
+    if (gridCache.key !== key) {
+      gridCache = {
+        key,
+        H: solveHomography(
+          [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }],
+          quad.map((p) => ({ x: p.x, y: p.y }))
+        ),
+      };
+    }
+    return gridCache.H;
+  }
+
+  function drawSquaring(w, h) {
+    if (app.tool !== 'square') return;
+    const quad = app.rectifyDraft?.quad;
+    if (!quad || quad.length !== 4) return;
+    const aspect = app.rectifyDraft.aspect > 0.02 ? app.rectifyDraft.aspect : 1;
+
+    const H = squaringGrid(quad);
+    const at = (u, v) => {
+      const p = H ? applyH(H, u, v) : null;
+      return p ? { x: p.x * w, y: p.y * h } : null;
+    };
+
+    g.save();
+
+    // Cells as close to square as whole numbers allow, so a skew shows up as a
+    // cell that is visibly a different shape from its neighbours.
+    const rows = 4;
+    const cols = Math.max(2, Math.min(14, Math.round(rows * aspect)));
+    g.strokeStyle = 'rgba(76,194,255,0.45)';
+    g.lineWidth = 1 * dpr;
+    const rule = (from, to, steps) => {
+      g.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const p = at(from.u + (to.u - from.u) * t, from.v + (to.v - from.v) * t);
+        if (!p) return;
+        if (i === 0) g.moveTo(p.x, p.y);
+        else g.lineTo(p.x, p.y);
+      }
+      g.stroke();
+    };
+    for (let c = 1; c < cols; c++) rule({ u: c / cols, v: 0 }, { u: c / cols, v: 1 }, 1);
+    for (let r = 1; r < rows; r++) rule({ u: 0, v: r / rows }, { u: 1, v: r / rows }, 1);
+
+    g.strokeStyle = '#4cc2ff';
+    g.lineWidth = 2.2 * dpr;
+    g.beginPath();
+    quad.forEach((p, i) => {
+      if (i === 0) g.moveTo(p.x * w, p.y * h);
+      else g.lineTo(p.x * w, p.y * h);
+    });
+    g.closePath();
+    g.stroke();
+
+    const labels = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
+    g.font = labelFont(11 * dpr);
+    g.textBaseline = 'middle';
+    quad.forEach((p, i) => {
+      const c = { x: p.x * w, y: p.y * h };
+      g.beginPath();
+      g.arc(c.x, c.y, (hover.corner === i ? 10 : 8) * dpr, 0, Math.PI * 2);
+      g.fillStyle = hover.corner === i ? '#ffffff' : '#4cc2ff';
+      g.fill();
+      g.strokeStyle = '#000';
+      g.lineWidth = 1.5 * dpr;
+      g.stroke();
+      g.fillStyle = '#4cc2ff';
+      g.fillText(labels[i], c.x + 13 * dpr, c.y);
     });
     g.restore();
   }

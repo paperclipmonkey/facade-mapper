@@ -30,6 +30,14 @@ export default {
     return { seeded: rng() };
   },
 
+  // Optional, and required for anything that carries state between frames.
+  // Runs at a fixed 60 steps a second whatever the frame rate, with a constant
+  // \`dt\` and no canvas — which is what makes two projectors covering the same
+  // wall paint the same animation. Move particles here; paint them in \`draw\`.
+  step({ p, shape, t, dt, state, rng, noise }) {
+    state.phase = (state.phase || 0) + p.speed * dt;
+  },
+
   draw({ g, p, shape, t, dt, i, n, state, rng, noise }) {
     const { bbox, path, sampler } = shape;
 
@@ -104,7 +112,8 @@ export const HELP_SECTIONS = [
   <li>Do it after dark. The dots have to out-shine everything else in frame.</li>
   <li>Make sure the whole projected area is inside the camera view before starting.</li>
   <li>Turn off the camera's auto-exposure if your browser exposes the control — the app tries, but support varies.</li>
-  <li>Don't move the camera afterwards. The shapes you trace are in camera coordinates.</li>
+  <li>Don't move the camera afterwards. The shapes you trace are relative to what it can see.</li>
+  <li>Point it square-on to the wall if you can — not at the projector. See <em>Squaring up the wall</em> below for why that is worth walking round the garden for.</li>
   <li>An average error under about 5 px is good; over 20 px means something moved mid-run.</li>
   <li>No camera, or too bright? Put a test grid up and drag the four corners with the Corners tool.</li>
 </ul>
@@ -123,6 +132,89 @@ export const HELP_SECTIONS = [
   over at each dot — which <em>is</em> the surface bending away — goes into the warp mesh as a
   correction. On a flat wall those residuals come out at nothing and the mesh stays flat, so the only
   cost is the time it takes to step through the dots.
+</p>
+
+<h2>Squaring up the wall</h2>
+<p>
+  The projector being off to one side is handled for you: alignment measures exactly where its
+  output lands and the warp undoes it. <strong>The camera being off to one side is not</strong>, and
+  it is the one that shows. Everything is drawn in camera coordinates, so a texture the app
+  generates — brickwork, a grid, anything that tiles — comes out regular <em>as seen from where the
+  camera is standing</em> and nowhere else. Look at it from the pavement and the courses fan out
+  across the building, growing towards the near end.
+</p>
+<p>
+  Anything you <em>traced</em> is fine, and always was. A window outline drawn over the picture of a
+  window lands on that window from every angle, because both are features of the same wall. Only
+  generated geometry inherits the camera's point of view.
+</p>
+<p>
+  The cheapest fix costs nothing: <strong>take the camera square-on to the wall</strong>. It does not
+  have to be anywhere near the projector — alignment absorbs that — so a photograph taken from
+  straight in front, traced indoors, solves the problem before it starts. Failing that, put the
+  camera where people will stand, and the distortion at least works out right from there.
+</p>
+<p>
+  When neither is possible, tell the app the shape of the wall. Press <kbd>W</kbd> or pick
+  <strong>Square up</strong> from the toolbar, drag the four handles onto something you know is
+  rectangular — a window, the door, a run of brick courses — and type its real width and height into
+  Setup. Any units, as long as they match; only the ratio is used. The grid ruled inside the quad is
+  what to judge by: get the marking right and its lines lie along the courses.
+</p>
+<p>
+  Applying it moves every traced point, every manual corner quad and every surface-correction mesh
+  into the new coordinates at once, so nothing you have already done is lost and no projector needs
+  re-aligning. Nothing moves on the building — it moves in the numbers. <em>Remove</em> puts it back.
+</p>
+<p>
+  One thing worth knowing: a photograph of a plane does not determine that plane's shape. Any
+  four-sided figure in a picture is some rectangle seen from somewhere, and there is no way to work
+  out which without being told. That is the whole reason it asks for two numbers.
+</p>
+
+<h2>Lining up with real brickwork</h2>
+<p>
+  Square the wall up first, or this cannot work: until you do, the courses are a constant size on
+  the <em>picture</em>, which means a changing size on the <em>wall</em>, and no offset will hold
+  them on the real ones all the way across.
+</p>
+<p>
+  Then set <strong>Brick width</strong> and <strong>Brick height</strong> until the projected
+  courses are the same pitch as the real ones, and use <strong>Course offset across</strong> and
+  <strong>Course offset up</strong> to slide the whole lattice onto them. The lattice is anchored to
+  the show rather than to each shape, so two walls either side of a door agree about where the
+  courses are, and one pair of offsets registers all of them at once.
+</p>
+
+<h2>Why every tab shows the same thing</h2>
+<p>
+  Every tab renders the show for itself, from the same project and the same broadcast clock, at
+  whatever frame rate it can manage. Which is fine for an effect that is a function of the
+  time — a wash, a pulse, anything driven by noise — and was quietly not fine for anything that
+  <em>remembers</em>: particles, things that fall, things that spawn at a rate. Those depended on
+  how many frames the tab had drawn, so a projector and the control preview drifted apart, and two
+  projectors covering the same brickwork painted two different animations onto it.
+</p>
+<p>
+  Three things are pinned down so that cannot happen. <strong>When a layer came on</strong> is
+  recorded in the project rather than measured by each tab, so a projector opened halfway through
+  the evening no longer believes every one-shot has just been fired. <strong>Randomness</strong> is
+  seeded from the simulation step rather than running as a stream, so the same show time draws the
+  same numbers however many frames got there first. And <strong>the simulation</strong> runs at a
+  fixed sixty steps a second: by any given show time exactly the same number of steps has been
+  taken, in every tab.
+</p>
+<p>
+  Writing an effect, that means one rule: anything that changes <code>state</code> belongs in
+  <code>step</code>, and <code>draw</code> only paints. An effect with no <code>step</code> is
+  treated as a pure function of time and left alone, which is right for most of them.
+</p>
+<p>
+  <strong>The one gap.</strong> A tab opened — or left unrendered — for more than about ten seconds
+  cannot honestly replay the steps it missed, so it starts that effect cold and warms up over a
+  second and a half. It will be out of phase with the others until that layer next restarts.
+  Projector tabs are fullscreen and always drawing, so this is really only the control preview
+  after the window has been buried behind something else.
 </p>
 
 <h2>Multiple projectors</h2>
@@ -308,6 +400,7 @@ export const HELP_SECTIONS = [
 <table>
   <tr><th><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>K</kbd></th><td>Search everything — add an effect, jump to a shape, play a scene, black the show out. Works from any panel and from inside a text field.</td></tr>
   <tr><th><kbd>V</kbd> <kbd>P</kbd> <kbd>L</kbd> <kbd>R</kbd> <kbd>C</kbd></th><td>Select, Area, Path, Rectangle, Corners</td></tr>
+  <tr><th><kbd>W</kbd></th><td>Square up the wall</td></tr>
   <tr><th><kbd>Enter</kbd> / <kbd>Esc</kbd></th><td>Finish / cancel the shape being drawn</td></tr>
   <tr><th><kbd>Backspace</kbd></th><td>Remove the last point while drawing; delete the selection otherwise</td></tr>
   <tr><th><kbd>Alt</kbd>-click</th><td>On an edge adds a point, on a point removes it</td></tr>

@@ -53,6 +53,17 @@ function normaliseEffect(def, isBuiltin = false) {
     /** Effects that light a whole area look wrong stroked, and vice versa. */
     params: Array.isArray(def.params) ? def.params : [],
     init: typeof def.init === 'function' ? def.init : null,
+    /**
+     * Optional fixed-rate simulation, run by the renderer at `SIM_HZ` with a
+     * constant `dt` and no canvas.
+     *
+     * An effect that carries state from frame to frame — particles, anything
+     * that spawns at a rate, anything that falls — has to declare it here rather
+     * than in `draw`, or two tabs rendering the same show at different frame
+     * rates will diverge and two projectors will paint different animations onto
+     * the same wall. See render/worldRenderer.js.
+     */
+    step: typeof def.step === 'function' ? def.step : null,
     draw: typeof def.draw === 'function' ? def.draw : () => {},
     builtin: isBuiltin,
   };

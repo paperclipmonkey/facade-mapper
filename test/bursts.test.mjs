@@ -46,15 +46,23 @@ const shape = {
   bbox: boundingBox(pts), centroid: boundingBox(pts), sampler: buildPathSampler(pts, true),
 };
 
-/** Draw one burst at a given age and report how much it put on the canvas. */
+/**
+ * Draw one burst at a given age and report how much it put on the canvas.
+ *
+ * `step` then `draw`, in that order, because that is what the renderer does —
+ * simulation at a fixed rate, painting once per frame. A burst casts its swarm
+ * in `step`, so calling only `draw` would test an effect with nothing to draw.
+ */
 function drawAt(effect, p, age, state, rng) {
   const g = recordingContext();
-  effect.draw({
+  const ctx = {
     g, p, stable: p, shape, shapes: () => [], age,
     t: age, dt: 1 / 60, rng, state, noise: defaultNoise,
     i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120,
     audio: { level: 0, low: 0, mid: 0, high: 0 },
-  });
+  };
+  effect.step?.({ ...ctx, g: null });
+  effect.draw(ctx);
   return g.calls.length;
 }
 

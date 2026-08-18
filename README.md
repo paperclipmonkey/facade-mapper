@@ -34,10 +34,20 @@ is for.
 
 - **Several projectors, one browser.** Each projector is its own tab, dragged to
   its own display. One control tab drives them all, and works out the soft-edge
-  blending where they overlap.
+  blending where they overlap. Every tab renders independently and they all show
+  the *same* show: the simulation runs on a fixed clock rather than on the frame
+  rate, so two projectors covering the same brickwork paint the same animation
+  onto it rather than two.
 - **Camera auto-alignment.** Each projector flashes a grid of dots; the camera
   watches where they land and solves the projector-to-camera mapping. You then
   draw on the camera picture and it appears on the right part of the house.
+- **Square up the wall.** The projector being off-axis is solved by alignment;
+  the *camera* being off-axis is not, and it is the one you can see — generated
+  texture like brickwork comes out regular from where the camera stands and fans
+  out from everywhere else. Mark something you know is rectangular, say what
+  shape it really is, and the app works in wall coordinates instead. Brick
+  courses then have a constant size on the building, and a pair of offsets slides
+  the lattice onto the real ones.
 - **Draw over the real view** — a live camera, or a photograph of the house
   taken in daylight so you can trace indoors.
 - **Around fifty effects.** Blood drips, lightning, fire, candlelit windows,

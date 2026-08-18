@@ -66,18 +66,41 @@ function nearObstacle(obstacles, x, y, w, h, margin) {
  * than as masonry: the eye finds the continuous vertical joints immediately and
  * stops believing it.
  */
-function layCourses(bbox, w, h, gap) {
+/**
+ * Lay a running bond over a bounding box, on a lattice anchored in world space.
+ *
+ * Anchored in world space, not to the box, and that is the change that makes the
+ * courses mean anything. Anchoring to each shape's own bounding box gave every
+ * traced area its own private brick grid: two walls either side of a door
+ * disagreed about where the courses were, and no combination of settings could
+ * make them agree, because the disagreement was in the anchor rather than in the
+ * numbers. One lattice across the whole building is both what masonry does and
+ * the only arrangement that can be registered onto real brickwork.
+ *
+ * `origin` is that registration. Square the wall up first — otherwise the
+ * courses are a constant size on the *camera picture* and no offset will hold
+ * them on real courses across the whole facade — then nudge these two numbers
+ * until the projected bed joints sit on the real ones.
+ */
+function layCourses(bbox, w, h, gap, origin = { x: 0, y: 0 }) {
   const bricks = [];
   const pitchY = h + gap;
   const pitchX = w + gap;
-  const rows = Math.ceil(bbox.h / pitchY) + 1;
 
-  for (let r = 0; r < rows; r++) {
-    const y = bbox.y + r * pitchY;
-    const offset = r % 2 ? -pitchX / 2 : 0;
+  const firstRow = Math.floor((bbox.y - origin.y) / pitchY);
+  const rows = Math.ceil(bbox.h / pitchY) + 2;
+
+  for (let i = 0; i < rows; i++) {
+    const r = firstRow + i;
+    const y = origin.y + r * pitchY;
+    // Modulo that survives negative rows: a shape above the origin must stagger
+    // the same way as one below it, or the bond breaks at y = 0.
+    const offset = (((r % 2) + 2) % 2) ? -pitchX / 2 : 0;
+    const firstCol = Math.floor((bbox.x - origin.x - offset) / pitchX);
     const cols = Math.ceil(bbox.w / pitchX) + 2;
-    for (let c = 0; c < cols; c++) {
-      const x = bbox.x + offset + c * pitchX;
+    for (let j = 0; j < cols; j++) {
+      const c = firstCol + j;
+      const x = origin.x + offset + c * pitchX;
       if (x > bbox.x + bbox.w || x + w < bbox.x) continue;
       bricks.push({ x, y, cx: x + w / 2, cy: y + h / 2, row: r, col: c });
     }
@@ -132,7 +155,7 @@ function bakeWall(bbox, p, obstacles, rng) {
   c.fillStyle = p.mortar;
   c.fillRect(bbox.x, bbox.y, bbox.w, bbox.h);
 
-  const bricks = layCourses(bbox, w, h, gap);
+  const bricks = layCourses(bbox, w, h, gap, { x: p.originX || 0, y: p.originY || 0 });
   for (const brick of bricks) {
     // Per-brick colour variation is the whole difference between masonry and
     // graph paper. Two independent draws — one towards the second colour, one
@@ -192,6 +215,13 @@ const brickwork = {
     { key: 'brickW', type: 'range', label: 'Brick width', default: 132, min: 20, max: 400, step: 2 },
     { key: 'brickH', type: 'range', label: 'Brick height', default: 44, min: 8, max: 160, step: 1 },
     { key: 'gap', type: 'range', label: 'Mortar', default: 7, min: 0, max: 30, step: 0.5 },
+    /**
+     * Where the lattice starts, for registering the projection onto brickwork
+     * that is already there. A whole pitch in either direction is all that can
+     * ever be needed: past that the courses repeat.
+     */
+    { key: 'originX', type: 'range', label: 'Course offset across', default: 0, min: -400, max: 400, step: 1 },
+    { key: 'originY', type: 'range', label: 'Course offset up', default: 0, min: -160, max: 160, step: 1 },
     { key: 'variation', type: 'range', label: 'Colour variation', default: 0.55, min: 0, max: 1, step: 0.01 },
     { key: 'relief', type: 'range', label: 'Relief', default: 0.7, min: 0, max: 1, step: 0.01 },
     OBSTACLE_PARAM,
@@ -218,6 +248,8 @@ const brickwork = {
       w: Math.max(6, stable.brickW),
       h: Math.max(3, stable.brickH),
       gap: Math.max(0, stable.gap),
+      originX: stable.originX || 0,
+      originY: stable.originY || 0,
     });
     const key = wallKey(shape, stable, obstacles);
     if (state.key !== key) {
@@ -243,10 +275,12 @@ const brickwork = {
 function wallKey(shape, p, obstacles) {
   return [
     shape.id,
+    Math.round(shape.bbox.x),
+    Math.round(shape.bbox.y),
     Math.round(shape.bbox.w),
     Math.round(shape.bbox.h),
     p.color, p.color2, p.mortar,
-    p.brickW, p.brickH, p.gap, p.variation, p.relief, p.seed,
+    p.brickW, p.brickH, p.gap, p.originX, p.originY, p.variation, p.relief, p.seed,
     obstacles.map((o) => o.id).join(','),
   ].join('|');
 }
@@ -287,6 +321,68 @@ function tentacleRibbon(g, joints, widths) {
   g.fill();
 }
 
+/**
+ * Brick size, mortar and the lattice of bricks a hole may take from.
+ *
+ * Wanted by `step`, which decides which of them let go, and by `draw`, which has
+ * to know how big to paint them — and expensive enough that neither should be
+ * working it out twice a frame. Cached on the geometry it depends on, so it is
+ * rebuilt when a shape is retraced or a slider moves and not otherwise.
+ *
+ * Rebuilding drops the holes on the floor, which is correct: the bricks they
+ * were made of no longer exist.
+ *
+ * @returns {{w:number,h:number,gap:number}|null} null when there is no wall to
+ *   take apart — a shape so small or so full of windows that no brick fits.
+ */
+function layoutFor({ p, shape, shapes, share, state }) {
+  const { bbox } = shape;
+  const obstacles = collectObstacles(shapes, p.obstacles, shape.id);
+
+  // The course the Brickwork layer on this shape laid, if there is one. Both
+  // effects build from the same bbox with the same maths, so agreeing on these
+  // few numbers is all it takes to agree on every brick.
+  const laid = p.match ? share?.get(`brickwork:${shape.id}`) : null;
+  const w = laid ? laid.w : Math.max(6, p.brickW);
+  const h = laid ? laid.h : Math.max(3, p.brickH);
+  const gap = laid ? laid.gap : Math.max(0, p.gap);
+  const origin = laid
+    ? { x: laid.originX || 0, y: laid.originY || 0 }
+    : { x: p.originX || 0, y: p.originY || 0 };
+
+  const key = [shape.id, Math.round(bbox.x), Math.round(bbox.y), Math.round(bbox.w), Math.round(bbox.h),
+    w, h, gap, origin.x, origin.y,
+    obstacles.map((o) => o.id).join(',')].join('|');
+
+  if (state.key !== key) {
+    state.key = key;
+    // Keep well clear of the openings: half a brick of margin, so a void never
+    // bites into a window reveal the brickwork carefully cut.
+    const margin = Math.min(w, h) * 0.5;
+    state.grid = layCourses(bbox, w, h, gap, origin).filter((brick) => {
+      if (nearObstacle(obstacles, brick.x, brick.y, w, h, margin)) return false;
+      // And wholly inside the shape. A traced facade is a gable, not a
+      // rectangle, so a good third of its bounding box is sky — without this
+      // most holes open where nothing is drawn and the effect appears not to be
+      // running. All four corners, not the centre: a brick straddling the
+      // roofline leaves a void with one edge in mid-air.
+      return (
+        pointInPolygon({ x: brick.x, y: brick.y }, shape.points)
+        && pointInPolygon({ x: brick.x + w, y: brick.y }, shape.points)
+        && pointInPolygon({ x: brick.x, y: brick.y + h }, shape.points)
+        && pointInPolygon({ x: brick.x + w, y: brick.y + h }, shape.points)
+      );
+    });
+    state.holes = [];
+    state.falling = [];
+    state.motes = [];
+    state.taken = new Set();
+    state.layout = { w, h, gap };
+  }
+
+  return state.grid?.length ? state.layout : null;
+}
+
 const breach = {
   id: 'breach',
   name: 'Breach',
@@ -307,6 +403,8 @@ const breach = {
     { key: 'brickW', type: 'range', label: 'Brick width', default: 76, min: 20, max: 400, step: 2 },
     { key: 'brickH', type: 'range', label: 'Brick height', default: 24, min: 8, max: 160, step: 1 },
     { key: 'gap', type: 'range', label: 'Mortar', default: 5, min: 0, max: 30, step: 0.5 },
+    { key: 'originX', type: 'range', label: 'Course offset across', default: 0, min: -400, max: 400, step: 1 },
+    { key: 'originY', type: 'range', label: 'Course offset up', default: 0, min: -160, max: 160, step: 1 },
     { key: 'rate', type: 'range', label: 'Bricks a minute', default: 7, min: 0, max: 60, step: 1 },
     { key: 'cluster', type: 'range', label: 'Bricks per hole', default: 5, min: 1, max: 16, step: 1 },
     { key: 'holes', type: 'range', label: 'Holes at once', default: 3, min: 1, max: 10, step: 1 },
@@ -336,53 +434,35 @@ const breach = {
   init() {
     return { key: '', holes: [], falling: [], motes: [], since: 0 };
   },
-  draw({ g, p, shape, t, dt, rng, state, shapes, stable, share }) {
+  /**
+   * The wall coming apart, as a function of the step number and nothing else.
+   *
+   * Split out of `draw` so it can run at a fixed rate. Where a brick has fallen
+   * to has to be the same in every tab — two projectors lighting the same
+   * brickwork are one picture, and a hole that is open in one and shut in the
+   * other is the most visible way to break it. Integrating with whatever `dt` a
+   * tab managed could not give that: a spawn test weighted by `dt` does not pick
+   * the same brick from a different sequence of steps even when they add up to
+   * the same elapsed time.
+   *
+   * So the renderer calls this exactly `floor(age * 60)` times by show time
+   * `age`, with a constant `dt`, and seeds `rng` from the step index. Nothing in
+   * here may look at the frame rate, and there is no canvas to draw on.
+   */
+  step({ p, shape, t, dt, rng, state, shapes, stable, share }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2) return;
 
     const obstacles = collectObstacles(shapes, p.obstacles, shape.id);
-    // The grid the Brickwork layer on this shape laid, if there is one. Both
-    // effects build their courses from the same bbox with the same maths, so
-    // agreeing on these three numbers is all it takes to agree on every brick.
-    const laid = p.match ? share?.get(`brickwork:${shape.id}`) : null;
-    const w = laid ? laid.w : Math.max(6, p.brickW);
-    const h = laid ? laid.h : Math.max(3, p.brickH);
-    const gap = laid ? laid.gap : Math.max(0, p.gap);
-
-    // The same grid the Brickwork layer under this one laid, recomputed rather
-    // than shared: two layers cannot see each other's state, and matching the
-    // maths is both simpler and more robust than a channel between them. Cached
-    // on geometry, because it is the one expensive thing here.
-    const key = [shape.id, Math.round(bbox.w), Math.round(bbox.h), w, h, gap,
-      obstacles.map((o) => o.id).join(',')].join('|');
-    if (state.key !== key) {
-      state.key = key;
-      // Keep well clear of the openings: half a brick of margin, so a void
-      // never bites into a window reveal the brickwork carefully cut.
-      const margin = Math.min(w, h) * 0.5;
-      state.grid = layCourses(bbox, w, h, gap).filter((brick) => {
-        if (nearObstacle(obstacles, brick.x, brick.y, w, h, margin)) return false;
-        // And wholly inside the shape. A traced facade is a gable, not a
-        // rectangle, so a good third of its bounding box is sky — without this
-        // most holes open where nothing is drawn and the effect appears not to
-        // be running. All four corners, not the centre: a brick straddling the
-        // roofline leaves a void with one edge in mid-air.
-        return (
-          pointInPolygon({ x: brick.x, y: brick.y }, shape.points)
-          && pointInPolygon({ x: brick.x + w, y: brick.y }, shape.points)
-          && pointInPolygon({ x: brick.x, y: brick.y + h }, shape.points)
-          && pointInPolygon({ x: brick.x + w, y: brick.y + h }, shape.points)
-        );
-      });
-      state.holes = [];
-      state.falling = [];
-      state.motes = [];
-      state.taken = new Set();
-    }
+    const layout = layoutFor({ p, shape, shapes, share, state });
+    if (!layout) return;
+    const { w, h, gap } = layout;
     const grid = state.grid;
-    if (!grid.length) return;
 
-    const step = Math.min(dt, 1 / 30);
+    // Named for what it is. `dt` is a constant here — the renderer guarantees
+    // it — but writing the integration against a local makes the guarantee
+    // visible at every use.
+    const step = dt;
     const maxHoles = Math.round(clamp(p.holes, 1, 10));
 
     /* --- open a new hole --- */
@@ -642,7 +722,24 @@ const breach = {
       }
     }
 
-    /* --- draw --- */
+  },
+
+  /**
+   * What that looks like. Reads state, never writes it.
+   *
+   * Called once per rendered frame with the frame's own time, so a tab drawing
+   * at 120fps still gets 120 pictures of a simulation that ran at 60 — and two
+   * tabs drawing at different rates get the same picture of the same wall.
+   */
+  draw({ g, p, shape, t, rng, state, shapes, stable, share }) {
+    const { bbox } = shape;
+    if (bbox.w <= 2 || bbox.h <= 2) return;
+    const layout = layoutFor({ p, shape, shapes, share, state });
+    if (!layout) return;
+    const { w, h, gap } = layout;
+    const armCount = Math.round(clamp(p.arms, 0, 8));
+    const obstacles = collectObstacles(shapes, p.obstacles, shape.id);
+
 
     g.save();
     g.clip(shape.path);

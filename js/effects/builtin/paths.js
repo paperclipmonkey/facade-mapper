@@ -187,19 +187,27 @@ const fairyLights = {
   init() {
     return { phases: null, count: 0 };
   },
-  draw({ g, p, shape, t, rng, state }) {
+  /**
+   * Per-bulb random phase, regenerated only when the count changes, so bulbs
+   * keep their identity while you drag the spacing slider.
+   *
+   * Cast here rather than on the first frame drawn: `rng` is seeded from the
+   * simulation step, and which step the first frame lands on depends on the
+   * frame rate — so two tabs used to twinkle the same string differently.
+   */
+  step({ p, shape, rng, state }) {
     const length = shape.sampler.length;
     if (length <= 0) return;
-
     const count = clamp(Math.round(length / Math.max(4, p.spacing)), 1, 900);
-
-    // Per-bulb random phase, regenerated only when the count changes, so bulbs
-    // keep their identity while you drag the spacing slider.
-    if (state.count !== count) {
-      state.count = count;
-      state.phases = new Float32Array(count);
-      for (let i = 0; i < count; i++) state.phases[i] = rng();
-    }
+    if (state.count === count) return;
+    state.count = count;
+    state.phases = new Float32Array(count);
+    for (let i = 0; i < count; i++) state.phases[i] = rng();
+  },
+  draw({ g, p, shape, t, state }) {
+    const length = shape.sampler.length;
+    if (length <= 0 || !state.phases) return;
+    const count = state.count;
 
     const palettes = {
       multi: ['#ff2d55', '#ffd60a', '#30d158', '#0a84ff', '#bf5af2'],
@@ -412,7 +420,7 @@ const sparks = {
   init() {
     return { parts: [], count: 0 };
   },
-  draw({ g, p, shape, t, dt, rng, state, noise }) {
+  step({ p, shape, t, dt, rng, state, noise }) {
     if (!shape.sampler.length) return;
     const target = Math.round(p.count);
 
@@ -434,10 +442,6 @@ const sparks = {
     while (state.parts.length < target) state.parts.push(spawn());
     if (state.parts.length > target) state.parts.length = target;
 
-    g.save();
-    g.globalAlpha *= clamp(p.level, 0, 4);
-    g.globalCompositeOperation = 'lighter';
-
     for (const part of state.parts) {
       part.age += dt;
       if (part.age >= part.life) {
@@ -446,7 +450,14 @@ const sparks = {
       const turbulence = noise.noise3(part.x * 0.004, part.y * 0.004, t * 0.3 + part.seed);
       part.x += (part.vx + p.drift + turbulence * 40) * dt;
       part.y += part.vy * dt;
+    }
+  },
+  draw({ g, p, state }) {
+    g.save();
+    g.globalAlpha *= clamp(p.level, 0, 4);
+    g.globalCompositeOperation = 'lighter';
 
+    for (const part of state.parts) {
       const f = part.age / part.life;
       const alpha = Math.sin(f * Math.PI); // fade in and out
       // Sparks cool as they fly, so colour comes from temperature.

@@ -25,7 +25,18 @@ export function createClock() {
 
   /** Call once per rendered frame. Returns everything effects need about time. */
   function tick() {
-    const t = timeNow();
+    /**
+     * One reading of the wall clock, used for both `t` and `wall`.
+     *
+     * They are two views of the same instant and consumers subtract one from the
+     * other — that is how a switch-on time recorded as `Date.now()` becomes a
+     * show time. Reading the clock twice put a millisecond of noise into that
+     * difference, so the answer wobbled frame to frame instead of being a
+     * constant, and anything comparing it against a stored value saw a change
+     * every single frame.
+     */
+    const nowMs = Date.now();
+    const t = transport.running ? (nowMs - transport.startEpoch) / 1000 : transport.pausedAt;
     const wallNow = performance.now();
 
     // dt comes from show time when running so it goes to zero on pause; but a
@@ -50,7 +61,7 @@ export function createClock() {
       bpm: transport.bpm,
       beat,
       beatPhase: beat - Math.floor(beat),
-      wall: Date.now() / 1000,
+      wall: nowMs / 1000,
     };
   }
 
