@@ -88,13 +88,21 @@ export function compileExpression(code) {
  * which is the one number two tabs never agree on. Quantised to 1/60s so a
  * `rand()` still changes frame to frame while two tabs at the same show time
  * get the same value.
+ *
+ * Seeded from the binding's own key, and that part is easy to get wrong in a way
+ * nothing complains about. A stream gives every caller a different number for
+ * free, simply because they take turns; a seeded generator does not, and if the
+ * seed leaves out which binding is asking then every `rand()` in the show
+ * returns the same number at the same instant and all of them move as one. The
+ * key is layer plus parameter, and `i` distinguishes the targets of a layer
+ * pointed at several shapes.
  */
-function expressionRng(ctx) {
+function expressionRng(ctx, key) {
   const bucket = Math.round((ctx.t || 0) * 60);
-  return makeRng(`expr|${ctx.key || ''}|${ctx.i ?? 0}#${bucket}`);
+  return makeRng(`expr|${key || ''}|${ctx.i ?? 0}#${bucket}`);
 }
 
-function expressionScope(ctx, base, def) {
+function expressionScope(ctx, base, def, key) {
   const shape = ctx.shape || null;
   return {
     t: ctx.t,
@@ -153,7 +161,7 @@ function expressionScope(ctx, base, def) {
     pulse: (p, w) => waveform('pulse', p, w),
     noise: (x, y = 0, z = 0) => defaultNoise.noise3(x, y, z),
     fbm: (x, y = 0, z = 0, o = 4) => defaultNoise.fbm(x, y, z, o),
-    rand: expressionRng(ctx),
+    rand: expressionRng(ctx, key),
     min2: Math.min,
     max2: Math.max,
   };
@@ -212,7 +220,13 @@ function getHold(key) {
  * @param {object} binding  the binding descriptor from layer.bindings[key]
  * @param {*} base          the parameter's static value, used as the centre
  * @param {object} def      the effect's param definition (for min/max/type)
- * @param {object} ctx      { t, dt, beat, beatPhase, bpm, audio, i, n, shape, key }
+ * @param {object} ctx      { t, dt, beat, beatPhase, bpm, audio, i, n, shape }
+ * @param {string} [bindingKey] Identifies *which* binding this is, as
+ *   `layerId:paramKey`. Everything with memory is filed under it — the
+ *   sample-and-hold's current value, the seed `rand()` draws from — so leaving
+ *   it out does not fail, it silently pools every binding in the show into one.
+ *   `resolveParams` always supplies it; `ctx.key` is a fallback for the rare
+ *   caller reaching for `evaluateBinding` directly.
  */
 export function evaluateBinding(binding, base, def, ctx, bindingKey) {
   if (!binding || binding.type === 'const' || !binding.type) return base;
@@ -308,7 +322,7 @@ export function evaluateBinding(binding, base, def, ctx, bindingKey) {
       const compiled = compileExpression(binding.code || '0');
       if (!compiled.call) return numericBase;
       try {
-        const v = compiled.call(expressionScope(ctx, numericBase, def));
+        const v = compiled.call(expressionScope(ctx, numericBase, def, stateKey));
         if (typeof v === 'number' && isFinite(v)) return v;
         if (typeof v === 'string' || typeof v === 'boolean') return v;
         return numericBase;

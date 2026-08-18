@@ -382,5 +382,44 @@ console.log('\n— bindings on non-numeric parameters —');
   ok('a colour with a stray binding stays a colour', p.color === '#2f6b32', String(p.color));
 }
 
+console.log('\n— rand() inside an expression binding —');
+{
+  /**
+   * Two properties, and they pull in opposite directions.
+   *
+   * It must give the *same* answer in two tabs at the same show time, or the
+   * projectors disagree — that is why it is seeded rather than left to run as a
+   * stream. But it must give *different* answers to two different bindings, or
+   * every slider driven by `rand()` across the whole show moves as one, which is
+   * a stream's one virtue and easy to lose while fixing the other thing.
+   */
+  const effect = getEffect('vine');
+  const at = (layerId, key, t) => {
+    const layer = { id: layerId, params: { [key]: 0 }, bindings: { [key]: { type: 'expr', code: 'rand()' } } };
+    return resolveParams(effect, layer, {
+      t, dt: 1 / 60, beat: 0, beatPhase: 0, bpm: 120,
+      audio: { level: 0, low: 0, mid: 0, high: 0 }, i: 0, n: 1, shape: null,
+    })[key];
+  };
+
+  // Both parameters span 0..1, so the resolved value is the draw itself rather
+  // than the draw clamped to a range — which would compare equal for the wrong
+  // reason and quietly make three of these four assertions vacuous.
+  ok('the same binding at the same show time agrees between tabs',
+    at('L1', 'branch', 3) === at('L1', 'branch', 3),
+    `${at('L1', 'branch', 3)}`);
+
+  ok('and it moves on as the show does',
+    at('L1', 'branch', 3) !== at('L1', 'branch', 9));
+
+  ok('two layers do not draw the same number',
+    at('L1', 'branch', 3) !== at('L2', 'branch', 3),
+    `${at('L1', 'branch', 3)} vs ${at('L2', 'branch', 3)}`);
+
+  ok('nor do two parameters of one layer',
+    at('L1', 'branch', 3) !== at('L1', 'cling', 3),
+    `${at('L1', 'branch', 3)} vs ${at('L1', 'cling', 3)}`);
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');
 process.exit(failures ? 1 : 0);

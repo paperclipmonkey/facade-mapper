@@ -337,7 +337,10 @@ export function sampleMesh(mesh, u, v) {
  * @param {object} mesh          the existing mesh
  * @param {object} fromRegion    the region it was built against
  * @param {object} toRegion      the region it is wanted in
- * @param {(p:{x,y})=>{x,y}|null} toSource maps a new-world point to old-world
+ * @param {function({x:number,y:number}): ({x:number,y:number}|null)} toSource
+ *   Maps a point in the new world space back to where it was in the old one.
+ *   Required. Returning null means that point has no counterpart — it mapped
+ *   past the horizon — and the grid position is used unchanged there.
  */
 export function resampleMesh(mesh, fromRegion, toRegion, toSource) {
   if (!mesh?.enabled || !mesh.offsets?.length) return mesh;

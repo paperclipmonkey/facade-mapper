@@ -247,17 +247,32 @@ const OVERRIDES = {
 };
 
 console.log('— every effect, at four frame rates —\n');
+/**
+ * Effects that read the wall clock rather than the show clock.
+ *
+ * A countdown to Hallowe'en is counting down to a real moment, so `Date.now()`
+ * is the right thing for it to read — and it means two runs of this harness,
+ * milliseconds apart, are legitimately counting down to slightly different
+ * numbers. There is nothing here to hold still, so comparing two runs of it
+ * measures the harness rather than the effect.
+ *
+ * Worth stating rather than quietly skipping: these do differ very slightly
+ * between tabs, by however far apart the two tabs read the clock. That is
+ * sub-frame and it is what a countdown is supposed to do.
+ */
+const WALL_CLOCK = new Set(['countdown']);
+
 const skipped = [];
 for (const effect of listEffects().sort((a, b) => a.id.localeCompare(b.id))) {
   // Media and camera effects need a source this harness has no way to provide,
   // and report themselves as drawing nothing rather than as disagreeing.
-  if (effect.category === 'media') {
+  if (effect.category === 'media' || WALL_CLOCK.has(effect.id)) {
     skipped.push(effect.id);
     continue;
   }
   agreesAcrossFrameRates(effect.id, projectWith(effect.id, OVERRIDES[effect.id] || {}), { quiet: true });
 }
-if (skipped.length) console.log(`\n  (skipped, no source to draw from: ${skipped.join(', ')})`);
+if (skipped.length) console.log(`\n  (skipped — no source to draw from, or driven by the wall clock: ${skipped.join(', ')})`);
 
 /* ------------------------------------------------------------------ *
  * A tab that opened late
