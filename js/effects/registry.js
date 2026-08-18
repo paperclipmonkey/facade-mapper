@@ -50,6 +50,16 @@ function normaliseEffect(def, isBuiltin = false) {
     description: def.description || '',
     /** 'shape' draws once per target; 'global' draws once over the whole frame. */
     scope: def.scope || 'shape',
+    /**
+     * Something outside the project this effect cannot work without — at
+     * present only 'depth', for effects that read the imported scan.
+     *
+     * Declared rather than inferred so the layer list can say "this needs a
+     * depth scan and there isn't one" instead of drawing nothing and leaving
+     * you to work out which of the eight usual reasons it was. See
+     * control/diagnostics.js.
+     */
+    needs: def.needs || null,
     /** Effects that light a whole area look wrong stroked, and vice versa. */
     params: Array.isArray(def.params) ? def.params : [],
     init: typeof def.init === 'function' ? def.init : null,

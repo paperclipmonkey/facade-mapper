@@ -1,0 +1,1459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Facade in Relief</title>
+<style>
+:root {
+  --paper: #eef2f5;
+  --sheet: #ffffff;
+  --sunk: #e4eaef;
+  --ink: #15222a;
+  --ink-soft: #4e626e;
+  --ink-faint: #7f929c;
+  --rule: #c3d1da;
+  --rule-soft: #dbe4ea;
+  --back: #1a6b9f;
+  --back-wash: rgba(26, 107, 159, 0.12);
+  --proud: #bc7118;
+  --proud-wash: rgba(188, 113, 24, 0.14);
+  --lamp: #d9892b;
+  --grid: rgba(24, 62, 84, 0.08);
+  --shadow: 0 1px 2px rgba(15, 40, 55, 0.06), 0 8px 24px -12px rgba(15, 40, 55, 0.28);
+
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+  --serif: "Iowan Old Style", "Palatino Linotype", Charter, Georgia, "Times New Roman", serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0c1317;
+    --sheet: #141e25;
+    --sunk: #101a20;
+    --ink: #dde7ed;
+    --ink-soft: #92a7b3;
+    --ink-faint: #6a7f8b;
+    --rule: #27373f;
+    --rule-soft: #1d2b33;
+    --back: #55acdf;
+    --back-wash: rgba(85, 172, 223, 0.16);
+    --proud: #e2a355;
+    --proud-wash: rgba(226, 163, 85, 0.16);
+    --lamp: #ffc26b;
+    --grid: rgba(150, 200, 230, 0.07);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px -14px rgba(0, 0, 0, 0.8);
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0c1317;
+  --sheet: #141e25;
+  --sunk: #101a20;
+  --ink: #dde7ed;
+  --ink-soft: #92a7b3;
+  --ink-faint: #6a7f8b;
+  --rule: #27373f;
+  --rule-soft: #1d2b33;
+  --back: #55acdf;
+  --back-wash: rgba(85, 172, 223, 0.16);
+  --proud: #e2a355;
+  --proud-wash: rgba(226, 163, 85, 0.16);
+  --lamp: #ffc26b;
+  --grid: rgba(150, 200, 230, 0.07);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px -14px rgba(0, 0, 0, 0.8);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 28px 28px;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+}
+
+.sheet {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 22px 96px;
+}
+
+/* --- Title block, as on a drawing --- */
+
+header.title-block {
+  border-bottom: 2px solid var(--ink);
+  margin: 56px 0 0;
+  padding-bottom: 18px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px 32px;
+  align-items: end;
+}
+h1 {
+  font-family: var(--mono);
+  font-size: clamp(30px, 6.2vw, 54px);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 0.98;
+  margin: 0;
+  text-wrap: balance;
+}
+.stamp {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-align: right;
+  line-height: 1.7;
+}
+.standfirst {
+  font-size: 20px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  max-width: 62ch;
+  margin: 22px 0 0;
+  text-wrap: pretty;
+}
+
+/* --- Stage headings --- */
+
+section { margin-top: 64px; }
+
+.stage {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 8px;
+  margin-bottom: 22px;
+}
+.stage .no {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--back);
+  border: 1px solid var(--rule);
+  padding: 2px 7px;
+  flex: none;
+}
+.stage h2 {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin: 0;
+  flex: 1;
+}
+.stage .aside {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+p { max-width: 66ch; margin: 0 0 18px; text-wrap: pretty; }
+p.wide { max-width: 78ch; }
+strong { font-weight: 600; }
+em { font-style: italic; }
+
+.note {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ink-soft);
+  border-left: 2px solid var(--rule);
+  padding-left: 14px;
+  max-width: 72ch;
+}
+
+/* --- Plates --- */
+
+figure {
+  margin: 0 0 22px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow);
+}
+figure > .plate { display: block; width: 100%; height: auto; background: var(--sunk); }
+figcaption {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  padding: 10px 14px;
+  border-top: 1px solid var(--rule-soft);
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+figcaption b { color: var(--ink); font-weight: 600; }
+
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 720px) { .pair { grid-template-columns: 1fr; } }
+
+/* --- Controls --- */
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding: 12px 14px;
+  border-top: 1px solid var(--rule-soft);
+  background: var(--sunk);
+}
+.controls label { display: flex; align-items: center; gap: 8px; }
+.controls input[type="range"] { width: 130px; accent-color: var(--back); }
+.controls input[type="checkbox"] { accent-color: var(--back); width: 15px; height: 15px; }
+.controls output { color: var(--ink); font-variant-numeric: tabular-nums; min-width: 5.5ch; }
+button {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sheet);
+  background: var(--ink);
+  border: 1px solid var(--ink);
+  padding: 7px 14px;
+  cursor: pointer;
+}
+button:hover { background: var(--back); border-color: var(--back); }
+button:focus-visible, input:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--back);
+  outline-offset: 2px;
+}
+
+/* --- Data table --- */
+
+.scroller { overflow-x: auto; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+th, td { text-align: right; padding: 7px 12px; border-bottom: 1px solid var(--rule-soft); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+thead th {
+  font-weight: 600;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border-bottom: 1px solid var(--rule);
+}
+.tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid currentColor;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.tag.set-back { color: var(--back); background: var(--back-wash); }
+.tag.proud { color: var(--proud); background: var(--proud-wash); }
+
+.legend {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: 14px;
+}
+.legend i { width: 22px; height: 10px; display: inline-block; margin-right: 7px; vertical-align: -1px; }
+
+/* --- Drop zone --- */
+
+#drop {
+  border: 1.5px dashed var(--rule);
+  background: var(--sheet);
+  padding: 34px 24px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink-soft);
+  transition: border-color 0.15s, background 0.15s;
+}
+#drop.hot { border-color: var(--back); background: var(--back-wash); }
+#drop b { display: block; font-size: 15px; color: var(--ink); margin-bottom: 8px; letter-spacing: 0.02em; }
+#dropStatus { margin-top: 12px; color: var(--back); min-height: 1.4em; }
+#dropStatus.bad { color: var(--proud); }
+
+ul { max-width: 70ch; padding-left: 20px; }
+li { margin-bottom: 10px; }
+li::marker { color: var(--back); }
+
+footer {
+  margin-top: 72px;
+  border-top: 1px solid var(--rule);
+  padding-top: 16px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header class="title-block">
+  <h1>Facade<br />in Relief</h1>
+  <div class="stamp">
+    Facade Mapper<br />
+    Depth study<br />
+    <span id="stampScale">Wall — · —</span>
+  </div>
+</header>
+
+<p class="standfirst">
+  A traced outline says <em>there is a window here</em>. A depth scan says how far
+  back the glass sits, which way the reveal faces, and where the sill stands proud
+  of the brick — and that turns out to be enough to find the windows without
+  anybody drawing them, and enough to light the house rather than paint it.
+</p>
+
+<section>
+  <div class="stage">
+    <span class="no">00</span>
+    <h2>What a scan buys</h2>
+    <span class="aside">Live · nothing uploaded</span>
+  </div>
+  <p class="wide">
+    Everything on this page is computed in your browser, right now, by the same two
+    modules the app would use. The house below is synthetic — a heightfield of a
+    bay-fronted terrace, triangulated, rotated to face an arbitrary direction and
+    dropped forty metres from the origin, exactly as a phone scan arrives. Nothing
+    downstream is told where the wall is, how big it is, or that it has windows.
+  </p>
+
+  <figure>
+    <canvas class="plate" id="heroCanvas" width="1600" height="720" aria-label="A facade re-lit by a moving virtual lantern, with cast shadows"></canvas>
+    <div class="controls">
+      <label><input type="checkbox" id="heroShadows" checked /> Cast shadows</label>
+      <label><input type="checkbox" id="heroMoving" checked /> Move the light</label>
+      <label>Height <input type="range" id="heroHeight" min="0" max="100" value="46" /></label>
+      <span style="margin-left:auto">Move your pointer over the plate to carry the lantern</span>
+    </div>
+    <figcaption>
+      <span><b>Plate 1.</b> The same wall, lit by a lamp that is not there.</span>
+      <span>Shading from scan geometry · <span id="heroFps">—</span></span>
+    </figcaption>
+  </figure>
+
+  <p class="note">
+    No texture, no hand-built model, no artwork. Every pixel of that light is
+    N·L against a surface normal differentiated from the scan, with the shadows
+    ray-marched through the same heightfield. The reveals darken on one side and
+    catch on the other because the reveals are really there.
+  </p>
+</section>
+
+<section>
+  <div class="stage">
+    <span class="no">01</span>
+    <h2>Find the wall</h2>
+    <span class="aside">RANSAC plane fit</span>
+  </div>
+  <p class="wide">
+    A scan is a million points in a coordinate system nobody chose. The first
+    question is which plane has the most points on it, because on the front of a
+    house that plane is the front of the house. Answer that and you have the wall's
+    pose in metres — the one fact a photograph cannot give you, and the fact the app
+    currently asks you to supply by marking a rectangle and typing its real size.
+  </p>
+  <figure>
+    <canvas class="plate" id="planeCanvas" width="1600" height="560" aria-label="Point cloud coloured by distance from the fitted plane"></canvas>
+    <figcaption>
+      <span><b>Plate 2.</b> Distance from the fitted plane, viewed obliquely. Grey is wall.</span>
+      <span id="planeStats">—</span>
+    </figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="stage">
+    <span class="no">02</span>
+    <h2>Relief, not depth</h2>
+    <span class="aside">Orthographic · metric</span>
+  </div>
+  <p class="wide">
+    Depth from the camera is mostly a statement about where you were standing. The
+    useful quantity is <strong>relief</strong>: how far each point stands in front of
+    or behind the wall's own plane. Rasterise the mesh orthographically along that
+    plane's normal and you get a picture that is square on the building and square in
+    millimetres, in which a window is not a shape — it is the part of the wall that is
+    a hundred millimetres further away.
+  </p>
+  <div class="legend">
+    <span><i style="background:var(--back)"></i>set back</span>
+    <span><i style="background:linear-gradient(90deg,var(--back),#8899a2,var(--proud))"></i>gradient</span>
+    <span><i style="background:var(--proud)"></i>standing proud</span>
+  </div>
+  <div class="pair">
+    <figure>
+      <canvas class="plate" id="reliefCanvas" width="900" height="720" aria-label="Signed relief map of the facade"></canvas>
+      <figcaption><span><b>Plate 3.</b> Signed relief</span><span id="reliefRange">—</span></figcaption>
+    </figure>
+    <figure>
+      <canvas class="plate" id="maskCanvas" width="900" height="720" aria-label="The relief thresholded into regions"></canvas>
+      <div class="controls">
+        <label>Threshold <input type="range" id="threshold" min="4" max="90" value="20" /><output id="thresholdOut">20 mm</output></label>
+      </div>
+      <figcaption><span><b>Plate 4.</b> Everything not flush with the wall</span><span id="maskCount">—</span></figcaption>
+    </figure>
+  </div>
+  <p class="note">
+    Twenty millimetres is the whole judgement call. It clears rendered brickwork,
+    pebbledash and scan noise, and sits comfortably under the fifty to a hundred a
+    window reveal gives you. Drag it and watch the brick joints arrive at about six.
+  </p>
+</section>
+
+<section>
+  <div class="stage">
+    <span class="no">03</span>
+    <h2>The shapes trace themselves</h2>
+    <span class="aside">Label · trace · square off</span>
+  </div>
+  <p class="wide">
+    Label the connected regions, walk the boundary along the cracks between pixels,
+    and simplify. Openings are rectangles, so a region that genuinely fills its own
+    bounding box is squared off rather than recorded faithfully as a wobble. Then the
+    measurements are in metres, which is what makes the tags possible at all: a door
+    is not "a tall rectangle", it is two metres high and standing on the ground.
+  </p>
+  <figure>
+    <canvas class="plate" id="shapesCanvas" width="1600" height="1080" aria-label="The detected openings drawn over the relief map with dimensions"></canvas>
+    <figcaption>
+      <span><b>Plate 5.</b> Found, squared, measured and tagged. Nothing traced by hand.</span>
+      <span id="shapesCount">—</span>
+    </figcaption>
+  </figure>
+  <p class="note">
+    The bay comes back as one region tagged <em>wall</em>, rather than as a bay with
+    three windows in it. That is correct as far as it goes — every part of it does
+    stand proud of the brickwork — and it is the limit of fitting one plane: those
+    panes are set back into the bay, not into the house. Fitting a second plane
+    inside each large region would find them, and is the obvious next thing to try.
+  </p>
+  <div class="scroller">
+    <table id="shapesTable">
+      <thead>
+        <tr><th>Tag</th><th>Width</th><th>Height</th><th>Area</th><th>Relief</th><th>Vertices</th><th>Confidence</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="stage">
+    <span class="no">04</span>
+    <h2>Why not just edge-detect the photograph</h2>
+    <span class="aside">The honest comparison</span>
+  </div>
+  <p class="wide">
+    Because a photograph is a picture of the paint. Below is the same facade as a
+    daylight still, with the things a real one has: brick courses, a patch of ivy over
+    one window, a downpipe, the shadow under the eaves, and one window painted the
+    same colour as the wall. On the left, a Sobel operator does exactly what it is
+    asked. On the right, the same regions from relief.
+  </p>
+  <div class="pair">
+    <figure>
+      <canvas class="plate" id="photoCanvas" width="900" height="740" aria-label="Sobel edge detection over a photograph of the facade"></canvas>
+      <div class="controls">
+        <label><input type="checkbox" id="showSobel" checked /> Show edges</label>
+      </div>
+      <figcaption><span><b>Plate 6.</b> Edges in the photograph</span><span>Every joint, leaf and shadow</span></figcaption>
+    </figure>
+    <figure>
+      <canvas class="plate" id="depthEdgeCanvas" width="900" height="740" aria-label="The same facade with openings found from relief"></canvas>
+      <div class="controls">
+        <label><input type="checkbox" id="showDepthEdge" checked /> Show openings</label>
+      </div>
+      <figcaption><span><b>Plate 7.</b> Edges in the geometry</span><span>Ivy and paint are invisible to it</span></figcaption>
+    </figure>
+  </div>
+  <p class="note">
+    The ivy is the interesting failure. It is a real edge, it is where the window is,
+    and it is not the window — an outline traced from it would light a leaf. Depth
+    does not see paint, shadow, moss or bunting, which is also why this keeps working
+    after dark, when the app is actually running.
+  </p>
+</section>
+
+<section>
+  <div class="stage">
+    <span class="no">05</span>
+    <h2>Then the light knows where the house is</h2>
+    <span class="aside">Normals · shadows</span>
+  </div>
+  <p class="wide">
+    Relief differentiates into a surface normal per pixel, and a normal is all a
+    lighting model wants. That is the part I would not have guessed was worth the
+    trouble until I saw it: the effects library is already careful to model light
+    rather than paint, and this hands it the missing half — a real surface to fall on.
+    A lantern carried past the house lights the reveals from the side. Lightning
+    throws the porch's shadow across the path. Fire at the foot of the wall catches the
+    underside of every sill and nothing else.
+  </p>
+  <div class="pair">
+    <figure>
+      <canvas class="plate" id="normalCanvas" width="900" height="740" aria-label="Surface normals of the facade"></canvas>
+      <figcaption><span><b>Plate 8.</b> Surface normals</span><span>x, y, out of the wall</span></figcaption>
+    </figure>
+    <figure>
+      <canvas class="plate" id="projCanvas" width="900" height="740" aria-label="What the projector emits for the relighting"></canvas>
+      <div class="controls">
+        <label>Look
+          <select id="lookSelect" style="font:inherit;font-family:var(--mono);padding:4px;background:var(--sheet);color:var(--ink);border:1px solid var(--rule)">
+            <option value="lantern">Lantern</option>
+            <option value="lightning">Lightning</option>
+            <option value="fire">Fire at the foot</option>
+            <option value="sweep">Searchlight sweep</option>
+          </select>
+        </label>
+      </div>
+      <figcaption><span><b>Plate 9.</b> What the projector emits</span><span>Black is "leave it dark"</span></figcaption>
+    </figure>
+  </div>
+</section>
+
+<section>
+  <div class="stage">
+    <span class="no">06</span>
+    <h2>Put your own scan in</h2>
+    <span class="aside">Runs locally · nothing leaves this tab</span>
+  </div>
+  <p class="wide">
+    Drop a <code>.glb</code> or <code>.gltf</code> from Polycam, Scaniverse, RoomPlan or
+    anything else that exports one, and every plate above will be rebuilt from it. Export
+    with compression turned off — Draco and meshopt are both named rather than
+    swallowed if they turn up.
+  </p>
+  <div id="drop">
+    <b>Drop a scan here</b>
+    or <label style="text-decoration:underline;cursor:pointer">choose a file<input type="file" id="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden /></label>
+    <div id="dropStatus"></div>
+  </div>
+</section>
+
+<section>
+  <div class="stage">
+    <span class="no">07</span>
+    <h2>What is real and what is not</h2>
+    <span class="aside">Plainly</span>
+  </div>
+  <ul>
+    <li><strong>Built and tested.</strong> The plane fit, the orthographic relief bake, hole filling, normals, region tracing and the opening detection, plus a glTF reader that handles node transforms and strided accessors. Two test files drive them end to end against a synthetic house at an arbitrary pose.</li>
+    <li><strong>Not yet wired into the app.</strong> Nothing here writes shapes into a project, and no effect can read the relief map yet. That is the next piece of work, and it is mostly plumbing: store the relief beside the still, align it to the camera view with the four-point tool that already exists, and hand it to effects the way the camera frame is handed to them today.</li>
+    <li><strong>The alignment is the real question.</strong> Openings come out in wall coordinates, in metres — the same space the app builds when you square up a wall. Getting from there to the camera's view is one homography, so it is four clicks at worst, and free if you have already squared the wall.</li>
+    <li><strong>Depth photos will disappoint you.</strong> Portrait-mode depth is tuned for a face at arm's length and saturates well before the far side of a front garden; the LiDAR sensor gives up around five metres. Photogrammetry from a walk-around is the mode that works on a whole house, and it is also the one that needs no special sensor.</li>
+  </ul>
+</section>
+
+<footer>
+  <span>Facade Mapper · depth study</span>
+  <span id="footStats">—</span>
+</footer>
+</div>
+
+<script type="module">
+import {
+  fitPlane, orientPlane, bakeRelief, levelRelief, fillHoles,
+  findOpenings, normalsFromRelief, isSeen, occlusion,
+} from '../js/core/depth.js';
+import { readGltfTriangles, meanNormal } from '../js/core/glb.js';
+
+const $ = (id) => document.getElementById(id);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+/* ================================================================== *
+ * A house, as a heightfield
+ *
+ * Written in metres from the bottom-left of the wall, because that is how a
+ * builder would describe it and because every threshold downstream is in
+ * metres too. Only the geometry is here; the paint is further down, and the
+ * whole point of the exercise is that the two are independent.
+ * ================================================================== */
+
+const WALL_W = 8.4;
+const WALL_H = 6.6;
+
+const BAY = { x: 0.7, y: 0.3, w: 2.6, h: 2.5, out: 0.44 };
+const DOOR = { x: 4.55, y: 0, w: 0.95, h: 2.06, in: 0.13 };
+const PORCH = { x: 4.3, y: 2.06, w: 1.45, h: 0.28, out: 0.48 };
+const UPPER = [0.95, 3.65, 6.35].map((x) => ({ x, y: 3.5, w: 1.15, h: 1.5, in: 0.105 }));
+const PIPE = { x: 7.98, y: 0, w: 0.12, h: 6.1, out: 0.085 };
+
+const inBox = (x, y, b) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
+
+/** Repeatable value noise, for brick texture and for scanner error. */
+function wobble(x, y, freq, seed) {
+  const s = Math.sin((x * freq + seed) * 12.9898 + (y * freq + seed) * 78.233) * 43758.5453;
+  return (s - Math.floor(s)) * 2 - 1;
+}
+
+function facadeHeight(x, y) {
+  let h = 0;
+
+  if (y > WALL_H - 0.45) h = 0.16;                                  // gutter and fascia
+  if (inBox(x, y, PIPE)) h = Math.max(h, PIPE.out);                 // downpipe
+
+  if (inBox(x, y, BAY)) {
+    h = BAY.out;
+    // Three panes in the bay, set back into their own frame.
+    const inset = 0.16;
+    if (y > BAY.y + 0.35 && y < BAY.y + BAY.h - inset) {
+      const across = (x - BAY.x - inset) / (BAY.w - inset * 2);
+      if (across > 0 && across < 1) {
+        const pane = (across * 3) % 1;
+        if (pane > 0.06 && pane < 0.94) h = BAY.out - 0.14;
+      }
+    }
+  }
+  // The bay's flat roof, standing further out again.
+  if (inBox(x, y, { x: BAY.x - 0.08, y: BAY.y + BAY.h, w: BAY.w + 0.16, h: 0.16 })) h = BAY.out + 0.07;
+
+  if (inBox(x, y, PORCH)) h = PORCH.out;
+  else if (inBox(x, y, DOOR)) h = -DOOR.in;
+
+  for (const win of UPPER) {
+    if (inBox(x, y, win)) h = -win.in;
+    else if (inBox(x, y, { x: win.x - 0.09, y: win.y - 0.13, w: win.w + 0.18, h: 0.13 })) h = 0.07;
+  }
+
+  // Brickwork, and the scanner's own uncertainty. Both deliberately under the
+  // threshold: if they were not, this whole approach would not work.
+  h += wobble(x, y, 22, 3) * 0.0035 + wobble(x, y, 140, 11) * 0.0018;
+  return h;
+}
+
+/** Triangulate the heightfield and put it somewhere arbitrary in the world. */
+function buildScanMesh(step = 0.028) {
+  const yaw = -0.71;
+  const cols = Math.round(WALL_W / step) + 1;
+  const rows = Math.round(WALL_H / step) + 1;
+  const positions = new Float32Array(cols * rows * 3);
+
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const x = i * step;
+      const y = j * step;
+      const z = facadeHeight(x, y);
+      const k = (j * cols + i) * 3;
+      positions[k] = x * Math.cos(yaw) + z * Math.sin(yaw) + 31.2;
+      positions[k + 1] = y - 1.4;
+      positions[k + 2] = -x * Math.sin(yaw) + z * Math.cos(yaw) - 18.9;
+    }
+  }
+
+  const indices = new Uint32Array((cols - 1) * (rows - 1) * 6);
+  let t = 0;
+  for (let j = 0; j < rows - 1; j++) {
+    for (let i = 0; i < cols - 1; i++) {
+      const a = j * cols + i;
+      // Wound anticlockwise seen from in front of the wall, so the triangle
+      // normals face out of the building — which is how a scanner winds the
+      // surfaces it can see, and how `orientPlane` knows which side is the front.
+      indices[t++] = a; indices[t++] = a + 1; indices[t++] = a + cols;
+      indices[t++] = a + 1; indices[t++] = a + cols + 1; indices[t++] = a + cols;
+    }
+  }
+  return { positions, indices, triangles: t / 3 };
+}
+
+/* ================================================================== *
+ * The paint
+ *
+ * Only ever used for the photograph comparison and for showing what the light
+ * lands on. Nothing in the pipeline reads it.
+ * ================================================================== */
+
+const IVY = { x: 6.1, y: 3.2, w: 1.7, h: 2.1 };
+
+/** Albedo at a point on the wall, as [r, g, b] 0..1. */
+function facadeAlbedo(x, y) {
+  const course = Math.floor(y / 0.075);
+  const stagger = (course % 2) * 0.11;
+  const joint = Math.abs(((x + stagger) / 0.225) % 1 - 0.5) > 0.46 || (y / 0.075) % 1 < 0.11;
+  const tone = wobble(Math.floor((x + stagger) / 0.225), course, 1, 7) * 0.09;
+
+  let c = joint ? [0.58, 0.50, 0.45] : [0.55 + tone, 0.36 + tone * 0.7, 0.30 + tone * 0.5];
+
+  if (y > WALL_H - 0.45) c = [0.30, 0.30, 0.31];
+  if (inBox(x, y, PIPE)) c = [0.26, 0.27, 0.28];
+
+  // Glass, wherever the geometry says there is glass — except the left-hand
+  // upper window, which somebody boarded and rendered over. It is a window in
+  // every sense that matters and there is nothing in the photograph to say so.
+  if (inBox(x, y, UPPER[1]) || inBox(x, y, UPPER[2])) c = [0.09, 0.11, 0.13];
+  else if (inBox(x, y, DOOR)) c = [0.12, 0.19, 0.16];
+  else if (inBox(x, y, BAY) && facadeHeight(x, y) < BAY.out - 0.05) c = [0.09, 0.11, 0.13];
+
+  // Ivy, straddling the right-hand window and its brickwork alike. Two octaves
+  // and a soft margin, so it has the ragged outline that makes it such a
+  // convincing edge and such a bad window.
+  const spread = wobble(x, y, 2.4, 21) * 0.55 + wobble(x, y, 7.1, 5) * 0.3 + wobble(x, y, 19, 13) * 0.15;
+  const edge = Math.min(
+    (x - IVY.x) / 0.6, (IVY.x + IVY.w - x) / 0.6,
+    (y - IVY.y) / 0.7, (IVY.y + IVY.h - y) / 0.5
+  );
+  if (Math.min(1, edge) + spread > 0.42) {
+    const leaf = wobble(x, y, 46, 3) * 0.5 + wobble(x, y, 120, 9) * 0.5;
+    c = [0.10 + leaf * 0.055, 0.20 + leaf * 0.075, 0.09 + leaf * 0.035];
+  }
+
+  // Daylight: the sky is brighter than the ground, and the eaves shade the top
+  // course. This is the ambient occlusion a photograph really has, and it is
+  // exactly what an edge detector mistakes for architecture.
+  const shade = 1 - Math.max(0, 1 - (WALL_H - 0.45 - y) / 0.55) * 0.45;
+  return c.map((v) => v * shade);
+}
+
+/* ================================================================== *
+ * Running the real pipeline
+ * ================================================================== */
+
+const state = {};
+
+function analyse(mesh, { source = 'synthetic' } = {}) {
+  const cloud = [];
+  const stride = Math.max(1, Math.ceil(mesh.positions.length / 3 / 120000));
+  for (let i = 0; i < mesh.positions.length; i += 3 * stride) {
+    cloud.push([mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]]);
+  }
+
+  const plane = orientPlane(fitPlane(cloud, { tolerance: 0.025, iterations: 220 }), {
+    meshNormal: meanNormal(mesh),
+    points: cloud,
+  });
+  const relief = levelRelief(fillHoles(bakeRelief(mesh, plane, { resolution: 460 }), 6));
+  const normals = normalsFromRelief(relief);
+
+  Object.assign(state, { mesh, cloud, plane, relief, normals, source });
+  state.openings = findOpenings(relief, { threshold: 0.02 });
+  state.surface = buildSurface(relief, normals, source === 'synthetic');
+  return state;
+}
+
+/* ================================================================== *
+ * Plates
+ * ================================================================== */
+
+/** Size a canvas to its content's aspect and hand back a context. */
+function fit(canvas, aspect, width = 1000) {
+  canvas.width = width;
+  canvas.height = Math.round(width / aspect);
+  const g = canvas.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.clearRect(0, 0, canvas.width, canvas.height);
+  return g;
+}
+
+/** An offscreen canvas holding one pixel per relief cell, for scaling up. */
+function reliefImage(relief, paint) {
+  const canvas = document.createElement('canvas');
+  canvas.width = relief.w;
+  canvas.height = relief.h;
+  const g = canvas.getContext('2d');
+  const image = g.createImageData(relief.w, relief.h);
+  for (let i = 0; i < relief.data.length; i++) {
+    const [r, gr, b, a] = paint(relief.data[i], i);
+    image.data[i * 4] = r;
+    image.data[i * 4 + 1] = gr;
+    image.data[i * 4 + 2] = b;
+    image.data[i * 4 + 3] = a;
+  }
+  g.putImageData(image, 0, 0);
+  return canvas;
+}
+
+const mix = (a, b, t) => a + (b - a) * Math.min(1, Math.max(0, t));
+
+function drawRelief(canvas) {
+  const { relief } = state;
+  const range = 0.25;
+  const back = [26, 107, 159];
+  const proud = [188, 113, 24];
+  const flat = [136, 148, 156];
+
+  const tile = reliefImage(relief, (v) => {
+    if (!isSeen(v)) return [0, 0, 0, 0];
+    const t = Math.min(1, Math.abs(v) / range) ** 0.55;
+    const target = v < 0 ? back : proud;
+    return [mix(flat[0], target[0], t), mix(flat[1], target[1], t), mix(flat[2], target[2], t), 255];
+  });
+
+  const g = fit(canvas, relief.w / relief.h, 900);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(tile, 0, 0, canvas.width, canvas.height);
+
+  let lo = 0;
+  let hi = 0;
+  for (const v of relief.data) {
+    if (!isSeen(v)) continue;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  $('reliefRange').textContent = `${(lo * 1000).toFixed(0)} to +${(hi * 1000).toFixed(0)} mm`;
+}
+
+function drawMask(canvas, threshold) {
+  const { relief } = state;
+  const ink = css('--ink');
+  const tile = reliefImage(relief, (v) => {
+    if (!isSeen(v)) return [0, 0, 0, 0];
+    if (v < -threshold) return [26, 107, 159, 255];
+    if (v > threshold) return [188, 113, 24, 255];
+    return [0, 0, 0, 0];
+  });
+  const g = fit(canvas, relief.w / relief.h, 900);
+  g.fillStyle = css('--sunk');
+  g.fillRect(0, 0, canvas.width, canvas.height);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(tile, 0, 0, canvas.width, canvas.height);
+  g.strokeStyle = ink;
+  g.globalAlpha = 0.15;
+  g.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
+  g.globalAlpha = 1;
+
+  const regions = findOpenings(relief, { threshold });
+  $('maskCount').textContent = `${regions.length} region${regions.length === 1 ? '' : 's'} at ${(threshold * 1000).toFixed(0)} mm`;
+}
+
+function drawPlane(canvas) {
+  const { cloud, plane } = state;
+  const g = fit(canvas, 9 / 5, 1400);
+  g.fillStyle = css('--sunk');
+  g.fillRect(0, 0, canvas.width, canvas.height);
+
+  // An oblique view, so the wall reads as a wall rather than as a rectangle.
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  for (const p of cloud) { cx += p[0]; cy += p[1]; cz += p[2]; }
+  cx /= cloud.length; cy /= cloud.length; cz /= cloud.length;
+
+  const yaw = 0.55;
+  const pitch = -0.16;
+  const project = (p) => {
+    const x = p[0] - cx;
+    const y = p[1] - cy;
+    const z = p[2] - cz;
+    // Into a frame looking at the wall, then swung round.
+    const a = x * plane.n[2] - z * plane.n[0];
+    const b = y;
+    const c = x * plane.n[0] + z * plane.n[2];
+    const x1 = a * Math.cos(yaw) + c * Math.sin(yaw);
+    const z1 = -a * Math.sin(yaw) + c * Math.cos(yaw);
+    const y1 = b * Math.cos(pitch) - z1 * Math.sin(pitch);
+    const depth = b * Math.sin(pitch) + z1 * Math.cos(pitch) + 16;
+    const f = 1 / Math.max(0.5, depth);
+    return [x1 * f, -y1 * f];
+  };
+
+  const stride = Math.max(1, Math.ceil(cloud.length / 42000));
+
+  // Frame it from the projected extent rather than from a guessed focal
+  // length, so a dropped scan of any size lands in the plate.
+  let lo = [Infinity, Infinity];
+  let hi = [-Infinity, -Infinity];
+  for (let i = 0; i < cloud.length; i += stride * 7) {
+    const q = project(cloud[i]);
+    lo[0] = Math.min(lo[0], q[0]); hi[0] = Math.max(hi[0], q[0]);
+    lo[1] = Math.min(lo[1], q[1]); hi[1] = Math.max(hi[1], q[1]);
+  }
+  const pad = 0.055;
+  const zoom = Math.min(
+    (canvas.width * (1 - pad * 2)) / Math.max(1e-6, hi[0] - lo[0]),
+    (canvas.height * (1 - pad * 2)) / Math.max(1e-6, hi[1] - lo[1])
+  );
+  const ox = canvas.width / 2 - ((lo[0] + hi[0]) / 2) * zoom;
+  const oy = canvas.height / 2 - ((lo[1] + hi[1]) / 2) * zoom;
+  for (let i = 0; i < cloud.length; i += stride) {
+    const p = cloud[i];
+    const d = plane.n[0] * p[0] + plane.n[1] * p[1] + plane.n[2] * p[2] - plane.d;
+    const q = project(p);
+    const sx = q[0] * zoom + ox;
+    const sy = q[1] * zoom + oy;
+    if (sx < -20 || sy < -20 || sx > canvas.width + 20 || sy > canvas.height + 20) continue;
+    const t = Math.min(1, Math.abs(d) / 0.3) ** 0.6;
+    g.fillStyle = d < 0
+      ? `rgba(26,107,159,${0.25 + t * 0.7})`
+      : `rgba(188,113,24,${0.25 + t * 0.7})`;
+    if (t < 0.08) g.fillStyle = 'rgba(136,148,156,0.32)';
+    g.fillRect(sx, sy, 1.6, 1.6);
+  }
+
+  const pct = ((plane.inliers / plane.total) * 100).toFixed(0);
+  $('planeStats').textContent =
+    `${plane.total.toLocaleString()} points · ${pct}% within 25 mm of the plane`;
+  $('stampScale').textContent =
+    `Wall ${(state.relief.w * state.relief.scale).toFixed(2)} × ${(state.relief.h * state.relief.scale).toFixed(2)} m`;
+  $('footStats').textContent =
+    `${state.mesh.triangles.toLocaleString()} triangles · ${state.relief.w}×${state.relief.h} relief at ${(state.relief.scale * 1000).toFixed(0)} mm/px`;
+}
+
+const TAG_STYLE = {
+  window: '--back', door: '--back', trim: '--proud',
+  chimney: '--proud', wall: '--proud', '': '--ink-faint',
+};
+
+function drawShapes(canvas) {
+  const { relief, openings } = state;
+  const tile = reliefImage(relief, (v) => {
+    if (!isSeen(v)) return [0, 0, 0, 0];
+    const t = Math.min(1, Math.abs(v) / 0.25) ** 0.6;
+    const g = Math.round(mix(180, v < 0 ? 90 : 220, t));
+    return [g, g, g, 90];
+  });
+
+  const g = fit(canvas, relief.w / relief.h, 1400);
+  g.fillStyle = css('--sheet');
+  g.fillRect(0, 0, canvas.width, canvas.height);
+  g.imageSmoothingEnabled = true;
+  g.globalAlpha = 0.55;
+  g.drawImage(tile, 0, 0, canvas.width, canvas.height);
+  g.globalAlpha = 1;
+
+  const W = canvas.width;
+  const H = canvas.height;
+  g.lineJoin = 'round';
+
+  for (const shape of openings) {
+    const colour = css(TAG_STYLE[shape.tag] ?? '--ink-faint');
+    g.beginPath();
+    shape.points.forEach((p, i) => (i ? g.lineTo(p.x * W, p.y * H) : g.moveTo(p.x * W, p.y * H)));
+    g.closePath();
+    g.fillStyle = colour;
+    g.globalAlpha = 0.12;
+    g.fill();
+    g.globalAlpha = 1;
+    g.strokeStyle = colour;
+    g.lineWidth = 2;
+    g.stroke();
+
+    // Every vertex the tracer kept, because "four" is the interesting number.
+    g.fillStyle = colour;
+    for (const p of shape.points) {
+      g.fillRect(p.x * W - 2.5, p.y * H - 2.5, 5, 5);
+    }
+
+    const bx = shape.bbox.x * W;
+    const by = shape.bbox.y * H;
+    const bw = shape.bbox.w * W;
+    const bh = shape.bbox.h * H;
+    if (bw > 74 && bh > 40) {
+      g.font = '600 15px ui-monospace, SF Mono, Menlo, monospace';
+      g.textAlign = 'center';
+      g.fillStyle = colour;
+      g.fillText((shape.tag || 'region').toUpperCase(), bx + bw / 2, by + bh / 2 - 4);
+      g.font = '13px ui-monospace, SF Mono, Menlo, monospace';
+      g.fillStyle = css('--ink-soft');
+      g.fillText(`${shape.width.toFixed(2)} × ${shape.height.toFixed(2)} m`, bx + bw / 2, by + bh / 2 + 15);
+      g.fillText(`${(shape.depth * 1000).toFixed(0)} mm`, bx + bw / 2, by + bh / 2 + 32);
+    }
+  }
+
+  const counts = new Map();
+  for (const s of openings) counts.set(s.tag || 'untagged', (counts.get(s.tag || 'untagged') || 0) + 1);
+  $('shapesCount').textContent = [...counts].map(([k, v]) => `${v} ${k}${v > 1 ? 's' : ''}`).join(' · ');
+
+  const body = $('shapesTable').querySelector('tbody');
+  body.innerHTML = '';
+  for (const s of openings) {
+    const row = document.createElement('tr');
+    const sign = s.depth < 0 ? 'set-back' : 'proud';
+    row.innerHTML = `
+      <td><span class="tag ${sign}">${s.tag || 'untagged'}</span></td>
+      <td>${s.width.toFixed(2)} m</td>
+      <td>${s.height.toFixed(2)} m</td>
+      <td>${s.area.toFixed(2)} m²</td>
+      <td>${s.depth > 0 ? '+' : ''}${(s.depth * 1000).toFixed(0)} mm</td>
+      <td>${s.points.length}${s.squared ? ' (squared)' : ''}</td>
+      <td>${(s.confidence * 100).toFixed(0)}%</td>`;
+    body.appendChild(row);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * The photograph, and what an edge detector makes of it
+ * ------------------------------------------------------------------ */
+
+function photoTile(relief, over = 3) {
+  // Deliberately finer than the relief map. A brick course is 75 mm and the
+  // relief is baked at about 18 mm a pixel, so courses land on four pixels and
+  // alias into noise — which would make the edge detector look bad for the
+  // wrong reason. A camera resolves them easily, so the comparison should too.
+  const canvas = document.createElement('canvas');
+  canvas.width = relief.w * over;
+  canvas.height = relief.h * over;
+  const g = canvas.getContext('2d');
+  const image = g.createImageData(canvas.width, canvas.height);
+  const metres = relief.scale / over;
+  for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < canvas.width; x++) {
+      const wx = (x + 0.5) * metres;
+      const wy = (canvas.height - y - 0.5) * metres;
+      const c = facadeAlbedo(wx, wy);
+      const i = (y * canvas.width + x) * 4;
+      image.data[i] = c[0] * 255;
+      image.data[i + 1] = c[1] * 255;
+      image.data[i + 2] = c[2] * 255;
+      image.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(image, 0, 0);
+  return canvas;
+}
+
+/** The photograph, dimmed, as the shared ground for both comparison plates. */
+function drawPhotoBase(canvas, dim) {
+  const { relief } = state;
+  const g = fit(canvas, relief.w / relief.h, 900);
+  g.drawImage(state.photo, 0, 0, canvas.width, canvas.height);
+  if (dim) {
+    g.fillStyle = css('--sheet');
+    g.globalAlpha = 0.62;
+    g.fillRect(0, 0, canvas.width, canvas.height);
+    g.globalAlpha = 1;
+  }
+  return g;
+}
+
+function drawPhoto(canvas, withEdges) {
+  const g = drawPhotoBase(canvas, withEdges);
+  const tile = state.photo;
+  if (!withEdges) return;
+
+  // Sobel over the luminance of the photograph, drawn back over it.
+  const src = tile.getContext('2d').getImageData(0, 0, tile.width, tile.height).data;
+  const w = tile.width;
+  const h = tile.height;
+  const lum = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    lum[i] = (src[i * 4] * 0.299 + src[i * 4 + 1] * 0.587 + src[i * 4 + 2] * 0.114) / 255;
+  }
+
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const og = out.getContext('2d');
+  const edges = og.createImageData(w, h);
+  const ink = matchMedia('(prefers-color-scheme: dark)').matches ? [226, 236, 242] : [12, 26, 34];
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const at = (dx, dy) => lum[(y + dy) * w + x + dx];
+      const gx = at(-1, -1) + 2 * at(-1, 0) + at(-1, 1) - at(1, -1) - 2 * at(1, 0) - at(1, 1);
+      const gy = at(-1, -1) + 2 * at(0, -1) + at(1, -1) - at(-1, 1) - 2 * at(0, 1) - at(1, 1);
+      const mag = Math.min(1, Math.hypot(gx, gy) * 1.4);
+      const i = (y * w + x) * 4;
+      // Drawn as ink rather than as a highlight: the point of the plate is how
+      // many lines there are, and a colour would read as a finding.
+      edges.data[i] = ink[0];
+      edges.data[i + 1] = ink[1];
+      edges.data[i + 2] = ink[2];
+      edges.data[i + 3] = mag > 0.22 ? Math.min(255, mag * 300) : 0;
+    }
+  }
+  og.putImageData(edges, 0, 0);
+  g.imageSmoothingEnabled = true;
+  g.drawImage(out, 0, 0, canvas.width, canvas.height);
+}
+
+function drawDepthEdges(canvas, withShapes) {
+  const { openings } = state;
+  const g = drawPhotoBase(canvas, withShapes);
+  if (!withShapes) return;
+  g.lineWidth = 2.5;
+  g.lineJoin = 'round';
+  for (const shape of openings) {
+    g.beginPath();
+    shape.points.forEach((p, i) => (i ? g.lineTo(p.x * canvas.width, p.y * canvas.height) : g.moveTo(p.x * canvas.width, p.y * canvas.height)));
+    g.closePath();
+    g.strokeStyle = shape.depth < 0 ? '#57b6ec' : '#f0a94a';
+    g.stroke();
+  }
+}
+
+function drawNormals(canvas) {
+  const { relief, normals } = state;
+  const tile = reliefImage(relief, (v, i) => {
+    if (!isSeen(v)) return [0, 0, 0, 0];
+    return [
+      (normals[i * 3] * 0.5 + 0.5) * 255,
+      (normals[i * 3 + 1] * 0.5 + 0.5) * 255,
+      normals[i * 3 + 2] * 255,
+      255,
+    ];
+  });
+  const g = fit(canvas, relief.w / relief.h, 900);
+  g.imageSmoothingEnabled = true;
+  g.drawImage(tile, 0, 0, canvas.width, canvas.height);
+}
+
+/* ================================================================== *
+ * Lighting a real surface
+ *
+ * A half-resolution copy of the relief map with its normals in image
+ * orientation and, where there is one, the paint. Half resolution because the
+ * shadow march is the expensive part and because bloom on a projector is a far
+ * heavier blur than the one this costs.
+ * ================================================================== */
+
+function buildSurface(relief, normals, synthetic) {
+  const factor = Math.max(1, Math.round(relief.w / 250));
+  const w = Math.floor(relief.w / factor);
+  const h = Math.floor(relief.h / factor);
+  const scale = relief.scale * factor;
+  const data = new Float32Array(w * h);
+  const n = new Float32Array(w * h * 3);
+  const albedo = new Float32Array(w * h * 3);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const src = Math.min(relief.h - 1, y * factor) * relief.w + Math.min(relief.w - 1, x * factor);
+      const v = relief.data[src];
+      const i = y * w + x;
+      data[i] = isSeen(v) ? v : 0;
+      n[i * 3] = normals[src * 3];
+      // Image y runs down where the wall's runs up, and a lighting model that
+      // gets this backwards lights every sill from underneath.
+      n[i * 3 + 1] = -normals[src * 3 + 1];
+      n[i * 3 + 2] = normals[src * 3 + 2];
+
+      let c = [0.42, 0.42, 0.44];
+      if (synthetic) {
+        // Averaged over the cell rather than sampled at its centre: brick
+        // courses are finer than these pixels, and point-sampling them turns
+        // the wall into a moire of stripes the moment a light crosses it.
+        c = [0, 0, 0];
+        for (let sy = 0; sy < 3; sy++) {
+          for (let sx = 0; sx < 3; sx++) {
+            const s = facadeAlbedo((x + (sx + 0.5) / 3) * scale, (h - y - (sy + 0.5) / 3) * scale);
+            c[0] += s[0] / 9;
+            c[1] += s[1] / 9;
+            c[2] += s[2] / 9;
+          }
+        }
+      }
+      albedo[i * 3] = c[0];
+      albedo[i * 3 + 1] = c[1];
+      albedo[i * 3 + 2] = c[2];
+    }
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const g = canvas.getContext('2d');
+  // Named `data` rather than `z` so this is shaped like a relief map and can be
+  // handed straight to the app's own `occlusion`.
+  return { w, h, scale, data, n, albedo, canvas, g, image: g.createImageData(w, h) };
+}
+
+function renderLight(surface, lights, { shadows = true, mode = 'lit', ambient = 0.05, steps = 18 } = {}) {
+  const { w, h, scale, data: heights, n, albedo, image } = surface;
+  const data = image.data;
+  const lit = mode === 'lit';
+
+  for (let py = 0; py < h; py++) {
+    const wy = py * scale;
+    for (let px = 0; px < w; px++) {
+      const i = py * w + px;
+      const wx = px * scale;
+      const wz = heights[i];
+      let r = 0;
+      let g = 0;
+      let b = 0;
+
+      for (const L of lights) {
+        const dx = L.x - wx;
+        const dy = L.y - wy;
+        const dz = L.z - wz;
+        const dist = Math.hypot(dx, dy, dz) || 1e-4;
+        const ndotl = (n[i * 3] * dx + n[i * 3 + 1] * dy + n[i * 3 + 2] * dz) / dist;
+        if (ndotl <= 0) continue;
+
+        let power = L.power / (1 + (dist * dist) / (L.falloff * L.falloff));
+        if (L.cone) {
+          const along = (dx * L.cone.x + dy * L.cone.y + dz * L.cone.z) / dist;
+          // Negated because the cone points from the lamp at the wall, and dx
+          // runs the other way.
+          const inside = (-along - L.cone.cos) / (1 - L.cone.cos);
+          if (inside <= 0) continue;
+          power *= Math.min(1, inside) ** 1.6;
+        }
+        if (power < 0.002) continue;
+        let shade = 1;
+        if (shadows) {
+          // The app's own routine, so this page and the wall agree.
+          shade = 1 - occlusion(surface, wx, wy, wz, L.x, L.y, L.z, { steps });
+          if (shade <= 0) continue;
+        }
+
+        const amount = ndotl * power * shade;
+        r += amount * L.r;
+        g += amount * L.g;
+        b += amount * L.b;
+      }
+
+      const ar = lit ? albedo[i * 3] : 1;
+      const ag = lit ? albedo[i * 3 + 1] : 1;
+      const ab = lit ? albedo[i * 3 + 2] : 1;
+      const amb = lit ? ambient : 0;
+
+      // A filmic-ish roll-off, so a lamp held close to a sill does not clip to
+      // a white blob. The app's own post chain does the same thing properly.
+      const tone = (v) => 255 * (v / (1 + v)) ** (1 / 1.6);
+      const o = i * 4;
+      data[o] = tone((r + amb) * ar * 1.6);
+      data[o + 1] = tone((g + amb * 1.02) * ag * 1.6);
+      data[o + 2] = tone((b + amb * 1.25) * ab * 1.6);
+      data[o + 3] = 255;
+    }
+  }
+  surface.g.putImageData(image, 0, 0);
+  return surface.canvas;
+}
+
+/* ------------------------------------------------------------------ *
+ * The looks
+ * ------------------------------------------------------------------ */
+
+const flicker = (t, seed) =>
+  0.72 + 0.28 * Math.sin(t * 11.3 + seed) * Math.sin(t * 4.1 + seed * 2.3) + 0.1 * Math.sin(t * 23 + seed);
+
+function lightsFor(look, t, surface, pointer) {
+  const W = surface.w * surface.scale;
+  const H = surface.h * surface.scale;
+
+  if (look === 'lightning') {
+    // A distant flash: hard, cold, and from a long way to one side, which is
+    // what makes it throw the porch across the path.
+    const beat = t % 3.4;
+    const strike = beat < 0.16 ? 1 : beat < 0.26 ? 0.35 : beat < 0.36 ? 0.8 : 0;
+    return [{
+      x: -W * 0.7, y: -H * 0.9, z: 9,
+      r: 0.72, g: 0.82, b: 1, power: 26 * strike, falloff: 26,
+    }];
+  }
+
+  if (look === 'fire') {
+    return [0.22, 0.5, 0.78].map((f, i) => ({
+      x: W * f, y: H + 0.25, z: 0.55,
+      r: 1, g: 0.42 + 0.1 * Math.sin(t * 7 + i), b: 0.12,
+      power: 1.5 * flicker(t, i * 2.1), falloff: 1.5,
+    }));
+  }
+
+  if (look === 'sweep') {
+    const angle = Math.sin(t * 0.42) * 0.85;
+    const lx = W / 2 + Math.sin(t * 0.42) * W * 0.9;
+    return [{
+      x: lx, y: H * 1.4, z: 7,
+      r: 0.85, g: 0.92, b: 1, power: 22, falloff: 16,
+      cone: (() => {
+        const tx = W / 2 + angle * W * 0.3 - lx;
+        const ty = H * 0.45 - H * 1.4;
+        const tz = -7;
+        const len = Math.hypot(tx, ty, tz);
+        return { x: tx / len, y: ty / len, z: tz / len, cos: Math.cos(0.30) };
+      })(),
+    }];
+  }
+
+  const x = pointer ? pointer.x * W : W * (0.5 + 0.42 * Math.sin(t * 0.5));
+  const y = pointer ? pointer.y * H : H * 0.62 + Math.sin(t * 1.1) * 0.12;
+  return [{
+    x, y, z: 0.85 + Math.sin(t * 0.8) * 0.12,
+    r: 1, g: 0.66, b: 0.32,
+    power: 2.6 * flicker(t, 0.4), falloff: 1.9,
+  }];
+}
+
+/* ================================================================== *
+ * Wiring
+ * ================================================================== */
+
+const heroPointer = { x: null, y: null, active: false };
+let frames = 0;
+let lastFpsAt = 0;
+
+function drawSurfaceTo(canvas, tile, aspect) {
+  if (canvas.width !== 1200 || Math.abs(canvas.height - 1200 / aspect) > 1) {
+    canvas.width = 1200;
+    canvas.height = Math.round(1200 / aspect);
+  }
+  const g = canvas.getContext('2d');
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(tile, 0, 0, canvas.width, canvas.height);
+}
+
+function frame(now) {
+  const t = now / 1000;
+  const surface = state.surface;
+  if (surface) {
+    const aspect = surface.w / surface.h;
+
+    const moving = $('heroMoving').checked;
+    const pointer = heroPointer.active && !moving ? heroPointer
+      : heroPointer.active ? heroPointer : null;
+    const height = 1 - $('heroHeight').value / 100;
+    const lights = lightsFor('lantern', t, surface, pointer || { x: 0.5 + 0.42 * Math.sin(t * 0.5), y: height });
+    if (!pointer) lights[0].y = surface.h * surface.scale * height;
+    drawSurfaceTo($('heroCanvas'), renderLight(surface, lights, {
+      shadows: $('heroShadows').checked, mode: 'lit', ambient: 0.055,
+    }), aspect);
+
+    if (isVisible($('projCanvas'))) {
+      const look = $('lookSelect').value;
+      drawSurfaceTo($('projCanvas'), renderLight(surface, lightsFor(look, t, surface, null), {
+        shadows: true, mode: 'emit', ambient: 0,
+      }), aspect);
+    }
+
+    frames++;
+    if (now - lastFpsAt > 700) {
+      $('heroFps').textContent = `${Math.round((frames * 1000) / (now - lastFpsAt))} fps · ${surface.w}×${surface.h}`;
+      frames = 0;
+      lastFpsAt = now;
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+function isVisible(el) {
+  const r = el.getBoundingClientRect();
+  return r.bottom > 0 && r.top < innerHeight;
+}
+
+function redrawStills() {
+  drawPlane($('planeCanvas'));
+  drawRelief($('reliefCanvas'));
+  drawMask($('maskCanvas'), $('threshold').value / 1000);
+  drawShapes($('shapesCanvas'));
+  drawPhoto($('photoCanvas'), $('showSobel').checked);
+  drawDepthEdges($('depthEdgeCanvas'), $('showDepthEdge').checked);
+  drawNormals($('normalCanvas'));
+}
+
+/** Everything, from a mesh. Shared by the built-in house and a dropped scan. */
+function rebuild(mesh, source) {
+  analyse(mesh, { source });
+  state.photo = source === 'synthetic' ? photoTile(state.relief) : greyTile(state.relief, state.normals);
+  redrawStills();
+}
+
+/** A stand-in for the photograph when a real scan brought no usable colour. */
+function greyTile(relief, normals) {
+  const canvas = document.createElement('canvas');
+  canvas.width = relief.w;
+  canvas.height = relief.h;
+  const g = canvas.getContext('2d');
+  const image = g.createImageData(relief.w, relief.h);
+  for (let i = 0; i < relief.data.length; i++) {
+    const seen = isSeen(relief.data[i]);
+    // Lit from the top left, which is how a survey drawing is always shaded.
+    const v = seen ? 0.55 + normals[i * 3] * 0.3 - normals[i * 3 + 1] * 0.3 : 0.16;
+    image.data[i * 4] = image.data[i * 4 + 1] = image.data[i * 4 + 2] = Math.max(0, Math.min(1, v)) * 255;
+    image.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(image, 0, 0);
+  return canvas;
+}
+
+/* --- Controls --- */
+
+$('threshold').addEventListener('input', (e) => {
+  $('thresholdOut').textContent = `${e.target.value} mm`;
+  drawMask($('maskCanvas'), e.target.value / 1000);
+});
+$('showSobel').addEventListener('change', () => drawPhoto($('photoCanvas'), $('showSobel').checked));
+$('showDepthEdge').addEventListener('change', () => drawDepthEdges($('depthEdgeCanvas'), $('showDepthEdge').checked));
+
+const hero = $('heroCanvas');
+hero.addEventListener('pointermove', (e) => {
+  const r = hero.getBoundingClientRect();
+  heroPointer.x = (e.clientX - r.left) / r.width;
+  heroPointer.y = (e.clientY - r.top) / r.height;
+  heroPointer.active = true;
+});
+hero.addEventListener('pointerleave', () => { heroPointer.active = false; });
+
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', redrawStills);
+
+/* --- Somebody's own scan --- */
+
+const drop = $('drop');
+const status = $('dropStatus');
+
+async function take(file) {
+  if (!file) return;
+  status.className = '';
+  status.textContent = `Reading ${file.name} (${(file.size / 1e6).toFixed(1)} MB)…`;
+  try {
+    const mesh = await readGltfTriangles(await file.arrayBuffer());
+    const span = mesh.span.map((v) => v.toFixed(1)).join(' × ');
+    status.textContent = `${mesh.triangles.toLocaleString()} triangles, ${span} m. Fitting the wall…`;
+    await new Promise((r) => setTimeout(r, 16));
+    rebuild(mesh, file.name);
+    const found = state.openings.length;
+    status.textContent = `${file.name}: wall found, ${found} region${found === 1 ? '' : 's'} on it. Every plate above is now your building.`;
+  } catch (err) {
+    status.className = 'bad';
+    status.textContent = err.message;
+  }
+}
+
+drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('hot'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('hot'));
+drop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  drop.classList.remove('hot');
+  take(e.dataTransfer.files[0]);
+});
+$('file').addEventListener('change', (e) => take(e.target.files[0]));
+
+/* --- Go --- */
+
+rebuild(buildScanMesh(), 'synthetic');
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

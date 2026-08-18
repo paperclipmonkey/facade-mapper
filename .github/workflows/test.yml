@@ -66,3 +66,12 @@ jobs:
 
       - name: One-shot burst tests
         run: node test/bursts.test.mjs
+
+      - name: Depth scan pipeline tests
+        run: node test/depth.test.mjs
+
+      - name: glTF scan reader tests
+        run: node test/glb.test.mjs
+
+      - name: Depth scan storage, placement and field tests
+        run: node test/scan.test.mjs

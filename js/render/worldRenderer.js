@@ -179,7 +179,7 @@ function showTimeOf(wallMs, time) {
  * Renderer
  * ------------------------------------------------------------------ */
 
-export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
+export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } = {}) {
   const geometry = createGeometryCache();
   /**
    * Scratch buffer for layers that ask to be softened.
@@ -382,6 +382,8 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
       return wall ? (showTimeOf(wall, time) ?? 0) : 0;
     };
 
+    const depthHandle = depth?.() ?? null;
+
     const layers = effectiveLayers(project).filter((l) => l.enabled !== false);
     const soloed = layers.filter((l) => l.solo);
     const ordered = (soloed.length ? soloed : layers)
@@ -506,6 +508,23 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
           noise: inst.noise,
           media: (id) => mediaPool?.get(id) ?? null,
           camera: () => camera?.() ?? null,
+          /**
+           * The building's actual surface, when a depth scan has been imported
+           * and placed, and null otherwise.
+           *
+           * Every other way an effect can know about the facade — `shapes`,
+           * `collide`, the obstacle helpers — knows its *outline*. This knows
+           * its shape: how far each point stands out of the wall, which way it
+           * faces, and where it is in metres. That is the difference between an
+           * effect drawn on a wall and one that appears to be lit on it.
+           *
+           * Resolved once per frame rather than per instance: the handle is
+           * rebuilt only when the scan or the world moves, and every layer
+           * pointed at every window would otherwise ask for it again.
+           *
+           * See core/scan.js for the shape of it.
+           */
+          depth: depthHandle,
           // Every shape in the project, optionally filtered to one tag. Pass
           // the current shape's id as `exclude` so an effect does not collide
           // with the thing it is being drawn into.

@@ -22,6 +22,7 @@
 import { clamp, distToSegment, pointInPolygon, boundingBox, applyH, solveHomography } from '../core/math.js';
 import { worldSize, createShape } from '../core/state.js';
 import { rectifyMatrix, rectifyInverse, worldToProjector } from '../core/rectify.js';
+import { solveScanPlacement } from '../core/scan.js';
 import { projectorOutline } from './calibration.js';
 
 const HANDLE_RADIUS = 5;
@@ -152,6 +153,21 @@ export function createStage({ canvas, wrap, app }) {
       return result;
     }
 
+    // The scan placement quad, likewise. Same shape of tool as squaring, and
+    // for the same reason: it is a statement about the camera picture.
+    if (app.tool === 'depth') {
+      const quad = app.scanDraft?.quad;
+      if (quad) {
+        for (let i = 0; i < quad.length; i++) {
+          if (Math.hypot(quad[i].x - cam.x, quad[i].y - cam.y) < tol * 1.6) {
+            result.corner = i;
+            return result;
+          }
+        }
+      }
+      return result;
+    }
+
     // Manual projector corners take precedence while the corners tool is active.
     if (app.tool === 'corners') {
       const projector = app.selectedProjector();
@@ -235,6 +251,12 @@ export function createStage({ canvas, wrap, app }) {
       return;
     }
 
+    if (app.tool === 'depth') {
+      const hit = hitTest(cam);
+      if (hit.corner >= 0) gesture = { kind: 'scan', index: hit.corner };
+      return;
+    }
+
     if (app.tool === 'polygon' || app.tool === 'path') {
       addDraftPoint(world, ev.shiftKey);
       return;
@@ -304,7 +326,7 @@ export function createStage({ canvas, wrap, app }) {
     app.onPointerWorld?.(world);
 
     if (!gesture) {
-      hover = app.tool === 'select' || app.tool === 'corners' || app.tool === 'square'
+      hover = app.tool === 'select' || app.tool === 'corners' || app.tool === 'square' || app.tool === 'depth'
         ? hitTest(cam)
         : hover;
       if (drafting) drafting.preview = world;
@@ -350,12 +372,24 @@ export function createStage({ canvas, wrap, app }) {
         app.onRectifyDraftChanged?.();
         break;
       }
+      case 'scan': {
+        const quad = app.scanDraft?.quad;
+        if (!quad) break;
+        quad[gesture.index] = { x: clamp(cam.x, -0.4, 1.4), y: clamp(cam.y, -0.4, 1.4) };
+        app.onScanDraftChanged?.();
+        break;
+      }
       default:
         break;
     }
   }
 
   function onPointerUp(ev) {
+    if (gesture?.kind === 'scan') {
+      gesture = null;
+      if (canvas.hasPointerCapture?.(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
+      return;
+    }
     if (gesture?.kind === 'square') {
       gesture = null;
       if (canvas.hasPointerCapture?.(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
@@ -521,6 +555,7 @@ export function createStage({ canvas, wrap, app }) {
     drawRectGesture(w, h);
     drawCorners(w, h);
     drawSquaring(w, h);
+    drawScanPlacement(w, h);
   }
 
   function drawProjectorOutlines(w, h) {
@@ -781,6 +816,91 @@ export function createStage({ canvas, wrap, app }) {
     });
     g.closePath();
     g.stroke();
+
+    const labels = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
+    g.font = labelFont(11 * dpr);
+    g.textBaseline = 'middle';
+    quad.forEach((p, i) => {
+      const c = { x: p.x * w, y: p.y * h };
+      g.beginPath();
+      g.arc(c.x, c.y, (hover.corner === i ? 10 : 8) * dpr, 0, Math.PI * 2);
+      g.fillStyle = hover.corner === i ? '#ffffff' : '#4cc2ff';
+      g.fill();
+      g.strokeStyle = '#000';
+      g.lineWidth = 1.5 * dpr;
+      g.stroke();
+      g.fillStyle = '#4cc2ff';
+      g.fillText(labels[i], c.x + 13 * dpr, c.y);
+    });
+    g.restore();
+  }
+
+  /**
+   * Where the depth scan thinks it is.
+   *
+   * The quad on its own is four dots and tells you nothing about whether the
+   * scan has been placed correctly. What tells you is the scan's own findings —
+   * the openings it detected, pushed through the quad and drawn on the camera
+   * picture. Line the outlines up with the real windows and the placement is
+   * right, by construction: those outlines are exactly what "Trace shapes" is
+   * about to commit, so what you line up is what you get.
+   */
+  let placementCache = { key: '', H: null };
+
+  function placementMatrix(quad) {
+    const key = quad.map((p) => `${p.x.toFixed(5)},${p.y.toFixed(5)}`).join(';');
+    if (placementCache.key !== key) {
+      placementCache = { key, H: solveScanPlacement(quad) };
+    }
+    return placementCache.H;
+  }
+
+  function drawScanPlacement(w, h) {
+    if (app.tool !== 'depth') return;
+    const quad = app.scanDraft?.quad;
+    if (!quad || quad.length !== 4) return;
+
+    const H = placementMatrix(quad);
+    g.save();
+
+    if (H) {
+      const openings = app.scanOpenings?.() || [];
+      for (const opening of openings) {
+        const proud = opening.depth > 0;
+        g.strokeStyle = proud ? 'rgba(255,176,74,0.95)' : 'rgba(76,194,255,0.95)';
+        g.lineWidth = 2 * dpr;
+        g.beginPath();
+        let started = false;
+        for (const point of opening.points) {
+          const c = applyH(H, point.x, point.y);
+          if (!c) {
+            started = false;
+            continue;
+          }
+          const x = c.x * w;
+          const y = c.y * h;
+          if (started) g.lineTo(x, y);
+          else {
+            g.moveTo(x, y);
+            started = true;
+          }
+        }
+        g.closePath();
+        g.stroke();
+      }
+    }
+
+    g.strokeStyle = '#4cc2ff';
+    g.setLineDash([7 * dpr, 5 * dpr]);
+    g.lineWidth = 2 * dpr;
+    g.beginPath();
+    quad.forEach((p, i) => {
+      if (i === 0) g.moveTo(p.x * w, p.y * h);
+      else g.lineTo(p.x * w, p.y * h);
+    });
+    g.closePath();
+    g.stroke();
+    g.setLineDash([]);
 
     const labels = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
     g.font = labelFont(11 * dpr);

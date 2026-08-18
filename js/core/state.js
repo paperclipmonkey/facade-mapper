@@ -13,8 +13,9 @@
 
 import { DEFAULT_GRADE } from '../render/postfx.js';
 import { createRectify } from './rectify.js';
+import { createScan } from './scan.js';
 
-export const PROJECT_VERSION = 4;
+export const PROJECT_VERSION = 5;
 
 /** Virtual pixel size handed to effects, so line widths and speeds feel natural. */
 export const WORLD_WIDTH = 1920;
@@ -234,6 +235,15 @@ export function createProject(name = 'Untitled show') {
      */
     rectify: createRectify(),
 
+    /**
+     * A depth scan of the building, if one has been imported.
+     *
+     * The relief map itself is far too big for localStorage and lives in
+     * IndexedDB; this is the metadata and, crucially, where the scan sits on the
+     * camera picture. See core/scan.js.
+     */
+    scan: createScan(),
+
     projectors: [projector],
     shapes: [],
     layers: [],
@@ -306,6 +316,13 @@ export function migrateProject(raw) {
   if (!Array.isArray(p.rectify.H) || p.rectify.H.length !== 9) {
     p.rectify.enabled = false;
     p.rectify.H = null;
+  }
+
+  p.scan = { ...base.scan, ...(raw.scan || {}) };
+  // A scan without a placement cannot be drawn or sampled, and half-applying one
+  // would light the wrong part of the wall. Same reasoning as `rectify` above.
+  if (!Array.isArray(p.scan.H) || p.scan.H.length !== 9 || !(p.scan.w > 1) || !(p.scan.h > 1)) {
+    p.scan.enabled = false;
   }
 
   p.settings = { ...base.settings, ...(raw.settings || {}) };

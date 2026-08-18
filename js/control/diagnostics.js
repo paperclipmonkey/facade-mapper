@@ -50,6 +50,18 @@ export function layerIssues(project, layer, effect) {
     issues.push({ key: 'opacity', level: 'warn', short: 'opacity 0', text: 'Opacity is at zero.' });
   }
 
+  // An effect that reads the building's surface has nothing to read until a
+  // scan has been imported and placed. Silent otherwise, and indistinguishable
+  // from every other reason a layer draws nothing.
+  if (effect.needs === 'depth' && !project.scan?.enabled) {
+    issues.push({
+      key: 'no-scan',
+      level: 'bad',
+      short: 'no scan',
+      text: 'This effect lights the real surface of the building, which needs a depth scan. Import one under Setup > Depth scan.',
+    });
+  }
+
   // Targeting is where the quiet failures live, so it is worth separating the
   // three ways it goes wrong — they have three different fixes.
   const wantsTargets = (layer.targets?.length || 0) + (layer.targetTags?.length || 0) > 0;

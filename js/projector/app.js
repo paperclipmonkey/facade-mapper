@@ -13,12 +13,13 @@
 
 import { createBus, MSG } from '../core/bus.js';
 import { createClock } from '../core/clock.js';
-import { loadProject } from '../core/storage.js';
+import { loadProject, getBlob } from '../core/storage.js';
 import { migrateProject, worldSize } from '../core/state.js';
 import { worldToProjector } from '../core/rectify.js';
 import { createWorldRenderer } from '../render/worldRenderer.js';
 import { createWarpRenderer, computeRegion } from '../render/warp.js';
 import { createMediaPool } from '../core/media.js';
+import { createScanSource } from '../core/scan.js';
 import { loadUserEffects } from '../effects/registry.js';
 
 const output = document.getElementById('output');
@@ -37,6 +38,7 @@ let projector = null;
 let warp = null;
 let worldRenderer = null;
 let mediaPool = null;
+let scanSource = null;
 
 /** Intermediate canvas holding the world render for this projector's region. */
 const worldCanvas = document.createElement('canvas');
@@ -186,6 +188,7 @@ async function setProject(next) {
   }
 
   mediaPool.sync(project.media || []);
+  scanSource.sync(project, worldSize(project), getBlob);
   projector = resolveProjector();
 
   if (projector) {
@@ -486,6 +489,10 @@ function frame(now) {
 
   const time = clock.tick();
   mediaPool.syncPlayback(time.t, time.running);
+  // The relief map is loaded asynchronously and the field is rebuilt when the
+  // scan is re-placed, so this cannot be a one-shot at project load. It costs a
+  // string compare on the frames where nothing has moved.
+  if (project) scanSource.sync(project, worldSize(project), getBlob);
 
   if (!projector.enabled || projector.blackout || project.settings?.blackout) {
     warp?.clear();
@@ -590,6 +597,15 @@ bus.on(MSG.MEDIA, () => {
   if (project) mediaPool.sync(project.media || []);
 });
 
+/**
+ * The relief map lives in IndexedDB and the project only carries its metadata,
+ * so a re-import with the same `importedAt` would not be noticed. Dropping what
+ * we have makes the next frame re-read it.
+ */
+bus.on(MSG.SCAN, () => {
+  if (project) scanSource.reload(project, worldSize(project), getBlob);
+});
+
 window.addEventListener('beforeunload', () => {
   bus.post(MSG.BYE, { tabId: bus.tabId, projectorId });
 });
@@ -654,9 +670,11 @@ async function boot() {
   }
 
   mediaPool = createMediaPool({ onError: reportError });
+  scanSource = createScanSource({ onError: reportError });
   worldRenderer = createWorldRenderer({
     mediaPool,
     camera: cameraFrame,
+    depth: () => scanSource.get(),
     onEffectError: ({ effectId, message }) => reportError(`Effect "${effectId}": ${message}`),
   });
 

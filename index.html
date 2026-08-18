@@ -224,6 +224,47 @@
             </div>
             <div id="squareNote" class="panel-note"></div>
 
+            <h3 class="panel-heading">Depth scan</h3>
+            <p class="panel-note">
+              Walk round the front of the house with a scanning app — Polycam, Scaniverse,
+              anything that exports a .glb — and the app can find the windows itself and light
+              the building’s real surface instead of painting on it. Export with compression
+              turned off.
+            </p>
+            <div class="panel-actions">
+              <button type="button" class="btn small" id="btnImportScan">Import a 3D scan…</button>
+              <input type="file" id="scanFile" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden />
+              <button type="button" class="btn small danger" id="btnClearScan" hidden>Remove</button>
+            </div>
+            <div id="scanFields" hidden>
+              <div class="panel-actions">
+                <button type="button" class="btn small" id="btnPlaceScan">Place it on the camera view…</button>
+              </div>
+              <div id="scanPlaceFields" hidden>
+                <p class="panel-note">
+                  Drag the four handles onto the corners of the scanned wall. The outlines the
+                  scan found are drawn as you go — when they sit on the real windows, it is placed.
+                </p>
+                <div class="panel-actions">
+                  <button type="button" class="btn small primary" id="btnApplyScanPlace">Apply</button>
+                  <button type="button" class="btn small" id="btnCancelScanPlace">Cancel</button>
+                </div>
+              </div>
+              <label class="field">
+                <span>Relief</span>
+                <input type="range" id="scanThreshold" min="4" max="90" step="1" value="20" />
+              </label>
+              <p class="panel-note">
+                How far out of the wall something has to stand before it counts as a feature,
+                in millimetres. Twenty clears brickwork and render; a window reveal gives you
+                fifty to a hundred.
+              </p>
+              <div class="panel-actions">
+                <button type="button" class="btn small primary" id="btnTraceScan">Trace shapes from the scan</button>
+              </div>
+            </div>
+            <div id="scanNote" class="panel-note"></div>
+
             <h3 class="panel-heading">Audio reactivity</h3>
             <label class="inline-check"><input type="checkbox" id="audioEnabled" /> Use microphone</label>
             <label class="field"><span>Gain</span><input type="range" id="audioGain" min="0.1" max="8" step="0.1" value="1" /></label>

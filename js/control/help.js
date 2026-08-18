@@ -447,11 +447,33 @@ export const HELP_SECTIONS = [
   <tr><th><code>media(id)</code></th><td>A decoded video or image element from the library, or null.</td></tr>
   <tr><th><code>world</code></th><td><code>{ w, h }</code> of the virtual frame.</td></tr>
   <tr><th><code>shapes(tag, excludeId)</code></th><td>Every other shape in the project, for collisions. Filter to one tag, and pass <code>shape.id</code> so you do not collide with the thing you are drawing into.</td></tr>
+  <tr><th><code>depth</code></th><td>The building's real surface, if a depth scan has been imported, and <code>null</code> otherwise. See below.</td></tr>
   <tr><th><code>fx</code></th><td>Module-level helper namespace: <code>fx.rgba</code>, <code>fx.glow</code>, <code>fx.mixHex</code>, <code>fx.TAU</code>…</td></tr>
 </table>
 <p class="muted">
   Never use <code>Math.random()</code> in an effect. Two projectors covering the same wall each run
   their own copy of your code, and unseeded randomness makes them disagree. Use <code>rng()</code>.
+</p>
+
+<h3>The building's real surface</h3>
+<p>
+  Everything above knows the facade as <em>outlines</em> — the shapes you traced. With a depth scan
+  imported and placed (Setup &rsaquo; Depth scan), <code>ctx.depth</code> knows its shape: how far
+  each point stands out of the wall, which way it faces, and where it is in metres. You ask in the
+  world pixels you are drawing in; the answers are metric and belong to the wall.
+</p>
+<table class="api">
+  <tr><th><code>sees(x, y)</code></th><td>Did the scan cover this pixel at all?</td></tr>
+  <tr><th><code>reliefAt(x, y)</code></th><td>Metres out of the wall. Negative is set back — glass, a doorway. <code>NaN</code> where nothing was seen.</td></tr>
+  <tr><th><code>normalAt(x, y, out)</code></th><td>Unit surface normal: x right, y <strong>down</strong>, z out of the wall. Written into <code>out</code>.</td></tr>
+  <tr><th><code>wallAt(x, y, out)</code></th><td>Where this pixel is on the building, in metres from the scan's top-left, with the relief as z.</td></tr>
+  <tr><th><code>shadow(x, y, z, lx, ly, lz)</code></th><td>0 lit, 1 shadowed. Wall metres — feed it <code>wallAt</code> and a lamp.</td></tr>
+  <tr><th><code>extent</code></th><td><code>{ width, height }</code> of the scan, in metres.</td></tr>
+</table>
+<p class="muted">
+  A lamp <em>above</em> a sill has the <em>smaller</em> y, because y runs down here as it does
+  everywhere else in the app. Declare <code>needs: 'depth'</code> on your effect and the layer list
+  will explain itself when there is no scan, rather than drawing nothing.
 </p>
 
 <h3>Making it look like light</h3>

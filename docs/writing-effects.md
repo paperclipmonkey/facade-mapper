@@ -43,11 +43,61 @@ export default {
 | `media(id)` | A decoded video or image element from the library, or null. |
 | `world` | `{ w, h }` of the virtual frame. |
 | `shapes(tag, excludeId)` | Every other shape in the project, for collisions. Filter by tag, and pass `shape.id` so you don't collide with yourself. |
+| `depth` | The building's real surface, from an imported depth scan, or `null`. See below. |
 | `fx` | The helper namespace, below. |
 
 Parameter types: `range`, `number`, `color`, `bool`, `select` (with `options`),
 `text`, `media`.
 
+
+## The building's real surface
+
+`ctx.depth` is `null` unless the show has a depth scan imported and placed
+(Setup → Depth scan). When it is there, it answers questions about the actual
+front of the house rather than about the outlines somebody traced on it.
+
+| | |
+|---|---|
+| `sees(x, y)` | Did the scan cover this world pixel at all? |
+| `reliefAt(x, y)` | How far the surface stands out of the wall, in metres. Negative is set back — window glass, a doorway. `NaN` where the scan saw nothing. |
+| `normalAt(x, y, out)` | Unit surface normal, `x` right, `y` **down**, `z` out of the wall. Written into `out` so a per-pixel loop allocates nothing. |
+| `wallAt(x, y, out)` | Where this pixel is on the building, in metres from the top-left corner of the scan, with the relief as `z`. |
+| `shadow(x, y, z, lx, ly, lz)` | 0 lit, 1 shadowed. Wall metres throughout — feed it `wallAt` and a lamp position. |
+| `extent` | `{ width, height }` of the scan, in metres. |
+
+Two conventions are worth stating plainly, because getting either wrong produces
+something that looks almost right:
+
+- **World pixels in, metres out.** You ask in the coordinates you are drawing
+  in; everything the answer contains is metric, and belongs to the wall rather
+  than to the camera. That separation is deliberate — world space is only square
+  on the building once the wall has been squared up, and lighting has to be
+  correct either way.
+- **`y` runs down**, in the normals and in the wall coordinates, like every
+  other `y` in the app. A lamp *above* a sill has the *smaller* `y`.
+
+The whole of `relight` in `js/effects/builtin/facade.js` is one `N·L` term
+against those normals plus a `shadow()` call, and that is genuinely all it is —
+if you want a lantern that swings, bind its `x` to an LFO and the modulation
+system does the rest.
+
+```js
+const wall = [0, 0, 0];
+const n = [0, 0, 1];
+depth.wallAt(x, y, wall);
+depth.normalAt(x, y, n);
+
+const dx = lampX - wall[0];
+const dy = lampY - wall[1];
+const dz = lampZ - wall[2];
+const dist = Math.hypot(dx, dy, dz);
+const facing = (n[0] * dx + n[1] * dy + n[2] * dz) / dist;
+const light = Math.max(0, facing) * (1 - depth.shadow(...wall, lampX, lampY, lampZ));
+```
+
+If your effect cannot do anything useful without a scan, declare `needs: 'depth'`
+on the effect object. The layer list will then say so instead of leaving somebody
+to work out why nothing is on the wall.
 ## The `fx` namespace
 
 Everything here is also reachable through the draw context; `fx` is a

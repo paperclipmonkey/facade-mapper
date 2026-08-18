@@ -54,6 +54,19 @@ is for.
   figures behind glass, bats, rain, searchlights, fog, snow, Santa, icicles,
   window frost, fairy lights, fireworks. **Browse…** on any layer renders all of
   them live, on a shape like the one you are pointing at, so you pick by eye.
+- **It can read the building.** Walk round the front with a scanning app and
+  drop the `.glb` in. The app fits the wall's own plane, builds a metric relief
+  map of it — how far every point stands in front of or behind that plane — and
+  traces the windows, the door, the sills and the porch off it, in metres,
+  tagged. A window is not a shape somebody drew; it is the part of the wall that
+  is a hundred millimetres further away, which is still true in the dark, under
+  ivy, and behind a hedge.
+- **Light that lands on the real surface.** With a scan in, the **Relight**
+  effect shades the actual geometry: a virtual lantern carried past the house
+  lights each reveal from the side, and the porch throws its shadow across the
+  path. No artwork and no hand-built model — the shape of the light is entirely
+  the shape of the building. Bind the lamp's position to an LFO and somebody
+  walks it past.
 - **Effects that know the building is there.** Balls that ricochet off the
   windows, a snake that steers round the door, ivy that creeps *around* the
   frames instead of over them. Your eye accepts almost any amount of stylisation

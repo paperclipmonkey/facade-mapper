@@ -51,6 +51,17 @@ import {
   createRectify,
 } from '../core/rectify.js';
 import { mat3Inverse, applyH } from '../core/math.js';
+import { fitPlane, orientPlane, bakeRelief, levelRelief, fillHoles, findOpenings } from '../core/depth.js';
+import { readGltfTriangles, meanNormal } from '../core/glb.js';
+import {
+  createScanSource,
+  createScan,
+  defaultScanQuad,
+  solveScanPlacement,
+  encodeRelief,
+  scanKey,
+  reliefToWorld,
+} from '../core/scan.js';
 import { GRADE_PRESETS, DEFAULT_GRADE } from '../render/postfx.js';
 import { createMediaPool, importMediaFile, removeMedia } from '../core/media.js';
 import { loadUserEffects, listByCategory, defaultParams, getEffect, getCompileErrors } from '../effects/registry.js';
@@ -152,8 +163,25 @@ let previewWarp = null;
 let previewWarpFailed = false;
 let palette = null;
 
+/**
+ * The imported depth scan, decoded and resampled into world space.
+ *
+ * Kept beside the media pool rather than inside the renderer because the stage
+ * wants it too: the alignment tool draws the scan's own openings over the
+ * camera picture, which is the only way to tell whether it has been placed
+ * correctly.
+ */
+const scanSource = createScanSource({
+  onError: (message) => toast(message, 'bad'),
+  onLoaded: () => {
+    scanOpeningsKey = '';
+    app.renderScanPanel?.();
+  },
+});
+
 const worldRenderer = createWorldRenderer({
   mediaPool,
+  depth: () => scanSource.get(),
   /**
    * The video an effect should draw. No argument, or an empty one, means the
    * alignment camera — which is what every existing show asks for. A device id
@@ -261,6 +289,7 @@ app.pushUndo = () => {
 function restore(json) {
   app.project = migrateProject(JSON.parse(json));
   mediaPool.sync(app.project.media || []);
+  scanSource.sync(app.project, worldSize(app.project), getBlob);
   worldRenderer.gc(app.project);
   stage.resize();
   loadUserEffects(app.project.userEffects || []).then(refreshCodePanel);
@@ -497,6 +526,7 @@ function refreshPanels() {
   renderStorageInfo($('storageDetail'), app);
   updateScheduleNote();
   updateCalibrationNote();
+  renderScanPanel();
   // The "point a camera at the house" placeholder covers the stage, so it has to
   // clear as soon as there is anything to look at.
   $('stageEmpty').hidden = !!(app.project.shapes.length || camera.isRunning() || stillImage);
@@ -561,10 +591,18 @@ const TOOL_HINTS = {
   rect: 'Drag out a rectangle.',
   corners: 'Drag the four yellow handles to where the selected projector’s corners land on the house.',
   square: 'Drag the four handles onto something you know is rectangular, then say what shape it really is in the Setup panel.',
+  depth: 'Drag the handles onto the corners of the scanned wall. The outlines are what the scan found — line them up with the real windows.',
 };
 
 function setTool(tool) {
+  // Leaving either quad tool abandons its draft. Neither is stored in the
+  // project until it is applied, so a draft left behind would reappear the next
+  // time the tool was opened, showing the last thing dragged rather than what
+  // the project says.
+  const leavingDepth = app.tool === 'depth' && tool !== 'depth';
+  if (leavingDepth) app.scanDraft = null;
   app.tool = tool;
+  if (leavingDepth) app.renderScanPanel?.();
   for (const button of document.querySelectorAll('.tool')) {
     button.classList.toggle('active', button.dataset.tool === tool);
   }
@@ -883,6 +921,295 @@ app.applyRectify = () => {
     'good'
   );
 };
+
+/* ------------------------------------------------------------------ *
+ * The depth scan
+ *
+ * Importing one is the easy half: read the glTF, fit the wall, bake a relief
+ * map, put it in IndexedDB. The half that needs a tool is placing it, because
+ * a mesh knows the shape of the wall and nothing at all about where that wall
+ * is in the camera's picture, and no amount of cleverness recovers it — the
+ * scan and the photograph were taken from different places, by different
+ * instruments, on different days.
+ *
+ * Four points settle it, and the quad is marked on the camera image for the
+ * same reason the squaring quad is: camera space is what does not move when
+ * world space is redefined. Squaring the wall after placing a scan leaves the
+ * scan where it was, which is the only behaviour that is not infuriating.
+ *
+ * The feedback is the part that makes it usable. A quad on its own tells you
+ * nothing — but the scan already knows where it thinks the windows are, so
+ * those outlines are drawn through the quad as it is dragged. When they land on
+ * the real windows, it is placed. See stage.drawScanPlacement.
+ * ------------------------------------------------------------------ */
+
+/** The quad being dragged, in camera coordinates, or null when the tool is shut. */
+app.scanDraft = null;
+
+/**
+ * Openings found in the current relief map, cached.
+ *
+ * Recomputed only when the threshold moves or a new scan arrives. The trace
+ * itself is a couple of hundred milliseconds over a 460x360 relief — nothing
+ * once, and impossible sixty times a second while somebody drags a handle.
+ */
+let scanOpenings = null;
+let scanOpeningsKey = '';
+
+app.scanThreshold = () => {
+  const mm = Number(app.project.scan?.threshold ?? 0.02) * 1000;
+  return (mm > 1 ? mm : 20) / 1000;
+};
+
+app.scanOpenings = () => {
+  const relief = scanSource.reliefMap();
+  if (!relief) return null;
+  const threshold = app.scanThreshold();
+  const key = `${relief.w}x${relief.h}|${threshold}`;
+  if (key !== scanOpeningsKey) {
+    scanOpeningsKey = key;
+    scanOpenings = findOpenings(relief, { threshold });
+  }
+  return scanOpenings;
+};
+
+function renderScanPanel() {
+  const fields = $('scanFields');
+  if (!fields) return;
+  const scan = app.project.scan;
+  const has = !!scan?.enabled;
+
+  fields.hidden = !has;
+  $('btnClearScan').hidden = !has;
+  $('scanPlaceFields').hidden = !app.scanDraft;
+
+  const slider = $('scanThreshold');
+  if (slider && document.activeElement !== slider) {
+    slider.value = Math.round(app.scanThreshold() * 1000);
+  }
+
+  const note = $('scanNote');
+  if (!note) return;
+  if (!has) {
+    note.textContent = 'No scan imported. Everything still works without one — a scan adds the shape of the wall, not the ability to use it.';
+    return;
+  }
+
+  const metres = (scan.w * scan.scale).toFixed(2);
+  const high = (scan.h * scan.scale).toFixed(2);
+  const found = app.scanOpenings();
+  const counts = new Map();
+  for (const o of found || []) counts.set(o.tag || 'untagged', (counts.get(o.tag || 'untagged') || 0) + 1);
+  const summary = [...counts].map(([tag, n]) => `${n} ${tag}${n > 1 ? 's' : ''}`).join(', ');
+
+  note.textContent = found
+    ? `${scan.name || 'Scan'}: a wall ${metres} × ${high} m at ${Math.round(scan.scale * 1000)} mm a pixel. At ${Math.round(app.scanThreshold() * 1000)} mm it finds ${summary || 'nothing'}.`
+    : `${scan.name || 'Scan'}: a wall ${metres} × ${high} m. Loading the relief map…`;
+
+  const trace = $('btnTraceScan');
+  const traced = app.project.shapes.filter((sh) => sh.fromScan).length;
+  if (trace) {
+    trace.textContent = traced
+      ? `Trace again (replaces ${traced} traced shape${traced === 1 ? '' : 's'})`
+      : 'Trace shapes from the scan';
+  }
+}
+app.renderScanPanel = renderScanPanel;
+
+/** The stage redraws every frame, so a dragged handle needs nothing but this. */
+app.onScanDraftChanged = () => {};
+
+async function importScan(file) {
+  if (!file) return;
+  toast(`Reading ${file.name}…`);
+  try {
+    const mesh = await readGltfTriangles(await file.arrayBuffer());
+    // Let the toast paint before the arithmetic takes the thread. A million
+    // triangles is a couple of seconds, and a frozen tab with no explanation is
+    // indistinguishable from a crash.
+    await new Promise((r) => setTimeout(r, 16));
+    toast(`${mesh.triangles.toLocaleString()} triangles. Finding the wall…`);
+    await new Promise((r) => setTimeout(r, 16));
+
+    const cloud = [];
+    const stride = Math.max(1, Math.ceil(mesh.positions.length / 3 / 120000));
+    for (let i = 0; i < mesh.positions.length; i += 3 * stride) {
+      cloud.push([mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]]);
+    }
+    const fitted = fitPlane(cloud, { tolerance: 0.025, iterations: 220 });
+    if (!fitted) throw new Error('No flat wall in this scan. Is it the front of a building?');
+    const plane = orientPlane(fitted, { meshNormal: meanNormal(mesh), points: cloud });
+
+    toast('Baking the relief map…');
+    await new Promise((r) => setTimeout(r, 16));
+    const relief = levelRelief(fillHoles(bakeRelief(mesh, plane, { resolution: 460 }), 6));
+    if (!relief) throw new Error('The wall came out empty. The scan may be a single flat surface.');
+
+    await putBlob(scanKey(app.project.id), encodeRelief(relief));
+
+    app.pushUndo();
+    const aspect = (relief.w * relief.scale) / (relief.h * relief.scale);
+    const quad = defaultScanQuad(aspect, app.backdropAspect());
+    app.project.scan = {
+      ...createScan(),
+      ...(app.project.scan || {}),
+      enabled: true,
+      w: relief.w,
+      h: relief.h,
+      scale: relief.scale,
+      quad,
+      H: solveScanPlacement(quad),
+      name: file.name,
+      triangles: mesh.triangles,
+      importedAt: Date.now(),
+    };
+    scanOpeningsKey = '';
+    scanSource.sync(app.project, worldSize(app.project), getBlob);
+    app.commit();
+    bus.post(MSG.SCAN, { placed: true });
+    beginScanPlacement();
+    toast(
+      `Scan imported: a wall ${(relief.w * relief.scale).toFixed(1)} m across, ${Math.round(fitted.inliers / fitted.total * 100)}% of it flat. Now drag the handles onto its corners.`,
+      'good'
+    );
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+}
+
+function beginScanPlacement() {
+  const scan = app.project.scan;
+  if (!scan?.enabled) return;
+  const aspect = (scan.w * scan.scale) / (scan.h * scan.scale);
+  const quad = Array.isArray(scan.quad) && scan.quad.length === 4
+    ? scan.quad.map((p) => ({ x: p.x, y: p.y }))
+    : defaultScanQuad(aspect, app.backdropAspect());
+  app.scanDraft = { quad };
+  setTool('depth');
+  switchPanel('settings');
+  renderScanPanel();
+}
+
+function applyScanPlacement() {
+  const draft = app.scanDraft;
+  if (!draft) return;
+  const H = solveScanPlacement(draft.quad);
+  if (!H) {
+    toast('Those four points do not describe a quadrilateral. Spread them out and try again.', 'bad');
+    return;
+  }
+  app.pushUndo();
+  app.project.scan = {
+    ...app.project.scan,
+    enabled: true,
+    quad: draft.quad.map((p) => ({ x: p.x, y: p.y })),
+    H,
+  };
+  app.scanDraft = null;
+  setTool('select');
+  scanSource.sync(app.project, worldSize(app.project), getBlob);
+  app.commit();
+  bus.post(MSG.SCAN, { placed: true });
+  renderScanPanel();
+  toast('Scan placed. Effects that read the surface — Relight — will follow it now.', 'good');
+}
+
+/**
+ * Turn what the scan found into shapes in the project.
+ *
+ * Re-tracing keeps the ids of shapes it can recognise, matched by where they
+ * are rather than by anything stored. Without that, nudging the threshold and
+ * tracing again would silently empty every layer pointed at a window — the
+ * shapes would come back looking identical and every `targets` entry would be
+ * a dangling id.
+ */
+function traceScanShapes() {
+  const found = app.scanOpenings();
+  if (!found?.length) {
+    toast('Nothing stands far enough out of this wall to trace. Try a smaller relief.', 'bad');
+    return;
+  }
+
+  const placed = [];
+  for (const opening of found) {
+    const points = opening.points.map((p) => reliefToWorld(app.project, p.x, p.y)).filter(Boolean);
+    if (points.length < 3) continue;
+    placed.push({ opening, points });
+  }
+  if (!placed.length) {
+    toast('The scan is not placed on the camera view yet.', 'bad');
+    return;
+  }
+
+  app.pushUndo();
+  const previous = app.project.shapes.filter((sh) => sh.fromScan);
+  const taken = new Set();
+  const centroidOf = (points) => points.reduce(
+    (acc, p) => ({ x: acc.x + p.x / points.length, y: acc.y + p.y / points.length }),
+    { x: 0, y: 0 }
+  );
+  const before = previous.map((sh) => ({ shape: sh, centre: centroidOf(sh.points) }));
+
+  const counts = new Map();
+  const shapes = placed.map(({ opening, points }) => {
+    const centre = centroidOf(points);
+    // Nearest previous traced shape within a fiftieth of the frame, which is
+    // comfortably tighter than the gap between two windows and looser than the
+    // wobble a threshold change puts on one edge.
+    let match = null;
+    let best = 0.02;
+    for (const entry of before) {
+      if (taken.has(entry.shape.id)) continue;
+      const d = Math.hypot(entry.centre.x - centre.x, entry.centre.y - centre.y);
+      if (d < best) {
+        best = d;
+        match = entry.shape;
+      }
+    }
+    if (match) taken.add(match.id);
+
+    const tag = opening.tag || 'trim';
+    const n = (counts.get(tag) || 0) + 1;
+    counts.set(tag, n);
+
+    return createShape(points, {
+      ...(match ? { id: match.id, z: match.z, visible: match.visible, locked: match.locked } : {}),
+      name: match?.name || `${tag.charAt(0).toUpperCase()}${tag.slice(1)} ${n}`,
+      tags: match?.tags?.length ? match.tags : (opening.tag ? [opening.tag] : []),
+      /** Regenerable: a later trace replaces this rather than adding beside it. */
+      fromScan: true,
+    });
+  });
+
+  const kept = app.project.shapes.filter((sh) => !sh.fromScan);
+  app.project.shapes = kept.concat(shapes);
+  app.commit();
+  refreshPanels();
+  refreshInspector();
+  renderScanPanel();
+
+  const reused = taken.size;
+  toast(
+    `Traced ${shapes.length} shape${shapes.length === 1 ? '' : 's'} from the scan`
+    + (previous.length ? `, keeping ${reused} of the ${previous.length} already there.` : '.'),
+    'good'
+  );
+}
+
+async function clearScan() {
+  if (!app.project.scan?.enabled) return;
+  app.pushUndo();
+  app.project.scan = createScan();
+  app.scanDraft = null;
+  scanOpeningsKey = '';
+  if (app.tool === 'depth') setTool('select');
+  await deleteBlob(scanKey(app.project.id));
+  scanSource.sync(app.project, worldSize(app.project), getBlob);
+  app.commit();
+  bus.post(MSG.SCAN, { removed: true });
+  renderScanPanel();
+  toast('Scan removed. Shapes traced from it are still there.');
+}
 
 app.clearRectify = () => {
   if (!app.project.rectify?.enabled) return;
@@ -1578,6 +1905,7 @@ function frame() {
   }
 
   mediaPool.syncPlayback(time.t, time.running);
+  scanSource.sync(app.project, worldSize(app.project), getBlob);
 
   /**
    * The preview renders at its own resolution, capped.
@@ -2264,6 +2592,32 @@ function wire() {
   $('btnClearSquare').addEventListener('click', () => app.clearRectify());
   $('btnApplySquare').addEventListener('click', () => app.applyRectify());
   $('btnCancelSquare').addEventListener('click', () => setTool('select'));
+
+  /* --- Depth scan --- */
+
+  $('btnImportScan').addEventListener('click', () => $('scanFile').click());
+  $('scanFile').addEventListener('change', async (ev) => {
+    const file = ev.target.files?.[0];
+    // Cleared before the await: the same file picked twice in a row fires no
+    // change event otherwise, which reads as the import having silently failed.
+    ev.target.value = '';
+    await importScan(file);
+  });
+  $('btnClearScan').addEventListener('click', () => clearScan());
+  $('btnPlaceScan').addEventListener('click', () => beginScanPlacement());
+  $('btnApplyScanPlace').addEventListener('click', () => applyScanPlacement());
+  $('btnCancelScanPlace').addEventListener('click', () => {
+    app.scanDraft = null;
+    setTool('select');
+    renderScanPanel();
+  });
+  $('btnTraceScan').addEventListener('click', () => traceScanShapes());
+  $('scanThreshold').addEventListener('input', (ev) => {
+    if (!app.project.scan?.enabled) return;
+    app.project.scan.threshold = Math.max(0.001, Number(ev.target.value) / 1000);
+    renderScanPanel();
+    markDirty();
+  });
   $('squareW').addEventListener('input', readSquaringFields);
   $('squareH').addEventListener('input', readSquaringFields);
   $('photoFile').addEventListener('change', async (ev) => {
@@ -2612,6 +2966,9 @@ function renderShowsDialog() {
     remove.addEventListener('click', () => {
       if (!confirm(`Delete "${entry.name}" permanently?`)) return;
       deleteProject(entry.id);
+      // The relief map is half a megabyte and would otherwise sit in IndexedDB
+      // under the id of a show that no longer exists.
+      deleteBlob(scanKey(entry.id)).catch(() => {});
       renderShowsDialog();
     });
 

@@ -38,6 +38,8 @@ export const MSG = {
   ERROR: 'error',
   /** Either way: a media blob was added/removed in IndexedDB. */
   MEDIA: 'media',
+  /** Control -> all: the depth scan was imported, re-placed or removed. */
+  SCAN: 'scan',
 };
 
 export function createBus(role = 'unknown') {

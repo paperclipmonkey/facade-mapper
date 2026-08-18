@@ -18,6 +18,7 @@
  */
 
 import { rgba, clamp, lerp, TAU, mixHex } from '../../core/math.js';
+import { blackbodyBytes } from '../color.js';
 import {
   collectObstacles,
   deflect,
@@ -974,4 +975,152 @@ const vine = {
   },
 };
 
-export default [bounce, serpent, vine];
+
+/**
+ * Relight — light the building's actual surface, rather than paint on it.
+ *
+ * Every other effect in this file reasons about the facade as outlines: a ball
+ * bounces off the top of the bay because somebody traced the top of the bay.
+ * This one reasons about it as a surface, and it is the one effect in the
+ * library that cannot work without a depth scan, because there is nowhere else
+ * for a surface normal to come from.
+ *
+ * What it draws is one term: N·L, against the normal the scan measured, with
+ * the shadow ray-marched through the same heightfield. That is all. There is no
+ * artwork, no gradient, no sprite — the shape of the light is entirely the shape
+ * of the building, which is exactly why it reads as a lamp that is really there.
+ * The reveals darken on one side and catch on the other because the reveals
+ * catch and darken; the porch throws its shadow across the path because the
+ * porch is in the way.
+ *
+ * Both lamp coordinates are ordinary numeric parameters, which means the whole
+ * modulation system already applies to them: bind X to an LFO and somebody walks
+ * a lantern past the house, bind the brightness to the beat and the house
+ * flickers in time, bind either to the microphone and it answers the doorbell.
+ * None of that needed writing.
+ *
+ * Alpha carries the light and the colour is left at full strength, so the layer
+ * composites as light falling on the scene rather than as a picture laid over
+ * it — and anywhere the scan saw nothing comes out fully transparent instead of
+ * as a black rectangle with the outline of somebody's front garden in it.
+ */
+const relight = {
+  id: 'relight',
+  name: 'Relight',
+  category: 'facade',
+  description: 'A virtual lamp, shading the real surface of the building. Needs a depth scan.',
+  /** Declared so the layer list can say why nothing is happening. */
+  needs: 'depth',
+  params: [
+    { key: 'x', type: 'range', label: 'Lamp across', default: 0.5, min: -0.5, max: 1.5, step: 0.005 },
+    { key: 'y', type: 'range', label: 'Lamp height', default: 0.35, min: -0.5, max: 1.5, step: 0.005 },
+    { key: 'standOff', type: 'range', label: 'Distance out', default: 1.1, min: 0.05, max: 14, step: 0.05 },
+    { key: 'kelvin', type: 'range', label: 'Temperature', default: 2000, min: 1000, max: 9000, step: 25 },
+    { key: 'intensity', type: 'range', label: 'Brightness', default: 2.2, min: 0, max: 10, step: 0.05 },
+    { key: 'reach', type: 'range', label: 'Reach', default: 2.6, min: 0.2, max: 40, step: 0.1 },
+    { key: 'ambient', type: 'range', label: 'Fill', default: 0.04, min: 0, max: 0.8, step: 0.005 },
+    { key: 'shadows', type: 'bool', label: 'Cast shadows', default: true },
+    { key: 'detail', type: 'range', label: 'Detail', default: 1, min: 0.3, max: 2.5, step: 0.05 },
+  ],
+
+  draw({ g, p, shape, depth, state }) {
+    // No scan, or a scan that does not reach this part of the frame. Drawing
+    // nothing is right: the layer diagnostics say why, and a placeholder glow
+    // would be a lie about where the building is.
+    if (!depth?.ready) return;
+    const { bbox } = shape;
+    if (bbox.w < 2 || bbox.h < 2) return;
+
+    /**
+     * One cell per few world pixels.
+     *
+     * The shadow march is the cost and it is per cell, so this is the knob that
+     * decides whether the effect runs at sixty frames a second on a laptop that
+     * is also driving two projectors. Six world pixels is about three
+     * millimetres on a real facade — far finer than the bloom downstream, which
+     * is why the default looks no softer than a full-resolution version.
+     */
+    const step = Math.max(2, Math.round(6 / clamp(p.detail, 0.3, 2.5)));
+    const cols = clamp(Math.ceil(bbox.w / step), 2, 512);
+    const rows = clamp(Math.ceil(bbox.h / step), 2, 512);
+
+    let buffer = state.buffer;
+    if (!buffer || buffer.width !== cols || buffer.height !== rows) {
+      const canvas = offscreen(cols, rows);
+      buffer = {
+        canvas,
+        ctx: canvas.getContext('2d'),
+        width: cols,
+        height: rows,
+      };
+      buffer.image = buffer.ctx.createImageData(cols, rows);
+      state.buffer = buffer;
+    }
+    const data = buffer.image.data;
+
+    const extent = depth.extent;
+    // Height reads upwards, because that is how anybody placing a lamp thinks
+    // about it. Wall metres run down from the top of the scan, like everything
+    // else on a canvas, so the flip happens once, here.
+    const lx = p.x * extent.width;
+    const ly = (1 - p.y) * extent.height;
+    const lz = Math.max(0.02, p.standOff);
+
+    const [cr, cg, cb] = blackbodyBytes(p.kelvin);
+    const reach = Math.max(0.05, p.reach);
+    const intensity = Math.max(0, p.intensity);
+    const ambient = Math.max(0, p.ambient);
+    const shadows = p.shadows !== false;
+
+    const wall = [0, 0, 0];
+    const normal = [0, 0, 1];
+
+    for (let row = 0; row < rows; row++) {
+      const wy = bbox.y + ((row + 0.5) / rows) * bbox.h;
+      for (let col = 0; col < cols; col++) {
+        const i = (row * cols + col) * 4;
+        const wx = bbox.x + ((col + 0.5) / cols) * bbox.w;
+
+        depth.wallAt(wx, wy, wall);
+        if (!(wall[2] === wall[2])) {
+          data[i + 3] = 0;
+          continue;
+        }
+        depth.normalAt(wx, wy, normal);
+
+        const dx = lx - wall[0];
+        const dy = ly - wall[1];
+        const dz = lz - wall[2];
+        const dist = Math.hypot(dx, dy, dz) || 1e-4;
+        const ndotl = (normal[0] * dx + normal[1] * dy + normal[2] * dz) / dist;
+
+        let amount = ambient;
+        if (ndotl > 0) {
+          // Inverse-square, softened at the origin so a lamp resting against
+          // the wall is bright rather than infinite.
+          const falloff = 1 / (1 + (dist * dist) / (reach * reach));
+          let lit = ndotl * falloff * intensity;
+          if (lit > 0.002 && shadows) lit *= 1 - depth.shadow(wall[0], wall[1], wall[2], lx, ly, lz);
+          amount += lit;
+        }
+
+        data[i] = cr;
+        data[i + 1] = cg;
+        data[i + 2] = cb;
+        // Rolled off rather than clipped, and carried on alpha so the layer
+        // adds light to the scene instead of covering it.
+        data[i + 3] = (255 * (amount / (1 + amount))) | 0;
+      }
+    }
+
+    buffer.ctx.putImageData(buffer.image, 0, 0);
+
+    g.save();
+    g.clip(shape.path);
+    g.imageSmoothingEnabled = true;
+    g.drawImage(buffer.canvas, bbox.x, bbox.y, bbox.w, bbox.h);
+    g.restore();
+  },
+};
+
+export default [bounce, serpent, vine, relight];
