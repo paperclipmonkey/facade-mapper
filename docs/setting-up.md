@@ -13,6 +13,7 @@ behind it.
 - [Alignment](#alignment)
 - [When the wall is not flat](#when-the-wall-is-not-flat)
 - [Several projectors](#several-projectors)
+- [Getting close enough to work](#getting-close-enough-to-work)
 - [Tracing](#tracing)
 - [Reading the building from a scan](#reading-the-building-from-a-scan)
 - [Matching the show to the projector and the wall](#matching-the-show-to-the-projector-and-the-wall)
@@ -195,6 +196,25 @@ be derived from geometry.
 Effects use seeded random number generators rather than `Math.random()`,
 specifically so two projectors covering the same wall produce the identical
 flame, the identical snowflake and the identical lightning bolt.
+
+## Getting close enough to work
+
+The stage zooms. Pinch on a trackpad, or hold <kbd>Ctrl</kbd> and use a wheel;
+it magnifies about the pointer, so whatever you were looking at stays under it.
+Two-finger scroll pans, as does a middle-button drag. <kbd>0</kbd> puts it back
+to fit, and there is a readout in the corner while you are zoomed in so it is
+never a mystery why the house is off screen.
+
+It is a view and nothing else: no stored coordinate changes, nothing about the
+show changes, and it is not saved with the project, because where you were
+looking while you worked is not a property of the house. Handles, outlines and
+labels stay the same size on screen however far in you go — zooming in to place
+something precisely should not also make the thing you are placing it with
+enormous.
+
+Worth reaching for whenever a few pixels matter: nudging a traced vertex onto a
+window reveal, dropping the corners of a projector quad on a party wall, or
+pointing at the same feature twice to place a depth scan.
 
 ## Tracing
 

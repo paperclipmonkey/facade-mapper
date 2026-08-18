@@ -3193,6 +3193,11 @@ function onKeyDown(ev) {
       ev.preventDefault();
       togglePlay();
       break;
+    case '0':
+      // Not a scene hotkey — those are 1-9 — so it is free for the one thing
+      // you always want after zooming in: getting back out.
+      stage.resetView();
+      break;
     case 'Enter':
       stage.finishDraft();
       break;

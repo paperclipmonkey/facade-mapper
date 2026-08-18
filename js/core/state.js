@@ -167,6 +167,7 @@ export const RESERVED_KEYS = {
   c: 'the Corners tool',
   b: 'Blackout',
   ' ': 'play/pause',
+  0: 'zoom the stage back to fit',
   1: 'scene 1', 2: 'scene 2', 3: 'scene 3', 4: 'scene 4', 5: 'scene 5',
   6: 'scene 6', 7: 'scene 7', 8: 'scene 8', 9: 'scene 9',
 };

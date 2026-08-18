@@ -37,6 +37,73 @@ export function createStage({ canvas, wrap, app }) {
   let cssHeight = 0;
   let dpr = 1;
 
+  /* ---------------------------------------------------------------- *
+   * Zoom and pan
+   *
+   * A view transform over the stage and nothing else. It changes which part of
+   * the camera picture fills the canvas; it does not change a single stored
+   * coordinate, and it is not part of the project, because where somebody was
+   * looking while they worked is not a property of the show.
+   *
+   * The reason it has to exist is that the stage is a precision instrument at
+   * fit-to-window resolution and the things being placed on it are a few pixels
+   * across — a window corner in a photograph, a vertex, one of the pairs that
+   * place a scan. Fitting the whole house on screen and asking for
+   * millimetre-accurate clicks are incompatible demands.
+   *
+   * `zoom` is how many times magnified; `panX`/`panY` are the camera
+   * coordinates of whatever sits at the centre of the canvas.
+   * ---------------------------------------------------------------- */
+
+  let zoom = 1;
+  let panX = 0.5;
+  let panY = 0.5;
+
+  const MAX_ZOOM = 24;
+
+  /**
+   * Screen-constant size unit, recomputed each frame as `dpr / zoom`.
+   *
+   * Everything drawn as a *control* — a handle, a hairline, a label — is sized
+   * in this rather than in `dpr`, so it comes out the same size on screen at
+   * every magnification. The alternative is that zooming in to place a handle
+   * precisely also makes the handle enormous, which is the one thing you did
+   * not want.
+   */
+  let ui = 1;
+
+  /** The part of the camera picture currently on screen, in camera units. */
+  function viewRect() {
+    const w = 1 / zoom;
+    return { x: panX - w / 2, y: panY - w / 2, w, h: w };
+  }
+
+  /** Keep the picture covering the canvas — no empty margins to get lost in. */
+  function clampView() {
+    zoom = Math.min(MAX_ZOOM, Math.max(1, zoom));
+    const half = 1 / (2 * zoom);
+    panX = Math.min(1 - half, Math.max(half, panX));
+    panY = Math.min(1 - half, Math.max(half, panY));
+  }
+
+  /** Magnify about a fixed point, so what is under the pointer stays there. */
+  function zoomAt(anchor, factor) {
+    const before = viewRect();
+    const u = (anchor.x - before.x) / before.w;
+    const v = (anchor.y - before.y) / before.h;
+    zoom = Math.min(MAX_ZOOM, Math.max(1, zoom * factor));
+    const after = 1 / zoom;
+    panX = anchor.x - u * after + after / 2;
+    panY = anchor.y - v * after + after / 2;
+    clampView();
+  }
+
+  function resetView() {
+    zoom = 1;
+    panX = 0.5;
+    panY = 0.5;
+  }
+
   /** In-progress polygon/path being drawn. */
   let drafting = null;
   /** Active pointer gesture. */
@@ -77,12 +144,22 @@ export function createStage({ canvas, wrap, app }) {
    * Coordinate conversion
    * ---------------------------------------------------------------- */
 
-  /** Pointer event -> normalised camera coordinates, which is what the canvas is. */
-  function toCamera(ev) {
+  /** Pointer event -> where it is on the canvas, 0..1, before the view transform. */
+  function toCanvas(ev) {
     const rect = canvas.getBoundingClientRect();
     return {
       x: (ev.clientX - rect.left) / rect.width,
       y: (ev.clientY - rect.top) / rect.height,
+    };
+  }
+
+  /** Pointer event -> normalised camera coordinates, through the view transform. */
+  function toCamera(ev) {
+    const rect = canvas.getBoundingClientRect();
+    const view = viewRect();
+    return {
+      x: view.x + ((ev.clientX - rect.left) / rect.width) * view.w,
+      y: view.y + ((ev.clientY - rect.top) / rect.height) * view.h,
     };
   }
 
@@ -114,7 +191,7 @@ export function createStage({ canvas, wrap, app }) {
    * in world units would make handles at the far end of an oblique wall
    * unclickable and handles at the near end grab from a mile off.
    */
-  const hitTolerance = (px) => px / Math.max(1, cssWidth);
+  const hitTolerance = (px) => px / Math.max(1, cssWidth * zoom);
 
   /**
    * The body font, read once.
@@ -240,6 +317,15 @@ export function createStage({ canvas, wrap, app }) {
 
   function onPointerDown(ev) {
     if (ev.button === 2) return;
+    // Middle-button drag pans, at any magnification and in any tool. It is the
+    // one gesture no tool in here wants, which is what makes it safe to take.
+    if (ev.button === 1) {
+      ev.preventDefault();
+      canvas.setPointerCapture(ev.pointerId);
+      gesture = { kind: 'pan', from: toCamera(ev) };
+      return;
+    }
+
     canvas.setPointerCapture(ev.pointerId);
     const cam = toCamera(ev);
     const world = clampWorld(intoWorld(cam));
@@ -345,6 +431,20 @@ export function createStage({ canvas, wrap, app }) {
     }
 
     switch (gesture.kind) {
+      case 'pan': {
+        /**
+         * Solved rather than accumulated: put the view where the point grabbed
+         * at the start sits under the pointer *now*. Adding up per-event deltas
+         * would drift, because each delta is measured through a view the
+         * previous delta has already moved.
+         */
+        const at = toCanvas(ev);
+        const view = viewRect();
+        panX = gesture.from.x - (at.x - 0.5) * view.w;
+        panY = gesture.from.y - (at.y - 0.5) * view.h;
+        clampView();
+        break;
+      }
       case 'vertex': {
         const shape = app.project.shapes.find((s) => s.id === gesture.shapeId);
         if (!shape) break;
@@ -396,6 +496,11 @@ export function createStage({ canvas, wrap, app }) {
   }
 
   function onPointerUp(ev) {
+    if (gesture?.kind === 'pan') {
+      gesture = null;
+      if (canvas.hasPointerCapture?.(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
+      return;
+    }
     if (gesture?.kind === 'scan') {
       gesture = null;
       if (canvas.hasPointerCapture?.(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
@@ -547,6 +652,21 @@ export function createStage({ canvas, wrap, app }) {
     g.fillStyle = '#000';
     g.fillRect(0, 0, w, h);
 
+    /**
+     * The view, as one transform over everything.
+     *
+     * Every drawing routine below works in normalised camera coordinates scaled
+     * by the canvas size — `p.x * w`. Zoom and pan are an affine map on exactly
+     * that, so composing them here means none of those routines has to know the
+     * view exists. What they do have to know about is `ui`, which shrinks as the
+     * magnification rises so that handles and hairlines stay the size of
+     * handles and hairlines.
+     */
+    clampView();
+    const view = viewRect();
+    ui = dpr / zoom;
+    g.setTransform(zoom, 0, 0, zoom, -view.x * w * zoom, -view.y * h * zoom);
+
     // Backdrop: the live camera, or the captured still if the camera is off.
     const backdrop = cameraElement || stillImage;
     if (backdrop && cameraOpacity > 0) {
@@ -580,14 +700,32 @@ export function createStage({ canvas, wrap, app }) {
     drawCorners(w, h);
     drawSquaring(w, h);
     drawScanPlacement(w, h);
+    drawViewReadout(w, h);
+  }
+
+  /** How far in you are, and how to get back out. Only while it matters. */
+  function drawViewReadout(w, h) {
+    if (zoom <= 1.001) return;
+    g.save();
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    const pad = 8 * dpr;
+    const text = `${Math.round(zoom * 100)}%  ·  0 to fit`;
+    g.font = labelFont(11 * dpr);
+    g.textBaseline = 'middle';
+    const width = g.measureText(text).width + pad * 2;
+    g.fillStyle = 'rgba(0,0,0,0.55)';
+    g.fillRect(w - width - pad, pad, width, 22 * dpr);
+    g.fillStyle = 'rgba(255,255,255,0.75)';
+    g.fillText(text, w - width, pad + 11 * dpr);
+    g.restore();
   }
 
   function drawProjectorOutlines(w, h) {
     if (!app.project.settings?.showSafeArea) return;
     g.save();
-    g.lineWidth = Math.max(1, dpr);
-    g.setLineDash([8 * dpr, 6 * dpr]);
-    g.font = labelFont(12 * dpr);
+    g.lineWidth = Math.max(1, ui);
+    g.setLineDash([8 * ui, 6 * ui]);
+    g.font = labelFont(12 * ui);
     g.textBaseline = 'top';
 
     app.project.projectors.forEach((projector, index) => {
@@ -598,7 +736,7 @@ export function createStage({ canvas, wrap, app }) {
 
       g.strokeStyle = colour;
       g.globalAlpha = selected ? 1 : 0.5;
-      g.lineWidth = (selected ? 2.5 : 1.4) * dpr;
+      g.lineWidth = (selected ? 2.5 : 1.4) * ui;
       const seen = camPoints(outline);
       g.beginPath();
       seen.forEach((p, i) => {
@@ -613,8 +751,8 @@ export function createStage({ canvas, wrap, app }) {
       g.setLineDash([]);
       g.fillStyle = colour;
       g.globalAlpha = selected ? 1 : 0.75;
-      g.fillText(projector.name, bb.x * w + 6 * dpr, bb.y * h + 6 * dpr);
-      g.setLineDash([8 * dpr, 6 * dpr]);
+      g.fillText(projector.name, bb.x * w + 6 * ui, bb.y * h + 6 * ui);
+      g.setLineDash([8 * ui, 6 * ui]);
     });
     g.restore();
   }
@@ -623,7 +761,7 @@ export function createStage({ canvas, wrap, app }) {
     const showNames = app.showShapeNames;
     g.save();
     g.lineJoin = 'round';
-    g.font = labelFont(11 * dpr);
+    g.font = labelFont(11 * ui);
     g.textBaseline = 'bottom';
 
     for (const shape of app.project.shapes) {
@@ -654,8 +792,8 @@ export function createStage({ canvas, wrap, app }) {
           : linked ? '#4cc2ff'
           : shape.locked ? '#6b7488'
           : hovered ? '#ffffff' : '#8fa0bd';
-      g.lineWidth = (selected || linked ? 2 : 1.2) * dpr;
-      g.setLineDash(shape.closed ? [] : [6 * dpr, 4 * dpr]);
+      g.lineWidth = (selected || linked ? 2 : 1.2) * ui;
+      g.setLineDash(shape.closed ? [] : [6 * ui, 4 * ui]);
       g.stroke();
       g.setLineDash([]);
 
@@ -663,11 +801,11 @@ export function createStage({ canvas, wrap, app }) {
         for (let i = 0; i < points.length; i++) {
           const isHover = hover.shapeId === shape.id && hover.vertex === i;
           g.beginPath();
-          g.arc(points[i].x, points[i].y, HANDLE_RADIUS * dpr * (isHover ? 1.5 : 1), 0, Math.PI * 2);
+          g.arc(points[i].x, points[i].y, HANDLE_RADIUS * ui * (isHover ? 1.5 : 1), 0, Math.PI * 2);
           g.fillStyle = isHover ? '#ffffff' : '#ff7a18';
           g.fill();
           g.strokeStyle = '#000';
-          g.lineWidth = 1 * dpr;
+          g.lineWidth = 1 * ui;
           g.stroke();
         }
       }
@@ -675,7 +813,7 @@ export function createStage({ canvas, wrap, app }) {
       if (showNames) {
         const bb = boundingBox(points);
         g.fillStyle = selected ? '#ff7a18' : 'rgba(231,234,242,0.75)';
-        g.fillText(shape.name, bb.x, bb.y - 3 * dpr);
+        g.fillText(shape.name, bb.x, bb.y - 3 * ui);
       }
     }
     g.restore();
@@ -689,8 +827,8 @@ export function createStage({ canvas, wrap, app }) {
 
     g.save();
     g.strokeStyle = '#4cc2ff';
-    g.lineWidth = 1.8 * dpr;
-    g.setLineDash([5 * dpr, 4 * dpr]);
+    g.lineWidth = 1.8 * ui;
+    g.setLineDash([5 * ui, 4 * ui]);
     g.beginPath();
     g.moveTo(points[0].x, points[0].y);
     for (let i = 1; i < points.length; i++) g.lineTo(points[i].x, points[i].y);
@@ -701,7 +839,7 @@ export function createStage({ canvas, wrap, app }) {
 
     for (const point of points) {
       g.beginPath();
-      g.arc(point.x, point.y, HANDLE_RADIUS * dpr, 0, Math.PI * 2);
+      g.arc(point.x, point.y, HANDLE_RADIUS * ui, 0, Math.PI * 2);
       g.fillStyle = '#4cc2ff';
       g.fill();
     }
@@ -722,8 +860,8 @@ export function createStage({ canvas, wrap, app }) {
     ]);
     g.save();
     g.strokeStyle = '#4cc2ff';
-    g.setLineDash([5 * dpr, 4 * dpr]);
-    g.lineWidth = 1.8 * dpr;
+    g.setLineDash([5 * ui, 4 * ui]);
+    g.lineWidth = 1.8 * ui;
     g.beginPath();
     corners.forEach((p, i) => {
       if (i === 0) g.moveTo(p.x * w, p.y * h);
@@ -743,7 +881,7 @@ export function createStage({ canvas, wrap, app }) {
     const seen = camPoints(quad);
     g.save();
     g.strokeStyle = '#ffd60a';
-    g.lineWidth = 2 * dpr;
+    g.lineWidth = 2 * ui;
     g.beginPath();
     seen.forEach((p, i) => {
       const c = { x: p.x * w, y: p.y * h };
@@ -754,19 +892,19 @@ export function createStage({ canvas, wrap, app }) {
     g.stroke();
 
     const labels = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
-    g.font = labelFont(11 * dpr);
+    g.font = labelFont(11 * ui);
     g.textBaseline = 'middle';
     seen.forEach((p, i) => {
       const c = { x: p.x * w, y: p.y * h };
       g.beginPath();
-      g.arc(c.x, c.y, (hover.corner === i ? 9 : 7) * dpr, 0, Math.PI * 2);
+      g.arc(c.x, c.y, (hover.corner === i ? 9 : 7) * ui, 0, Math.PI * 2);
       g.fillStyle = hover.corner === i ? '#ffffff' : '#ffd60a';
       g.fill();
       g.strokeStyle = '#000';
-      g.lineWidth = 1.5 * dpr;
+      g.lineWidth = 1.5 * ui;
       g.stroke();
       g.fillStyle = '#ffd60a';
-      g.fillText(labels[i], c.x + 12 * dpr, c.y);
+      g.fillText(labels[i], c.x + 12 * ui, c.y);
     });
     g.restore();
   }
@@ -816,7 +954,7 @@ export function createStage({ canvas, wrap, app }) {
     const rows = 4;
     const cols = Math.max(2, Math.min(14, Math.round(rows * aspect)));
     g.strokeStyle = 'rgba(76,194,255,0.45)';
-    g.lineWidth = 1 * dpr;
+    g.lineWidth = 1 * ui;
     const rule = (from, to, steps) => {
       g.beginPath();
       for (let i = 0; i <= steps; i++) {
@@ -832,7 +970,7 @@ export function createStage({ canvas, wrap, app }) {
     for (let r = 1; r < rows; r++) rule({ u: 0, v: r / rows }, { u: 1, v: r / rows }, 1);
 
     g.strokeStyle = '#4cc2ff';
-    g.lineWidth = 2.2 * dpr;
+    g.lineWidth = 2.2 * ui;
     g.beginPath();
     quad.forEach((p, i) => {
       if (i === 0) g.moveTo(p.x * w, p.y * h);
@@ -842,19 +980,19 @@ export function createStage({ canvas, wrap, app }) {
     g.stroke();
 
     const labels = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
-    g.font = labelFont(11 * dpr);
+    g.font = labelFont(11 * ui);
     g.textBaseline = 'middle';
     quad.forEach((p, i) => {
       const c = { x: p.x * w, y: p.y * h };
       g.beginPath();
-      g.arc(c.x, c.y, (hover.corner === i ? 10 : 8) * dpr, 0, Math.PI * 2);
+      g.arc(c.x, c.y, (hover.corner === i ? 10 : 8) * ui, 0, Math.PI * 2);
       g.fillStyle = hover.corner === i ? '#ffffff' : '#4cc2ff';
       g.fill();
       g.strokeStyle = '#000';
-      g.lineWidth = 1.5 * dpr;
+      g.lineWidth = 1.5 * ui;
       g.stroke();
       g.fillStyle = '#4cc2ff';
-      g.fillText(labels[i], c.x + 13 * dpr, c.y);
+      g.fillText(labels[i], c.x + 13 * ui, c.y);
     });
 
     // Where each feature was said to be. Kept on screen after solving, because
@@ -867,8 +1005,8 @@ export function createStage({ canvas, wrap, app }) {
       });
       if (draft.picking) {
         g.fillStyle = '#ffd166';
-        g.font = labelFont(13 * dpr);
-        g.fillText(`Click feature ${draft.pairs.length + 1} here`, 14 * dpr, 20 * dpr);
+        g.font = labelFont(13 * ui);
+        g.fillText(`Click feature ${draft.pairs.length + 1} here`, 14 * ui, 20 * ui);
       }
     }
     g.restore();
@@ -998,24 +1136,24 @@ export function createStage({ canvas, wrap, app }) {
   /** A numbered pin, for a correspondence. */
   function drawPin(x, y, label, colour) {
     g.beginPath();
-    g.arc(x, y, 9 * dpr, 0, Math.PI * 2);
+    g.arc(x, y, 9 * ui, 0, Math.PI * 2);
     g.fillStyle = colour;
     g.fill();
     g.strokeStyle = '#000';
-    g.lineWidth = 1.5 * dpr;
+    g.lineWidth = 1.5 * ui;
     g.stroke();
     // A cross through it, because the dot is the thing being placed precisely
     // and a disc hides its own centre.
     g.beginPath();
-    g.moveTo(x - 14 * dpr, y);
-    g.lineTo(x + 14 * dpr, y);
-    g.moveTo(x, y - 14 * dpr);
-    g.lineTo(x, y + 14 * dpr);
+    g.moveTo(x - 14 * ui, y);
+    g.lineTo(x + 14 * ui, y);
+    g.moveTo(x, y - 14 * ui);
+    g.lineTo(x, y + 14 * ui);
     g.strokeStyle = colour;
-    g.lineWidth = 1.5 * dpr;
+    g.lineWidth = 1.5 * ui;
     g.stroke();
     g.fillStyle = '#000';
-    g.font = `600 ${11 * dpr}px ${fontFamily()}`;
+    g.font = `600 ${11 * ui}px ${fontFamily()}`;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     g.fillText(label, x, y);
@@ -1025,8 +1163,11 @@ export function createStage({ canvas, wrap, app }) {
   function drawScanPicker(w, h) {
     const draft = app.scanDraft;
     const ghost = app.scanGhost?.();
+    g.save();
+    g.setTransform(1, 0, 0, 1, 0, 0);
     g.fillStyle = '#0d1114';
     g.fillRect(0, 0, w, h);
+    g.restore();
     if (!ghost || !draft) return;
 
     const vp = reliefViewport();
@@ -1038,13 +1179,13 @@ export function createStage({ canvas, wrap, app }) {
     g.imageSmoothingEnabled = true;
     g.drawImage(ghost, x, y, vw, vh);
     g.strokeStyle = 'rgba(255,255,255,0.35)';
-    g.lineWidth = 1 * dpr;
+    g.lineWidth = 1 * ui;
     g.strokeRect(x, y, vw, vh);
 
     // What the scan found, so there is something crisp to aim at.
     for (const opening of app.scanOpenings?.() || []) {
       g.strokeStyle = opening.depth > 0 ? 'rgba(255,176,74,0.8)' : 'rgba(76,194,255,0.8)';
-      g.lineWidth = 1.5 * dpr;
+      g.lineWidth = 1.5 * ui;
       g.beginPath();
       opening.points.forEach((p, i) => {
         const px = x + p.x * vw;
@@ -1083,7 +1224,7 @@ export function createStage({ canvas, wrap, app }) {
       for (const opening of openings) {
         const proud = opening.depth > 0;
         g.strokeStyle = proud ? 'rgba(255,176,74,0.95)' : 'rgba(76,194,255,0.95)';
-        g.lineWidth = 2 * dpr;
+        g.lineWidth = 2 * ui;
         g.beginPath();
         let started = false;
         for (const point of opening.points) {
@@ -1106,8 +1247,8 @@ export function createStage({ canvas, wrap, app }) {
     }
 
     g.strokeStyle = '#4cc2ff';
-    g.setLineDash([7 * dpr, 5 * dpr]);
-    g.lineWidth = 2 * dpr;
+    g.setLineDash([7 * ui, 5 * ui]);
+    g.lineWidth = 2 * ui;
     g.beginPath();
     quad.forEach((p, i) => {
       if (i === 0) g.moveTo(p.x * w, p.y * h);
@@ -1118,19 +1259,19 @@ export function createStage({ canvas, wrap, app }) {
     g.setLineDash([]);
 
     const labels = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
-    g.font = labelFont(11 * dpr);
+    g.font = labelFont(11 * ui);
     g.textBaseline = 'middle';
     quad.forEach((p, i) => {
       const c = { x: p.x * w, y: p.y * h };
       g.beginPath();
-      g.arc(c.x, c.y, (hover.corner === i ? 10 : 8) * dpr, 0, Math.PI * 2);
+      g.arc(c.x, c.y, (hover.corner === i ? 10 : 8) * ui, 0, Math.PI * 2);
       g.fillStyle = hover.corner === i ? '#ffffff' : '#4cc2ff';
       g.fill();
       g.strokeStyle = '#000';
-      g.lineWidth = 1.5 * dpr;
+      g.lineWidth = 1.5 * ui;
       g.stroke();
       g.fillStyle = '#4cc2ff';
-      g.fillText(labels[i], c.x + 13 * dpr, c.y);
+      g.fillText(labels[i], c.x + 13 * ui, c.y);
     });
     g.restore();
   }
@@ -1138,6 +1279,34 @@ export function createStage({ canvas, wrap, app }) {
   /* ---------------------------------------------------------------- *
    * Wiring
    * ---------------------------------------------------------------- */
+
+  /**
+   * Trackpad first, because that is what a laptop in a garden has.
+   *
+   * A pinch arrives as a wheel event with `ctrlKey` set — a browser convention
+   * rather than anything to do with the key — and a two-finger scroll arrives
+   * as one without it. That maps onto pinch-to-zoom and two-finger-pan with no
+   * modifier to remember. A mouse gets the same thing for free: wheel pans,
+   * shift+wheel pans sideways by browser convention, ctrl+wheel zooms.
+   *
+   * `passive: false` because this has to preventDefault — otherwise the pinch
+   * zooms the whole page and the scroll leaves the stage entirely.
+   */
+  canvas.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    if (ev.ctrlKey || ev.metaKey) {
+      // Exponential so each notch is the same proportional step whatever the
+      // magnification; clamped because a trackpad can deliver a very large
+      // deltaY in one event and a single flick should not go from fit to 24x.
+      zoomAt(toCamera(ev), Math.exp(-Math.max(-40, Math.min(40, ev.deltaY)) * 0.01));
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const view = viewRect();
+    panX += (ev.deltaX / rect.width) * view.w;
+    panY += (ev.deltaY / rect.height) * view.h;
+    clampView();
+  }, { passive: false });
 
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
@@ -1156,6 +1325,10 @@ export function createStage({ canvas, wrap, app }) {
   return {
     resize,
     draw,
+    resetView,
+    get zoom() {
+      return zoom;
+    },
     finishDraft,
     cancelDraft,
     undoDraftPoint,
