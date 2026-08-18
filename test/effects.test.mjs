@@ -66,7 +66,7 @@ function recordingContext() {
     shadowColor: '',
     lineDashOffset: 0,
 
-    clip() {}, rotate() {}, scale() {},
+    clip() {}, rotate() {}, scale() {}, rect() {},
     setTransform() {}, resetTransform() {}, setLineDash() {}, closePath() {},
     fillRect() {}, strokeRect() {}, arc() {}, ellipse() {}, drawImage() {},
     putImageData() {}, createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
@@ -209,6 +209,46 @@ console.log('— candy stripe —');
     sig(3) !== sig(3 + 1 / params.speed),
     'a one-period wrap would have made these identical'
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * Text on something flat: the Size control has to do something
+ * ------------------------------------------------------------------ */
+
+console.log('\n— text on a flat shape —');
+{
+  const effect = getEffect('text');
+  /**
+   * A guide line traced across the wall to write along — an open polyline, dead
+   * horizontal, which is how anybody would draw one. Its bounding box has no
+   * height whatsoever, and the size was taken as a multiple of that height.
+   */
+  const line = geo(
+    [{ x: 300, y: 620 }, { x: 1500, y: 620 }],
+    { closed: false, id: 'wall-text' }
+  );
+
+  const sizeOf = (calls) => {
+    const drawn = calls.find((c) => c.op === 'fillText');
+    return drawn ? parseFloat((/(\d+(?:\.\d+)?)px/.exec(drawn.font) || [])[1]) : 0;
+  };
+
+  const small = sizeOf(drawAt(effect, line, { content: 'BOO', mode: 'box', size: 0.2 }, 1));
+  const large = sizeOf(drawAt(effect, line, { content: 'BOO', mode: 'box', size: 1.5 }, 1));
+
+  ok('text on a flat path is not stuck at the minimum', small > 4, `${small.toFixed(1)}px at size 0.2`);
+  ok('and Size actually changes it', large > small * 3, `${small.toFixed(1)}px -> ${large.toFixed(1)}px`);
+  ok('at a size worth reading from the road', large > 300, `${large.toFixed(1)}px on a 1200px line`);
+
+  // An area is still measured by its box, so nothing that worked has moved.
+  const window = geo(
+    [{ x: 400, y: 300 }, { x: 700, y: 300 }, { x: 700, y: 700 }, { x: 400, y: 700 }],
+    { id: 'window' }
+  );
+  // Capped by the narrower of the height and nine tenths of the width, as it
+  // always was: min(400, 300 * 0.9) * 0.5.
+  const inWindow = sizeOf(drawAt(effect, window, { content: 'BOO', mode: 'box', size: 0.5 }, 1));
+  ok('text in a window is still measured by the window', Math.abs(inWindow - 135) < 1, `${inWindow.toFixed(1)}px in a 300x400 box`);
 }
 
 /* ------------------------------------------------------------------ *

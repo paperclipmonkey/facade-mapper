@@ -52,10 +52,32 @@ const TEXT_PARAMS = [
   { key: 'fit', type: 'bool', label: 'Shrink to fit path', default: true },
 ];
 
+/**
+ * What Size is a multiple of.
+ *
+ * Fitting inside the box is right for an area: text lighting a window should
+ * not spill out of it, so the height of the box caps it. It is meaningless for
+ * the other thing people point text at — a roofline, or a guide line traced
+ * across the wall to write along. Those are open paths, and a horizontal one
+ * has a bounding box with *no height at all*, so `min(h, …)` collapses to zero
+ * and every position of the Size slider produces the same four-pixel text. That
+ * is not a small size; that is the control not working, and it looks from the
+ * outside exactly like the slider not going high enough.
+ *
+ * So a shape too thin to be a container is measured along its length instead,
+ * which is the dimension it actually has. Twelve world pixels is well below
+ * anything traced deliberately — a gutter strip is tens — so a real thin shape
+ * keeps the old behaviour.
+ */
+export function textBase(shape) {
+  const { w, h } = shape.bbox;
+  const box = Math.min(h, w * 0.9);
+  return box > 12 ? box : Math.max(w, h) * 0.3;
+}
+
 /** Set up font/colour once, then hand back the pixel size chosen for this shape. */
 function applyStyle(g, p, shape) {
-  const base = Math.min(shape.bbox.h, shape.bbox.w * 0.9);
-  const px = Math.max(4, base * p.size);
+  const px = Math.max(4, textBase(shape) * p.size);
   g.font = `${p.weight} ${px}px ${FONT_STACKS[p.font] || FONT_STACKS.system}`;
   g.textBaseline = 'middle';
   g.lineJoin = 'round';
@@ -395,7 +417,9 @@ const shapes = {
     if (!glyph || !state.spots) return;
     const { bbox } = shape;
 
-    const px = Math.max(6, Math.min(bbox.w, bbox.h) * p.size);
+    // Same trap as the text effects: a glyph scattered along a traced path had
+    // no height to be a multiple of.
+    const px = Math.max(6, textBase(shape) * p.size);
     g.save();
     g.globalAlpha *= clamp(p.opacity, 0, 1);
     g.font = `${px}px ${FONT_STACKS.system}`;

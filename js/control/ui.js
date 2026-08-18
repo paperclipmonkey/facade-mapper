@@ -88,29 +88,55 @@ export function paramRow(def, value, binding, handlers) {
   switch (def.type) {
     case 'range':
     case 'number': {
+      const current = Number(value ?? def.default ?? 0);
       const input = el('input', {
         type: 'range',
         min: def.min ?? 0,
         max: def.max ?? 1,
         step: def.step ?? 0.01,
-        value: Number(value ?? def.default ?? 0),
       });
-      const readout = el('span', { class: 'param-value', text: fmt(Number(value ?? def.default ?? 0)) });
+
+      const readout = el('span', { class: 'param-value', text: fmt(current) });
+
+      /**
+       * Put a value on the slider, widening the track if it does not fit.
+       *
+       * A range input silently clamps whatever you assign to it. So a value
+       * outside the designed span — typed in below, or arrived at through a
+       * binding, or imported — used to leave the slider, the readout and the
+       * stored parameter all disagreeing, with nothing on screen to say so. The
+       * next nudge of the slider then threw the real value away, because the
+       * slider's idea of where it was had never been true.
+       *
+       * The range on a parameter is a statement about what is *useful*, not a
+       * limit on what is possible, and the stored value is the thing that is
+       * true. So the track grows to admit it rather than the value being
+       * quietly rounded to fit the track.
+       */
+      const place = (num) => {
+        if (num > Number(input.max)) input.max = String(num);
+        if (num < Number(input.min)) input.min = String(num);
+        input.value = String(num);
+        readout.textContent = fmt(num);
+      };
+
+      place(current);
+
       input.addEventListener('input', () => {
         readout.textContent = fmt(Number(input.value));
         commit(Number(input.value));
       });
       // Double-click the readout to type an exact value; sliders are hopeless
-      // for "exactly 0.5" and this is faster than adding a second field.
+      // for "exactly 0.5", and for anything past the end of the track.
       readout.addEventListener('dblclick', () => {
-        const entered = prompt(`${def.label || def.key}:`, String(value));
+        const entered = prompt(`${def.label || def.key}:`, String(input.value));
         if (entered === null) return;
         const num = Number(entered);
         if (!isFinite(num)) return;
-        input.value = String(num);
-        readout.textContent = fmt(num);
+        place(num);
         commit(num);
       });
+      readout.title = 'Double-click to type a value';
       control.append(input, readout);
       break;
     }
