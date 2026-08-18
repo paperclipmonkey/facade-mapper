@@ -38,6 +38,13 @@ is for.
 - **Camera auto-alignment.** Each projector flashes a grid of dots; the camera
   watches where they land and solves the projector-to-camera mapping. You then
   draw on the camera picture and it appears on the right part of the house.
+- **Square up the wall.** The projector being off-axis is solved by alignment;
+  the *camera* being off-axis is not, and it is the one you can see — generated
+  texture like brickwork comes out regular from where the camera stands and fans
+  out from everywhere else. Mark something you know is rectangular, say what
+  shape it really is, and the app works in wall coordinates instead. Brick
+  courses then have a constant size on the building, and a pair of offsets slides
+  the lattice onto the real ones.
 - **Draw over the real view** — a live camera, or a photograph of the house
   taken in daylight so you can trace indoors.
 - **Around fifty effects.** Blood drips, lightning, fire, candlelit windows,

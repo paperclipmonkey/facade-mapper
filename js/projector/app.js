@@ -15,6 +15,7 @@ import { createBus, MSG } from '../core/bus.js';
 import { createClock } from '../core/clock.js';
 import { loadProject } from '../core/storage.js';
 import { migrateProject, worldSize } from '../core/state.js';
+import { worldToProjector } from '../core/rectify.js';
 import { createWorldRenderer } from '../render/worldRenderer.js';
 import { createWarpRenderer, computeRegion } from '../render/warp.js';
 import { createMediaPool } from '../core/media.js';
@@ -223,7 +224,9 @@ function resolveProjector() {
 
 function updateRegion() {
   if (!projector) return;
-  const H = projector.calibration?.H || null;
+  // The stored matrix is camera -> projector; world space may no longer be the
+  // camera image, so compose in the rectification before anything geometric.
+  const H = worldToProjector(project, projector);
   region = computeRegion(H);
 
   const world = worldSize(project);

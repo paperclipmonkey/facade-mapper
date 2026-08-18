@@ -324,6 +324,45 @@ export function sampleMesh(mesh, u, v) {
   return out;
 }
 
+/**
+ * Re-address a correction mesh onto a different world space.
+ *
+ * The offsets are *valued* in projector space and *addressed* by position within
+ * the projector's world-space region. Squaring up the wall changes what world
+ * space means, which leaves the values perfectly valid and every one of the
+ * addresses wrong. Rather than make somebody stand outside and recalibrate,
+ * resample: walk the new grid, ask where each of its points used to live, and
+ * read the old field there.
+ *
+ * @param {object} mesh          the existing mesh
+ * @param {object} fromRegion    the region it was built against
+ * @param {object} toRegion      the region it is wanted in
+ * @param {(p:{x,y})=>{x,y}|null} toSource maps a new-world point to old-world
+ */
+export function resampleMesh(mesh, fromRegion, toRegion, toSource) {
+  if (!mesh?.enabled || !mesh.offsets?.length) return mesh;
+  if (!fromRegion || !toRegion || !(fromRegion.w > 0) || !(fromRegion.h > 0)) return mesh;
+
+  const cols = Math.max(2, mesh.cols | 0);
+  const rows = Math.max(2, mesh.rows | 0);
+  const offsets = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const u = c / (cols - 1);
+      const v = r / (rows - 1);
+      const source = toSource({
+        x: toRegion.x + u * toRegion.w,
+        y: toRegion.y + v * toRegion.h,
+      });
+      const su = source ? (source.x - fromRegion.x) / fromRegion.w : u;
+      const sv = source ? (source.y - fromRegion.y) / fromRegion.h : v;
+      const [dx, dy] = sampleMesh(mesh, su, sv);
+      offsets.push(dx, dy);
+    }
+  }
+  return { ...mesh, cols, rows, offsets };
+}
+
 /* ------------------------------------------------------------------ *
  * Renderer
  * ------------------------------------------------------------------ */

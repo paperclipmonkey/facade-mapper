@@ -38,9 +38,19 @@ import {
   createShape,
   createTrigger,
   migrateProject,
+  worldSize,
 } from '../core/state.js';
 import { createWorldRenderer } from '../render/worldRenderer.js';
-import { createWarpRenderer, computeEdgeBlends, projectorsOverlap } from '../render/warp.js';
+import { createWarpRenderer, computeEdgeBlends, projectorsOverlap, computeRegion, resampleMesh } from '../render/warp.js';
+import {
+  solveRectify,
+  rectifyMatrix,
+  worldToProjector,
+  remapPoints,
+  defaultRectifyQuad,
+  createRectify,
+} from '../core/rectify.js';
+import { mat3Inverse, applyH } from '../core/math.js';
 import { GRADE_PRESETS, DEFAULT_GRADE } from '../render/postfx.js';
 import { createMediaPool, importMediaFile, removeMedia } from '../core/media.js';
 import { loadUserEffects, listByCategory, defaultParams, getEffect, getCompileErrors } from '../effects/registry.js';
@@ -550,6 +560,7 @@ const TOOL_HINTS = {
   path: 'Click along a roofline or gutter. Enter or double-click to finish. Great for chases and light strings.',
   rect: 'Drag out a rectangle.',
   corners: 'Drag the four yellow handles to where the selected projector’s corners land on the house.',
+  square: 'Drag the four handles onto something you know is rectangular, then say what shape it really is in the Setup panel.',
 };
 
 function setTool(tool) {
@@ -567,6 +578,14 @@ function setTool(tool) {
       app.commit();
     }
   }
+  if (tool === 'square') {
+    if (!app.rectifyDraft) app.rectifyDraft = freshRectifyDraft();
+  } else if (app.rectifyDraft) {
+    // Leaving the tool abandons an unapplied marking rather than leaving it to
+    // be half-remembered next time the tool is opened.
+    app.rectifyDraft = null;
+  }
+  renderSquaringPanel();
 }
 
 /* ------------------------------------------------------------------ *
@@ -619,8 +638,8 @@ app.autoBlend = () => {
   app.pushUndo();
   let touched = 0;
   for (const projector of aligned) {
-    const others = aligned.filter((p) => p !== projector).map((p) => p.calibration.H);
-    const blend = computeEdgeBlends(projector.calibration.H, others);
+    const others = aligned.filter((p) => p !== projector).map((p) => worldToProjector(app.project, p));
+    const blend = computeEdgeBlends(worldToProjector(app.project, projector), others);
     const changed = ['top', 'right', 'bottom', 'left'].some(
       (edge) => Math.abs((projector.blend?.[edge] || 0) - blend[edge]) > 0.002
     );
@@ -644,7 +663,7 @@ function unblendedOverlaps() {
     for (let j = i + 1; j < aligned.length; j++) {
       const a = aligned[i];
       const b = aligned[j];
-      if (!projectorsOverlap(a.calibration.H, b.calibration.H)) continue;
+      if (!projectorsOverlap(worldToProjector(app.project, a), worldToProjector(app.project, b))) continue;
       const feathered = [a, b].some((p) => ['top', 'right', 'bottom', 'left'].some((e) => (p.blend?.[e] || 0) > 0.01));
       if (!feathered) pairs.push([a.name, b.name]);
     }
@@ -653,12 +672,235 @@ function unblendedOverlaps() {
 }
 
 app.onCornersChanged = (projector) => {
-  const solved = solveFromCorners(projector.calibration.worldQuad);
+  const solved = solveFromCorners(projector.calibration.worldQuad, rectifyMatrix(app.project));
   if (!solved) return;
   projector.calibration.H = solved.H;
   projector.calibration.mode = 'manual';
   projector.calibration.quality = solved.quality;
   projector.calibration.calibratedAt = Date.now();
+};
+
+/* ------------------------------------------------------------------ *
+ * Squaring up the wall
+ *
+ * The camera's point of view, factored out of world space. See core/rectify.js
+ * for what that means and why the alternative — leaving the camera's
+ * foreshortening baked into every generated texture — reads as brickwork that
+ * fans out across the building.
+ *
+ * The marking is held as a draft while the tool is open, deliberately outside
+ * the project. Applying it moves every traced point, every manual corner quad
+ * and every surface-correction mesh into the new world space at once, and that
+ * is not something to do sixty times a second while somebody drags a handle.
+ * ------------------------------------------------------------------ */
+
+/** The quad being marked, in camera coordinates, or null when the tool is shut. */
+app.rectifyDraft = null;
+
+function freshRectifyDraft() {
+  const r = app.project.rectify;
+  const width = r?.width > 0 ? r.width : (r?.aspect > 0 ? r.aspect : 1);
+  const height = r?.height > 0 ? r.height : 1;
+  return {
+    quad: (Array.isArray(r?.quad) && r.quad.length === 4 ? r.quad : defaultRectifyQuad())
+      .map((p) => ({ x: p.x, y: p.y })),
+    width,
+    height,
+    aspect: width / height,
+  };
+}
+
+/**
+ * The Setup panel's half of the squaring tool.
+ *
+ * Two numbers rather than one ratio, because nobody knows the aspect ratio of
+ * their front window but everybody can count brick courses.
+ */
+function renderSquaringPanel() {
+  const fields = document.getElementById('squareFields');
+  if (!fields) return;
+  const note = document.getElementById('squareNote');
+  const mark = document.getElementById('btnSquareWall');
+  const remove = document.getElementById('btnClearSquare');
+  const rectify = app.project.rectify;
+  const draft = app.rectifyDraft;
+
+  fields.hidden = !draft;
+  if (remove) remove.hidden = !rectify?.enabled;
+  if (mark) mark.textContent = rectify?.enabled ? 'Re-mark the rectangle…' : 'Mark a rectangle…';
+
+  if (draft) {
+    const wField = document.getElementById('squareW');
+    const hField = document.getElementById('squareH');
+    // Only while it is not the field being typed into, or the cursor jumps.
+    if (wField && document.activeElement !== wField) wField.value = draft.width;
+    if (hField && document.activeElement !== hField) hField.value = draft.height;
+  }
+
+  if (note) {
+    note.textContent = rectify?.enabled
+      ? `Squared up. World space is the wall at ${rectify.worldAspect.toFixed(2)}:1, from a rectangle marked as ${rectify.width}×${rectify.height}.`
+      : 'Not squared up. World space is the camera image, so generated textures follow the camera’s point of view.';
+  }
+}
+
+function readSquaringFields() {
+  if (!app.rectifyDraft) return;
+  const width = Number(document.getElementById('squareW')?.value);
+  const height = Number(document.getElementById('squareH')?.value);
+  if (width > 0) app.rectifyDraft.width = width;
+  if (height > 0) app.rectifyDraft.height = height;
+  app.rectifyDraft.aspect = app.rectifyDraft.width / app.rectifyDraft.height;
+  renderSquaringPanel();
+}
+
+/**
+ * The aspect of the picture the stage is showing.
+ *
+ * Not `worldAspect`: once the wall has been squared up those are two different
+ * numbers, and the one that decides how the stage canvas is letterboxed is the
+ * camera's, because the camera's picture is what fills it.
+ */
+app.backdropAspect = () => {
+  if (camera.isRunning()) {
+    const live = camera.aspect();
+    if (live > 0.1) return live;
+  }
+  if (stillImage?.naturalWidth > 0 && stillImage.naturalHeight > 0) {
+    return stillImage.naturalWidth / stillImage.naturalHeight;
+  }
+  const stored = app.project.rectify?.cameraAspect;
+  if (stored > 0.1) return stored;
+  return app.project.worldAspect > 0.1 ? app.project.worldAspect : 16 / 9;
+};
+
+/** The stage redraws every frame, so a dragged handle needs nothing but this hook. */
+app.onRectifyDraftChanged = () => {};
+
+app.beginSquaring = () => {
+  app.rectifyDraft = freshRectifyDraft();
+  setTool('square');
+  // The handles are on the stage but the two numbers are in the panel, and one
+  // without the other is a tool you cannot finish using.
+  switchPanel('settings');
+  renderSquaringPanel();
+  toast('Drag the four handles onto a window, a door, or a run of brick courses.');
+};
+
+/**
+ * Move the whole project from one definition of world space to another.
+ *
+ * Camera space is the pivot, because it is the one frame of reference that does
+ * not move: a shape sits where it sits on the building whatever coordinates are
+ * used to describe it, and a calibration is a fact about where a lamp is
+ * standing. So everything authored in the old world space is pushed out to the
+ * camera and pulled back into the new one, and nothing that was measured
+ * outdoors has to be measured again.
+ */
+function adoptWorldSpace(next) {
+  const from = rectifyMatrix(app.project);
+  const to = next.enabled && Array.isArray(next.H) ? next.H : null;
+
+  // Regions have to be sampled before the switch and again after it: they are
+  // the mesh's address space, and they move with world space.
+  const meshes = app.project.projectors
+    .filter((p) => p.mesh?.enabled && p.mesh.offsets?.length)
+    .map((p) => ({
+      projector: p,
+      region: computeRegion(worldToProjector(app.project, p)),
+      mesh: p.mesh,
+    }));
+
+  for (const shape of app.project.shapes) {
+    shape.points = remapPoints(shape.points, from, to);
+  }
+  for (const projector of app.project.projectors) {
+    const quad = projector.calibration?.worldQuad;
+    if (Array.isArray(quad) && quad.length === 4) {
+      projector.calibration.worldQuad = remapPoints(quad, from, to);
+    }
+  }
+
+  app.project.rectify = next;
+  app.project.worldAspect = next.enabled
+    ? next.worldAspect
+    : (next.cameraAspect > 0.1 ? next.cameraAspect : app.project.worldAspect);
+
+  const fromInverse = from ? mat3Inverse(from) : null;
+  for (const entry of meshes) {
+    const after = computeRegion(worldToProjector(app.project, entry.projector));
+    entry.projector.mesh = resampleMesh(entry.mesh, entry.region, after, (pt) => {
+      let { x, y } = pt;
+      if (to) {
+        const c = applyH(to, x, y);
+        if (!c) return null;
+        x = c.x;
+        y = c.y;
+      }
+      if (fromInverse) {
+        const old = applyH(fromInverse, x, y);
+        if (!old) return null;
+        x = old.x;
+        y = old.y;
+      }
+      return { x, y };
+    });
+  }
+}
+
+app.applyRectify = () => {
+  const draft = app.rectifyDraft;
+  if (!draft) return;
+  const aspect = Number(draft.width) / Number(draft.height);
+  if (!(aspect > 0.02) || !(aspect < 50)) {
+    toast('Give the marked rectangle a width and a height first.', 'bad');
+    return;
+  }
+
+  const solved = solveRectify({ quad: draft.quad, aspect, cameraAspect: app.backdropAspect() });
+  if (!solved) {
+    toast('Those four points do not describe a rectangle seen in perspective. Spread them out and try again.', 'bad');
+    return;
+  }
+
+  app.pushUndo();
+  adoptWorldSpace({
+    enabled: true,
+    quad: draft.quad.map((p) => ({ x: p.x, y: p.y })),
+    aspect,
+    width: draft.width,
+    height: draft.height,
+    H: solved.H,
+    worldAspect: solved.worldAspect,
+    cameraAspect: solved.cameraAspect,
+  });
+  stage.resize();
+  app.commit();
+  refreshInspector();
+  renderSquaringPanel();
+  toast(
+    'Wall squared up. Generated textures — brickwork, grids, anything that tiles — are now uniform on the building rather than on the camera.',
+    'good'
+  );
+};
+
+app.clearRectify = () => {
+  if (!app.project.rectify?.enabled) return;
+  app.pushUndo();
+  const previous = app.project.rectify;
+  adoptWorldSpace({
+    ...createRectify(),
+    quad: previous.quad,
+    aspect: previous.aspect,
+    width: previous.width,
+    height: previous.height,
+    cameraAspect: previous.cameraAspect || app.backdropAspect(),
+  });
+  stage.resize();
+  app.commit();
+  refreshInspector();
+  renderSquaringPanel();
+  toast('Back to camera space. Everything traced stays where it was on the building.');
 };
 
 /* ------------------------------------------------------------------ *
@@ -707,9 +949,11 @@ app.startCalibration = async (projectorId) => {
   }
 
   // Record the aspect the shapes are authored against; changing camera later
-  // would otherwise silently stretch everything.
+  // would otherwise silently stretch everything. Once the wall has been squared
+  // up this no longer applies: world space is the wall, its aspect comes from
+  // the marked rectangle, and the camera is free to be any shape it likes.
   const aspect = camera.aspect();
-  if (Math.abs((app.project.worldAspect || 0) - aspect) > 0.01) {
+  if (!app.project.rectify?.enabled && Math.abs((app.project.worldAspect || 0) - aspect) > 0.01) {
     if (app.project.shapes.length) {
       toast('Camera aspect ratio changed — existing shapes may need adjusting.', 'bad');
     }
@@ -727,6 +971,7 @@ app.startCalibration = async (projectorId) => {
       camera,
       projectorId,
       gridSize,
+      rectifyH: rectifyMatrix(app.project),
       onProgress: updateCalibrationProgress,
       signal: calibrationAbort.signal,
     });
@@ -782,6 +1027,7 @@ app.checkProjectorDrift = async (projectorId) => {
       bus,
       camera,
       projector,
+      rectifyH: rectifyMatrix(app.project),
       onProgress: updateCalibrationProgress,
       signal: calibrationAbort.signal,
     });
@@ -927,7 +1173,15 @@ async function startCamera() {
     const info = await camera.start($('cameraSelect').value || app.project.settings.cameraId || null);
     app.project.settings.cameraId = info.deviceId;
     const aspect = info.width / info.height;
-    if (!app.project.shapes.length) {
+    if (app.project.rectify?.enabled) {
+      // World space is the wall, not the frame, so a differently-shaped camera
+      // no longer stretches anything. It does mean the marking was made on a
+      // different picture, which is worth saying once.
+      const marked = app.project.rectify.cameraAspect;
+      if (marked > 0.1 && Math.abs(marked - aspect) > 0.02) {
+        toast('This camera is a different shape from the one the wall was squared up on. Re-square it if the alignment looks off.', 'bad');
+      }
+    } else if (!app.project.shapes.length) {
       app.project.worldAspect = aspect;
     } else if (Math.abs(app.project.worldAspect - aspect) > 0.02) {
       toast(
@@ -1011,7 +1265,7 @@ async function loadStill() {
 async function adoptBackdrop(blob, { aspect, quiet = false } = {}) {
   await putBlob(`still/${app.project.id}`, blob);
   app.project.settings.hasStill = true;
-  if (aspect > 0.1) {
+  if (aspect > 0.1 && !app.project.rectify?.enabled) {
     if (!app.project.shapes.length) {
       app.project.worldAspect = aspect;
     } else if (Math.abs(app.project.worldAspect - aspect) > 0.02) {
@@ -1290,9 +1544,23 @@ function frame() {
   const previewScale = Math.min(dpr, PREVIEW_MAX_EDGE / Math.max(1, cssWidth));
   const targetW = Math.max(64, Math.round(cssWidth * previewScale));
   const targetH = Math.max(64, Math.round(cssHeight * previewScale));
-  if (previewCanvas.width !== targetW || previewCanvas.height !== targetH) {
-    previewCanvas.width = targetW;
-    previewCanvas.height = targetH;
+
+  /**
+   * Two buffers with two different shapes, once the wall has been squared up.
+   *
+   * `previewCanvas` holds the world render and is the shape of the *wall*.
+   * `previewGL` is what lands on the stage and is the shape of the *camera
+   * picture*, because that is what the stage is showing. Sizing the world
+   * render to the camera's aspect instead would spend its pixels in the wrong
+   * places — too many along whichever axis the camera happens to be long in.
+   */
+  const worldAspect = worldSize(app.project).aspect;
+  const longEdge = Math.max(targetW, targetH);
+  const worldW = Math.max(64, Math.round(worldAspect >= 1 ? longEdge : longEdge * worldAspect));
+  const worldH = Math.max(64, Math.round(worldAspect >= 1 ? longEdge / worldAspect : longEdge));
+  if (previewCanvas.width !== worldW || previewCanvas.height !== worldH) {
+    previewCanvas.width = worldW;
+    previewCanvas.height = worldH;
   }
 
   if (app.showEffectsPreview) {
@@ -1308,6 +1576,9 @@ function frame() {
   }
 
   stage.draw({
+    // The ungraded fallback draws the world render straight onto the stage,
+    // which is only in register while world space is the camera image. There is
+    // nothing better to do without WebGL, and it is a warning path already.
     previewCanvas: app.showEffectsPreview ? (previewWarp ? previewGL : previewCanvas) : null,
     cameraElement: app.cameraVisible && camera.isRunning() ? camera.video : null,
     /**
@@ -1471,12 +1742,32 @@ function syncScheduleDays() {
 /** Longest edge the preview buffer is allowed to reach, in device pixels. */
 const PREVIEW_MAX_EDGE = 1400;
 
-const PREVIEW_MESH = Object.freeze({
-  H: null,
-  region: Object.freeze({ x: 0, y: 0, w: 1, h: 1 }),
-  mesh: null,
-  subdivisions: 2,
-});
+const PREVIEW_REGION = Object.freeze({ x: 0, y: 0, w: 1, h: 1 });
+
+/**
+ * The preview's own warp descriptor.
+ *
+ * Unwarped, this is the identity and two triangles. Once the wall has been
+ * squared up it is the rectification itself, running the other way: the world
+ * render is in wall space, the stage is showing the camera's picture, and this
+ * is exactly the transform between them — so the preview lands on the backdrop
+ * where the projectors will land it on the building.
+ *
+ * Rebuilt only when the matrix changes, because `buildMesh` rejects a rebuild by
+ * comparing its argument by identity and a fresh object every frame would
+ * re-tessellate the mesh sixty times a second.
+ */
+let previewMeshCache = { R: undefined, descriptor: null };
+function previewMeshDescriptor() {
+  const R = rectifyMatrix(app.project);
+  if (previewMeshCache.R !== R) {
+    previewMeshCache = {
+      R,
+      descriptor: { H: R, region: PREVIEW_REGION, mesh: null, subdivisions: R ? 24 : 2 },
+    };
+  }
+  return previewMeshCache.descriptor;
+}
 
 function renderPreviewPost(width, height) {
   if (previewWarpFailed) return;
@@ -1496,10 +1787,7 @@ function renderPreviewPost(width, height) {
     }
   }
 
-  // The same object every frame, so `buildMesh` can reject it on identity
-  // rather than by serialising it. The preview always shows the whole frame
-  // unwarped, so there is nothing here that ever changes.
-  previewWarp.buildMesh(PREVIEW_MESH);
+  previewWarp.buildMesh(previewMeshDescriptor());
   previewWarp.draw(previewCanvas, {
     feather: null,
     gamma: 1,
@@ -1513,6 +1801,12 @@ function renderPreviewPost(width, height) {
  * ------------------------------------------------------------------ */
 
 function syncControlsFromProject() {
+  // A different show has a different wall; an unapplied marking of the old one
+  // would be meaningless against it. Dropping the tool as well, so the toolbar
+  // does not sit lit up over handles that are no longer there.
+  app.rectifyDraft = null;
+  if (app.tool === 'square') setTool('select');
+  else renderSquaringPanel();
   $('projectName').value = app.project.name;
   $('bpm').value = app.project.settings.bpm ?? 120;
   $('master').value = app.project.settings.master ?? 1;
@@ -1912,6 +2206,12 @@ function wire() {
   });
 
   $('btnUsePhoto').addEventListener('click', () => $('photoFile').click());
+  $('btnSquareWall').addEventListener('click', () => app.beginSquaring());
+  $('btnClearSquare').addEventListener('click', () => app.clearRectify());
+  $('btnApplySquare').addEventListener('click', () => app.applyRectify());
+  $('btnCancelSquare').addEventListener('click', () => setTool('select'));
+  $('squareW').addEventListener('input', readSquaringFields);
+  $('squareH').addEventListener('input', readSquaringFields);
   $('photoFile').addEventListener('change', async (ev) => {
     const [file] = ev.target.files || [];
     ev.target.value = '';
@@ -2186,6 +2486,10 @@ function onKeyDown(ev) {
     case 'c':
     case 'C':
       setTool('corners');
+      break;
+    case 'w':
+    case 'W':
+      app.beginSquaring();
       break;
     case 'b':
     case 'B':

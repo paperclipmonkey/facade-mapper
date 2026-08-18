@@ -18,7 +18,7 @@
  */
 
 import { MSG } from '../core/bus.js';
-import { solveHomography, homographyError, mat3Inverse, applyH } from '../core/math.js';
+import { solveHomography, homographyError, mat3Inverse, mat3Mul, applyH } from '../core/math.js';
 import { findBrightestBlob } from './camera.js';
 // The mesh spans the projector's coverage region exactly as the renderer
 // computes it, so the same function has to define it in both places.
@@ -90,15 +90,24 @@ export function markerPositions(grid = MARKER_GRID) {
  * smooth, and IDW extrapolates sensibly past the outermost dot rather than
  * falling off a cliff at the edge of the grid.
  *
+ * When the wall has been squared up, world space is no longer the camera image,
+ * and the addressing has to follow it there: a dot seen at a given place in the
+ * camera frame is at a different place in world space, and indexing by the
+ * former would smear every correction sideways by exactly the amount the
+ * rectification moves things. The residual *values* stay in projector space
+ * regardless, because that is the space they were measured in.
+ *
  * @param {Array} detections markers from a calibration pass
  * @param {number[]} H the solved camera→projector homography
  * @param {number[]} axis the grid coordinates the dots were placed on
  * @param {{x:number,y:number,w:number,h:number}} region the world-space area the
  *   projector covers, as the renderer computes it — the mesh spans exactly this
+ * @param {number[]|null} rectifyH the project's world→camera matrix, if any
  */
-export function residualMesh(detections, H, axis, region) {
+export function residualMesh(detections, H, axis, region, rectifyH = null) {
   const n = axis.length;
   if (n < 3 || !region || !(region.w > 0) || !(region.h > 0)) return null;
+  const toWorld = rectifyH ? mat3Inverse(rectifyH) : null;
 
   // Each usable dot becomes a sample: where it was seen (in mesh index space)
   // and how far the homography was wrong about it (in projector space).
@@ -110,9 +119,11 @@ export function residualMesh(detections, H, axis, region) {
     if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
     const dx = d.projector[0] - p.x;
     const dy = d.projector[1] - p.y;
+    const seen = toWorld ? applyH(toWorld, d.camera[0], d.camera[1]) : { x: d.camera[0], y: d.camera[1] };
+    if (!seen || !Number.isFinite(seen.x) || !Number.isFinite(seen.y)) continue;
     samples.push({
-      u: (d.camera[0] - region.x) / region.w,
-      v: (d.camera[1] - region.y) / region.h,
+      u: (seen.x - region.x) / region.w,
+      v: (seen.y - region.y) / region.h,
       dx,
       dy,
     });
@@ -175,6 +186,8 @@ export async function runCalibration({
   samples = 3,
   markerRadius = 0.045,
   gridSize = 3,
+  /** The project's world→camera matrix, when the wall has been squared up. */
+  rectifyH = null,
   onProgress = () => {},
   signal,
 }) {
@@ -311,8 +324,11 @@ export async function runCalibration({
 
   // With a denser grid there is enough information to measure how far the wall
   // departs from the single plane the homography assumes, and correct it.
+  // The region is the slice of *world* space this projector reaches, so it has
+  // to be computed from the matrix the renderer will actually use.
+  const effective = rectifyH ? mat3Mul(H, rectifyH) : H;
   const mesh = axis.length > 3
-    ? residualMesh(detections, H, axis, computeRegion(H))
+    ? residualMesh(detections, H, axis, computeRegion(effective), rectifyH)
     : null;
 
   return {
@@ -346,7 +362,7 @@ function assessQuality(H, src, dst) {
  * gardener knock the projector? Rather than recalibrating blind, this reports
  * how far off the existing homography now is, so you can decide.
  */
-export async function checkDrift({ bus, camera, projector, settleMs = 300, samples = 3, onProgress = () => {}, signal }) {
+export async function checkDrift({ bus, camera, projector, settleMs = 300, samples = 3, rectifyH = null, onProgress = () => {}, signal }) {
   const H = projector?.calibration?.H;
   if (!H) throw new Error('This projector has not been aligned yet');
 
@@ -356,6 +372,7 @@ export async function checkDrift({ bus, camera, projector, settleMs = 300, sampl
     projectorId: projector.id,
     settleMs,
     samples,
+    rectifyH,
     onProgress,
     signal,
   });
@@ -394,9 +411,16 @@ export async function checkDrift({ bus, camera, projector, settleMs = 300, sampl
  * can't see well enough — a bright evening, a distant projector, a phone camera
  * that insists on auto-exposing.
  */
-export function solveFromCorners(worldQuad) {
+export function solveFromCorners(worldQuad, rectifyH = null) {
   if (!Array.isArray(worldQuad) || worldQuad.length !== 4) return null;
-  const src = worldQuad.map((p) => ({ x: p.x, y: p.y }));
+  // The handles are dragged in world space, but what gets stored is always
+  // camera→projector: an alignment is a fact about where the lamp is standing,
+  // and re-squaring the wall must not invalidate one somebody stood outside for.
+  const src = worldQuad.map((p) => {
+    if (!rectifyH) return { x: p.x, y: p.y };
+    const c = applyH(rectifyH, p.x, p.y);
+    return c ? { x: c.x, y: c.y } : { x: p.x, y: p.y };
+  });
   const dst = [
     { x: 0, y: 0 },
     { x: 1, y: 0 },
