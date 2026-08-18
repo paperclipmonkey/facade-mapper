@@ -93,7 +93,7 @@ const snow = {
   init() {
     return { flakes: [], count: 0, sprites: null, spriteKey: null };
   },
-  draw({ g, p, shape, shapes, world, t, dt, rng, state, noise, stable }) {
+  step({ p, shape, shapes, world, t, dt, rng, state, noise }) {
     const { bbox } = shape;
     if (bbox.w <= 0 || bbox.h <= 0) return;
     const target = Math.round(p.count);
@@ -127,6 +127,64 @@ const snow = {
     if (state.flakes.length > target) state.flakes.length = target;
 
     const gust = p.gust > 0 ? noise.noise2(t * 0.12, 0) * p.gust : 0;
+
+    for (const flake of state.flakes) {
+      const z = flake.z;
+      const prevY = flake.y;
+      flake.y += p.speed * z * dt;
+      // Flutter is a sideways drift that reverses — a flake does not fall
+      // straight, it slips from side to side as it rocks.
+      flake.tilt += flake.tumble * dt;
+      const flutter = Math.sin(flake.tilt) * 26 * p.flutter * z;
+      flake.x += (p.wind * z + flutter + gust * 60) * dt;
+
+      if (flake.y > bbox.y + bbox.h + 10) spawn(flake, true);
+      if (flake.x < bbox.x - 20) flake.x = bbox.x + bbox.w + 10;
+      if (flake.x > bbox.x + bbox.w + 20) flake.x = bbox.x - 10;
+
+      // Landing. A flake that hits a drift adds its own volume to that column
+      // and is recycled at the top, which keeps the flake count — and so the
+      // cost — flat however long the show runs.
+      if (surfaces && p.buildUp > 0) {
+        const hit = sweepLanding(surfaces, flake.x, prevY, flake.y);
+        if (hit) {
+          const r = p.size * z * 0.5;
+          const { field, drift } = hit.surface;
+          // Volume in, depth out: a flake's area spread across the column it
+          // landed in. Big near flakes therefore build a drift much faster than
+          // distant specks, which is both correct and what you want to look at.
+          drift.depth[hit.col] += (Math.PI * r * r * p.buildUp * 0.6) / field.colW;
+          spawn(flake, true);
+        }
+      }
+    }
+
+    if (surfaces) {
+      // Slumping, shedding and falling all happen once per step per surface,
+      // regardless of how many flakes landed, so the cost does not scale with
+      // the weather. 38° is roughly the angle settled snow holds before it
+      // slumps, and it is what rounds a column of landings into a drift.
+      for (const { field, drift } of surfaces) {
+        settle(drift, field, 0.66, 4);
+        shedSlabs(drift, field, {
+          maxDepth: p.maxDepth,
+          gustChance: p.shed,
+          dt,
+          rng,
+          minDepth: 1,
+        });
+        advanceSlabs(drift, field, dt, 620);
+      }
+    }
+  },
+  draw({ g, p, shape, shapes, world, state, stable }) {
+    const { bbox } = shape;
+    if (bbox.w <= 0 || bbox.h <= 0) return;
+
+    const colliders = p.collide && typeof shapes === 'function'
+      ? shapes(p.colliderTag, shape.id).filter((geo) => geo.points && geo.points.length > 1)
+      : [];
+    const surfaces = colliders.length ? ensureSurfaces(state, 'surfaces', colliders, world, 260) : null;
     const sprites = ensureFlakeSprites(state, stable.color);
 
     g.save();
@@ -158,37 +216,9 @@ const snow = {
 
     for (const flake of state.flakes) {
       const z = flake.z;
-      const prevY = flake.y;
-      flake.y += p.speed * z * dt;
-      // Flutter is a sideways drift that reverses — a flake does not fall
-      // straight, it slips from side to side as it rocks.
-      flake.tilt += flake.tumble * dt;
-      const flutter = Math.sin(flake.tilt) * 26 * p.flutter * z;
-      flake.x += (p.wind * z + flutter + gust * 60) * dt;
-
-      if (flake.y > bbox.y + bbox.h + 10) spawn(flake, true);
-      if (flake.x < bbox.x - 20) flake.x = bbox.x + bbox.w + 10;
-      if (flake.x > bbox.x + bbox.w + 20) flake.x = bbox.x - 10;
-
       const r = p.size * z * 0.5;
 
       if (surfaces && !drewDrift && z >= 0.62) paintDrift();
-
-      // Landing. A flake that hits a drift adds its own volume to that column
-      // and is recycled at the top, which keeps the flake count — and so the
-      // cost — flat however long the show runs.
-      if (surfaces && p.buildUp > 0) {
-        const hit = sweepLanding(surfaces, flake.x, prevY, flake.y);
-        if (hit) {
-          const { field, drift } = hit.surface;
-          // Volume in, depth out: a flake's area spread across the column it
-          // landed in. Big near flakes therefore build a drift much faster than
-          // distant specks, which is both correct and what you want to look at.
-          drift.depth[hit.col] += (Math.PI * r * r * p.buildUp * 0.6) / field.colW;
-          spawn(flake, true);
-          continue;
-        }
-      }
 
       // Presented area varies as the plate rocks: a flake edge-on nearly
       // disappears, which is the twinkle.
@@ -217,26 +247,7 @@ const snow = {
     }
 
     g.globalAlpha = 1;
-
-    if (surfaces) {
-      // Slumping, shedding and falling all happen once per frame per surface,
-      // regardless of how many flakes landed, so the cost does not scale with
-      // the weather. 38° is roughly the angle settled snow holds before it
-      // slumps, and it is what rounds a column of landings into a drift.
-      for (const { field, drift } of surfaces) {
-        settle(drift, field, 0.66, 4);
-        shedSlabs(drift, field, {
-          maxDepth: p.maxDepth,
-          gustChance: p.shed,
-          dt,
-          rng,
-          minDepth: 1,
-        });
-        advanceSlabs(drift, field, dt, 620);
-      }
-      if (!drewDrift) paintDrift();
-    }
-
+    if (surfaces && !drewDrift) paintDrift();
     g.restore();
   },
 };
@@ -605,17 +616,21 @@ const icicles = {
   init() {
     return { spikes: null, count: 0 };
   },
-  draw({ g, p, shape, t, rng, state }) {
-    const { bbox } = shape;
+  /** Cast on step one, so every tab lays out the same row of ice. */
+  step({ p, rng, state }) {
     const count = Math.round(p.count);
-    if (state.count !== count) {
-      state.count = count;
-      state.spikes = Array.from({ length: count }, () => ({
-        len: 1 - p.variation * rng(),
-        w: 0.6 + rng() * 0.8,
-        glint: rng() * TAU,
-      }));
-    }
+    if (state.count === count) return;
+    state.count = count;
+    state.spikes = Array.from({ length: count }, () => ({
+      len: 1 - p.variation * rng(),
+      w: 0.6 + rng() * 0.8,
+      glint: rng() * TAU,
+    }));
+  },
+  draw({ g, p, shape, t, state }) {
+    const { bbox } = shape;
+    if (!state.spikes) return;
+    const count = state.count;
 
     const growth = p.grow > 0 ? clamp(t / p.grow, 0, 1) : 1;
 
@@ -695,18 +710,22 @@ const stars = {
   init() {
     return { stars: null, count: 0 };
   },
-  draw({ g, p, shape, t, rng, state }) {
-    const { bbox } = shape;
+  /** Cast on step one, so every tab lays out the same sky. */
+  step({ p, rng, state }) {
     const count = Math.round(p.count);
-    if (state.count !== count) {
-      state.count = count;
-      state.stars = Array.from({ length: count }, () => ({
-        x: rng(),
-        y: rng(),
-        s: 0.3 + rng() * 0.9,
-        phase: rng() * TAU,
-      }));
-    }
+    if (state.count === count) return;
+    state.count = count;
+    state.stars = Array.from({ length: count }, () => ({
+      x: rng(),
+      y: rng(),
+      s: 0.3 + rng() * 0.9,
+      phase: rng() * TAU,
+    }));
+  },
+  draw({ g, p, shape, t, state }) {
+    const { bbox } = shape;
+    if (!state.stars) return;
+    const count = state.count;
 
     g.save();
     g.clip(shape.path);

@@ -378,21 +378,22 @@ const shapes = {
   init() {
     return { spots: null, count: 0 };
   },
-  draw({ g, p, shape, t, rng, state }) {
-    const glyph = String(p.glyph || '');
-    if (!glyph) return;
-    const { bbox } = shape;
+  /** Scattered on step one, so the same glyphs sit in the same places in every tab. */
+  step({ p, rng, state }) {
     const count = Math.round(p.count);
-
-    if (state.count !== count) {
-      state.count = count;
-      state.spots = Array.from({ length: count }, () => ({
-        x: rng(),
-        y: rng(),
-        phase: rng() * TAU,
-        scale: 0.7 + rng() * 0.6,
-      }));
-    }
+    if (state.count === count) return;
+    state.count = count;
+    state.spots = Array.from({ length: count }, () => ({
+      x: rng(),
+      y: rng(),
+      phase: rng() * TAU,
+      scale: 0.7 + rng() * 0.6,
+    }));
+  },
+  draw({ g, p, shape, t, state }) {
+    const glyph = String(p.glyph || '');
+    if (!glyph || !state.spots) return;
+    const { bbox } = shape;
 
     const px = Math.max(6, Math.min(bbox.w, bbox.h) * p.size);
     g.save();

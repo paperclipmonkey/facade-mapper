@@ -105,6 +105,15 @@ export function createLayer(effectId, overrides = {}) {
     /** Optional tag filter, applied on top of `targets`. */
     targetTags: [],
     enabled: true,
+    /**
+     * Wall-clock ms at which this layer's switch last went up, or 0 for "it has
+     * simply always been on".
+     *
+     * Stamped by the control tab and read by every tab, so `age` — and with it
+     * every one-shot — means the same thing in all of them. See
+     * `stampLayerSwitchOns` and `enabledAtFor`.
+     */
+    onAt: 0,
     solo: false,
     opacity: 1,
     blend: 'source-over',

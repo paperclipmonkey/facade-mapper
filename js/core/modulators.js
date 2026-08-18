@@ -80,7 +80,19 @@ export function compileExpression(code) {
   return fn;
 }
 
-const exprRng = makeRng('expr');
+/**
+ * `rand()` inside an expression binding.
+ *
+ * Reseeded per caller per frame rather than left to run, for the same reason as
+ * everything else here: a shared stream's position is a count of frames drawn,
+ * which is the one number two tabs never agree on. Quantised to 1/60s so a
+ * `rand()` still changes frame to frame while two tabs at the same show time
+ * get the same value.
+ */
+function expressionRng(ctx) {
+  const bucket = Math.round((ctx.t || 0) * 60);
+  return makeRng(`expr|${ctx.key || ''}|${ctx.i ?? 0}#${bucket}`);
+}
 
 function expressionScope(ctx, base, def) {
   const shape = ctx.shape || null;
@@ -141,7 +153,7 @@ function expressionScope(ctx, base, def) {
     pulse: (p, w) => waveform('pulse', p, w),
     noise: (x, y = 0, z = 0) => defaultNoise.noise3(x, y, z),
     fbm: (x, y = 0, z = 0, o = 4) => defaultNoise.fbm(x, y, z, o),
-    rand: exprRng,
+    rand: expressionRng(ctx),
     min2: Math.min,
     max2: Math.max,
   };
@@ -184,7 +196,7 @@ function getHold(key) {
         if (--drop <= 0) break;
       }
     }
-    s = { value: 0, target: 0, nextAt: -1, rng: makeRng(key), env: 0, lastTrig: -1 };
+    s = { value: 0, target: 0, bucket: null, env: 0, lastTrig: -1 };
     holdState.set(key, s);
   }
   return s;
@@ -230,15 +242,41 @@ export function evaluateBinding(binding, base, def, ctx, bindingKey) {
     }
 
     case 'random': {
+      /**
+       * Sample-and-hold, on a grid every tab shares.
+       *
+       * It used to hold a running generator and set `nextAt = t + 1/rate` from
+       * whenever it first ran, which made the value a function of when the tab
+       * happened to open: two projectors on the same wall held different
+       * numbers, and swapped them at different moments. Now the step number is
+       * `floor(t * rate)` and the value is seeded from it, so the sequence is a
+       * property of show time and nothing else.
+       */
       const key = `${stateKey}|${ctx.i ?? 0}`;
       const s = getHold(key);
       const rate = Math.max(0.01, binding.rate ?? 2);
-      if (s.nextAt < 0 || ctx.t < s.nextAt - 1 / rate - 0.001 || ctx.t >= s.nextAt) {
-        s.target = s.rng() * 2 - 1;
-        s.nextAt = ctx.t + 1 / rate;
+      const bucket = Math.floor(ctx.t * rate);
+      if (s.bucket !== bucket) {
+        s.bucket = bucket;
+        s.target = makeRng(`${key}#${bucket}`)() * 2 - 1;
       }
+
+      /**
+       * Smoothing corrected for the step size.
+       *
+       * A plain `lerp(target, value, smooth)` applies once per *frame*, so it
+       * lags twice as far behind on a tab drawing half as often. Raising the
+       * coefficient to the elapsed frames makes the filter a function of time:
+       * the same total dt gives exactly the same result however it was carved
+       * up, because the per-step factors multiply out to the same number.
+       */
       const smooth = clamp(binding.smooth ?? 0, 0, 0.999);
-      s.value = smooth > 0 ? lerp(s.target, s.value, smooth) : s.target;
+      if (smooth > 0) {
+        const k = Math.pow(smooth, Math.max(0, ctx.dt || 0) * 60);
+        s.value = lerp(s.target, s.value, k);
+      } else {
+        s.value = s.target;
+      }
       const v = binding.unipolar ? s.value * 0.5 + 0.5 : s.value;
       return numericBase + depth * v;
     }
@@ -248,12 +286,19 @@ export function evaluateBinding(binding, base, def, ctx, bindingKey) {
       const s = getHold(key);
       const div = Math.max(0.0625, binding.division ?? 1);
       const trig = Math.floor(ctx.beat / div);
-      if (trig !== s.lastTrig) {
-        s.lastTrig = trig;
-        s.env = 1;
-      }
+      /**
+       * Decayed from the beat it was struck on, rather than multiplied down
+       * frame by frame.
+       *
+       * Same curve, but as a function of time instead of an accumulation, so it
+       * does not depend on when a tab noticed the trigger or how many frames it
+       * has drawn since. Nothing to carry between frames either.
+       */
+      const sinceBeats = ctx.beat - trig * div;
+      const since = Math.max(0, (sinceBeats * 60) / (ctx.bpm || 120));
       const decay = Math.max(0.01, binding.decay ?? 0.4);
-      s.env *= Math.exp(-(ctx.dt || 0) / decay);
+      s.lastTrig = trig;
+      s.env = Math.exp(-since / decay);
       const attack = binding.attack ?? 0;
       const shaped = attack > 0 ? Math.pow(s.env, 1 / (1 + attack * 4)) : s.env;
       return numericBase + depth * shaped;

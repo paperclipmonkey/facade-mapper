@@ -36,9 +36,29 @@ const bats = {
   init() {
     return { flock: null, count: 0 };
   },
-  draw({ g, p, shape, t, rng, state, noise }) {
-    const { bbox } = shape;
+  /**
+   * Cast the flock, at a moment every tab agrees on.
+   *
+   * Everything else here is a function of `t`, so the flock is the only thing
+   * that could differ between two tabs — and it would have, because it used to
+   * be cast on the first frame *drawn* and `rng` is seeded from the simulation
+   * step the frame landed on. Casting from `step` puts it on step one always.
+   */
+  step({ p, rng, state }) {
     const count = Math.round(p.count);
+    if (state.count === count) return;
+    state.count = count;
+    state.flock = Array.from({ length: count }, () => ({
+      lane: rng(),
+      lead: rng(),
+      scale: 0.6 + rng() * 0.8,
+      seed: rng() * 100,
+      flapOffset: rng() * TAU,
+    }));
+  },
+  draw({ g, p, shape, t, state, noise }) {
+    const { bbox } = shape;
+    if (!state.flock) return;
 
     // interval 0 means "always flying"; otherwise they arrive on a schedule.
     let phaseT = t;
@@ -46,17 +66,6 @@ const bats = {
       const cycle = t % Math.max(1, p.interval);
       if (cycle > p.crossing) return;
       phaseT = cycle;
-    }
-
-    if (state.count !== count) {
-      state.count = count;
-      state.flock = Array.from({ length: count }, () => ({
-        lane: rng(),
-        lead: rng(),
-        scale: 0.6 + rng() * 0.8,
-        seed: rng() * 100,
-        flapOffset: rng() * TAU,
-      }));
     }
 
     const dir = p.direction === 'left' ? -1 : 1;
@@ -407,21 +416,23 @@ const runes = {
   init() {
     return { columns: null, count: 0 };
   },
-  draw({ g, p, shape, t, rng, state }) {
+  /** The columns' offsets and rates, cast on step one so every tab agrees. */
+  step({ p, rng, state }) {
+    const cols = Math.round(p.columns);
+    if (state.count === cols) return;
+    state.count = cols;
+    state.columns = Array.from({ length: cols }, () => ({
+      offset: rng() * 40,
+      rate: 0.6 + rng() * 0.8,
+      seed: Math.floor(rng() * 100000),
+    }));
+  },
+  draw({ g, p, shape, t, state }) {
     const { bbox } = shape;
     const chars = [...String(p.alphabet || 'X')];
-    if (!chars.length || bbox.w <= 0 || bbox.h <= 0) return;
+    if (!chars.length || bbox.w <= 0 || bbox.h <= 0 || !state.columns) return;
 
-    const cols = Math.round(p.columns);
-    if (state.count !== cols) {
-      state.count = cols;
-      state.columns = Array.from({ length: cols }, () => ({
-        offset: rng() * 40,
-        rate: 0.6 + rng() * 0.8,
-        seed: Math.floor(rng() * 100000),
-      }));
-    }
-
+    const cols = state.count;
     const cellW = bbox.w / cols;
     const cellH = cellW * 1.25;
     const rows = Math.ceil(bbox.h / cellH) + 1;

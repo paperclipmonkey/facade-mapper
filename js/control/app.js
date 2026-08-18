@@ -54,7 +54,7 @@ import { mat3Inverse, applyH } from '../core/math.js';
 import { GRADE_PRESETS, DEFAULT_GRADE } from '../render/postfx.js';
 import { createMediaPool, importMediaFile, removeMedia } from '../core/media.js';
 import { loadUserEffects, listByCategory, defaultParams, getEffect, getCompileErrors } from '../effects/registry.js';
-import { captureScene, activateScene as applyScene, applySceneToLayers, sceneDrift, tickPlaylist, transitionProgress } from '../core/scenes.js';
+import { captureScene, activateScene as applyScene, applySceneToLayers, sceneDrift, tickPlaylist, transitionProgress, effectiveLayers } from '../core/scenes.js';
 import { createCamera } from './camera.js';
 import { feed as extraFeed, pruneFeeds } from './feeds.js';
 import { runCalibration, checkDrift, solveFromCorners } from './calibration.js';
@@ -1500,6 +1500,55 @@ function reportHealth(renderMs) {
   health.since = now;
 }
 
+/**
+ * Record the moment each layer's switch went up, for every tab to read.
+ *
+ * `age` — seconds since the layer came on — is what one-shots are built out of,
+ * and it used to be measured from the first frame *each tab* happened to draw
+ * the layer. A projector tab opened later therefore believed the whole show had
+ * just started and replayed every burst on the wall while the control tab sat
+ * watching a show that had long settled.
+ *
+ * The fix has to be a single number carried in the project, and this is where it
+ * is written. Centrally, from the effective state rather than at each of the
+ * places a layer can be switched on — the layer panel, the bulk action, a scene
+ * being applied, a trigger, the playlist, an import — because a stamp that four
+ * of those six remember to write is worse than none.
+ *
+ * Only the control tab runs this; the projector tabs read the result. That is
+ * already true of the playlist and the trigger runtime, and for the same reason:
+ * one authority, and everybody else follows.
+ *
+ * @returns {boolean} whether anything changed, so the caller can broadcast
+ */
+let layerWasOn = new Map();
+function stampLayerSwitchOns() {
+  const now = Date.now();
+  const next = new Map();
+  let changed = false;
+
+  for (const layer of effectiveLayers(app.project)) {
+    const on = layer.enabled !== false;
+    next.set(layer.id, on);
+    // `effectiveLayers` may hand back a scene-blended copy, so the stamp goes on
+    // the layer the project actually holds.
+    const stored = app.project.layers.find((l) => l.id === layer.id);
+    if (!stored) continue;
+    if (on && layerWasOn.get(layer.id) === false) {
+      stored.onAt = now;
+      changed = true;
+    } else if (on && !stored.onAt && !layerWasOn.has(layer.id)) {
+      // First sight of a layer that is already on — the show was loaded with it
+      // running. Leave it unstamped: age then runs from the start of the show,
+      // which every tab agrees on and which is what an ambient layer wants.
+      stored.onAt = stored.onAt || 0;
+    }
+  }
+
+  layerWasOn = next;
+  return changed;
+}
+
 function frame() {
   requestAnimationFrame(frame);
   const frameStart = performance.now();
@@ -1521,6 +1570,11 @@ function frame() {
     markDirty();
     broadcast(true);
     renderSceneButtons($('sceneButtons'), app);
+  }
+
+  if (stampLayerSwitchOns()) {
+    markDirty();
+    broadcast(true);
   }
 
   mediaPool.syncPlayback(time.t, time.running);

@@ -34,7 +34,10 @@ is for.
 
 - **Several projectors, one browser.** Each projector is its own tab, dragged to
   its own display. One control tab drives them all, and works out the soft-edge
-  blending where they overlap.
+  blending where they overlap. Every tab renders independently and they all show
+  the *same* show: the simulation runs on a fixed clock rather than on the frame
+  rate, so two projectors covering the same brickwork paint the same animation
+  onto it rather than two.
 - **Camera auto-alignment.** Each projector flashes a grid of dots; the camera
   watches where they land and solves the projector-to-camera mapping. You then
   draw on the camera picture and it appears on the right part of the house.

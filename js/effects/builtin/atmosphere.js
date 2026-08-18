@@ -36,7 +36,7 @@ const rain = {
   init() {
     return { drops: [], count: 0, splashes: [] };
   },
-  draw({ g, p, shape, t, dt, rng, state, noise }) {
+  step({ p, shape, t, dt, rng, state, noise }) {
     const { bbox } = shape;
     if (bbox.w <= 0 || bbox.h <= 0) return;
 
@@ -57,6 +57,46 @@ const rain = {
     if (state.drops.length > target) state.drops.length = target;
 
     const gust = p.gust > 0 ? noise.noise2(t * 0.3, 0) * p.gust : 0;
+
+    for (const drop of state.drops) {
+      const z = drop.z;
+      const fall = p.speed * z * dt;
+      drop.x += (dirX * fall) + gust * 120 * z * dt;
+      drop.y += dirY * fall;
+
+      if (drop.y > bbox.y + bbox.h) {
+        if (p.splash > 0 && rng() < p.splash * 0.5) {
+          state.splashes.push({ x: drop.x, y: bbox.y + bbox.h, age: 0, z });
+        }
+        spawn(drop, true);
+      } else if (drop.x < bbox.x - bbox.w * 0.35 || drop.x > bbox.x + bbox.w * 1.35) {
+        spawn(drop, true);
+      }
+    }
+
+    // Splashes are aged out even when the control is turned down to zero.
+    // Skipping the whole block on `p.splash > 0` — as this used to — left up to
+    // four hundred of them frozen in the array for the life of the layer, walked
+    // by nothing and freed by nothing.
+    if (!(p.splash > 0)) {
+      state.splashes.length = 0;
+    } else {
+      for (let i = state.splashes.length - 1; i >= 0; i--) {
+        const s = state.splashes[i];
+        s.age += dt;
+        if (s.age > 0.35) state.splashes.splice(i, 1);
+      }
+      // Runaway guard if the splash rate ever outpaces the lifetime.
+      if (state.splashes.length > 400) state.splashes.length = 400;
+    }
+  },
+  draw({ g, p, shape, state }) {
+    const { bbox } = shape;
+    if (bbox.w <= 0 || bbox.h <= 0) return;
+
+    const angle = (p.angle * Math.PI) / 180;
+    const dirX = Math.sin(angle);
+    const dirY = Math.cos(angle);
 
     g.save();
     g.clip(shape.path);
@@ -83,22 +123,6 @@ const rain = {
 
     for (const drop of state.drops) {
       const z = drop.z;
-      const fall = p.speed * z * dt;
-      drop.x += (dirX * fall) + gust * 120 * z * dt;
-      drop.y += dirY * fall;
-
-      if (drop.y > bbox.y + bbox.h) {
-        if (p.splash > 0 && rng() < p.splash * 0.5) {
-          state.splashes.push({ x: drop.x, y: bbox.y + bbox.h, age: 0, z });
-        }
-        spawn(drop, true);
-        continue;
-      }
-      if (drop.x < bbox.x - bbox.w * 0.35 || drop.x > bbox.x + bbox.w * 1.35) {
-        spawn(drop, true);
-        continue;
-      }
-
       // Nearer drops are longer, thicker and brighter — the whole illusion of
       // depth in a rain effect comes from covarying those three.
       g.save();
@@ -115,21 +139,9 @@ const rain = {
     }
     g.globalAlpha = 1;
 
-    // Splashes still in flight are aged out even when the control is turned
-    // down to zero. Skipping the whole block on `p.splash > 0` — as this used
-    // to — left up to four hundred of them frozen in the array for the life of
-    // the layer, walked by nothing and freed by nothing.
-    if (!(p.splash > 0)) state.splashes.length = 0;
-
     if (p.splash > 0 && state.splashes.length) {
       g.globalCompositeOperation = 'lighter';
-      for (let i = state.splashes.length - 1; i >= 0; i--) {
-        const s = state.splashes[i];
-        s.age += dt;
-        if (s.age > 0.35) {
-          state.splashes.splice(i, 1);
-          continue;
-        }
+      for (const s of state.splashes) {
         const f = s.age / 0.35;
         const r = p.length * 0.35 * s.z * (0.3 + f);
         g.globalAlpha = (1 - f) * p.opacity * p.splash;
@@ -139,8 +151,6 @@ const rain = {
         g.ellipse(s.x, s.y, r, r * 0.35, 0, Math.PI, TAU);
         g.stroke();
       }
-      // Runaway guard if the splash rate ever outpaces the lifetime.
-      if (state.splashes.length > 400) state.splashes.length = 400;
     }
     g.restore();
   },
@@ -317,7 +327,7 @@ const embers = {
   init() {
     return { motes: [], count: 0 };
   },
-  draw({ g, p, shape, t, dt, rng, state, noise }) {
+  step({ p, shape, t, dt, rng, state, noise }) {
     const { bbox } = shape;
     if (bbox.w <= 0 || bbox.h <= 0) return;
     const target = Math.round(p.count);
@@ -335,10 +345,6 @@ const embers = {
     while (state.motes.length < target) state.motes.push(spawn({}, false));
     if (state.motes.length > target) state.motes.length = target;
 
-    g.save();
-    g.clip(shape.path);
-    g.globalCompositeOperation = 'lighter';
-
     for (const mote of state.motes) {
       mote.life += dt;
       const turb = noise.noise3(mote.x * 0.003, mote.y * 0.003, t * 0.25 + mote.seed);
@@ -347,9 +353,18 @@ const embers = {
 
       if (mote.y < bbox.y - bbox.h * 0.1 || mote.y > bbox.y + bbox.h * 1.1 || mote.life > mote.span) {
         spawn(mote, true);
-        continue;
       }
+    }
+  },
+  draw({ g, p, shape, t, state }) {
+    const { bbox } = shape;
+    if (bbox.w <= 0 || bbox.h <= 0) return;
 
+    g.save();
+    g.clip(shape.path);
+    g.globalCompositeOperation = 'lighter';
+
+    for (const mote of state.motes) {
       // Fade in and out over the mote's life so nothing pops.
       const f = clamp(mote.life / mote.span, 0, 1);
       let alpha = Math.sin(f * Math.PI) * p.opacity;

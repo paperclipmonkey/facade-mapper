@@ -10,6 +10,32 @@
  * Effects receive coordinates in world pixels (a virtual 1920-wide frame),
  * regardless of the actual canvas resolution, so a line width of 6 means the
  * same thing everywhere.
+ *
+ * ## Why the same show looks the same in every tab
+ *
+ * Two projectors overlapping on one wall have to paint the same animation into
+ * the shared band, and a tab is not allowed to have an opinion about what the
+ * show is doing. Nothing here may depend on how fast the tab happens to be
+ * rendering. Three things used to, and all three are dealt with below:
+ *
+ *  - **When a layer came on.** Was stamped from the first frame *this tab*
+ *    drew the instance, so a projector tab opened ten minutes in thought every
+ *    layer had just started. Now derived from the project, which every tab has
+ *    the same copy of. See `sharedEnabledAt`.
+ *  - **Where the random sequence is up to.** Was one free-running generator per
+ *    instance, advanced by every call inside `draw` — so a 60fps tab was twice
+ *    as far along it as a 30fps tab. Now reseeded from the simulation step, so
+ *    the same show time draws the same numbers. See `SIM_HZ`.
+ *  - **How the simulation advanced.** Was integrated with whatever `dt` the tab
+ *    managed, and a spawn test like `rng() < rate * dt` does not give the same
+ *    answers from a different sequence of steps even when they sum to the same
+ *    elapsed time. Now effects may declare `step(ctx)`, which runs at a fixed
+ *    rate: by show time t exactly `floor(age * SIM_HZ)` steps have been taken,
+ *    in every tab, whatever its frame rate.
+ *
+ * An effect with no `step` is unaffected and runs exactly as before — which is
+ * right for the great majority of them, because a function of `t`, `beat`,
+ * `noise` and the shape is already identical everywhere.
  */
 
 import { boundingBox, buildPathSampler, smoothPolyline, polygonCentroid, makeRng } from '../core/math.js';
@@ -102,6 +128,53 @@ function frameShape(world) {
   };
 }
 
+/**
+ * The rate the simulation runs at, regardless of the frame rate.
+ *
+ * Sixty because that is what the effects were authored against, so migrating one
+ * from a per-frame `dt` to a fixed step changes nothing about how it looks on a
+ * machine that was keeping up.
+ */
+const SIM_HZ = 60;
+
+/**
+ * How far a frame is allowed to catch up, and where it restarts if it cannot.
+ *
+ * A tab opened an hour into a show is 216,000 steps behind, and there is no
+ * honest way to run those: it starts cold instead, warms up for a second and a
+ * half, and is out of phase with the tabs that have been running until that
+ * layer next restarts. That is the one case this scheme does not cover, and
+ * covering it would mean one tab broadcasting its state to the others.
+ *
+ * The catch-up allowance is generous enough to absorb a backgrounded tab
+ * returning, a long paint, or a project reload — the cases where the tab really
+ * is only a moment behind and should quietly close the gap rather than reset.
+ */
+const MAX_CATCHUP_STEPS = SIM_HZ * 10;
+const COLD_START_STEPS = Math.round(SIM_HZ * 1.5);
+
+/**
+ * How far `enabledAt` may move before it counts as the layer being re-fired.
+ *
+ * Generous on purpose. The value comes from a wall-clock stamp carried in the
+ * project, converted through the show clock, and a few milliseconds of drift
+ * between the two is not somebody pressing a trigger.
+ */
+const RETRIGGER_SLACK = 0.05;
+
+/**
+ * Show-time seconds for a wall-clock stamp carried in the project.
+ *
+ * Scene changes and layer switch-ons are recorded as `Date.now()`, because that
+ * is what the code doing the recording has to hand and it survives the show
+ * clock being paused or scrubbed. Effects want show time. Every tab computes
+ * the same answer because every tab agrees on both numbers.
+ */
+function showTimeOf(wallMs, time) {
+  if (!wallMs) return null;
+  return time.t - (time.wall - wallMs / 1000);
+}
+
 /* ------------------------------------------------------------------ *
  * Renderer
  * ------------------------------------------------------------------ */
@@ -156,9 +229,16 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
     if (!inst) {
       // Seeded from the identity of the pairing, so the same window shows the
       // same flame in every tab and across reloads.
-      inst = { state: {}, rng: makeRng(key), noise: createNoise(key), initialised: false,
+      //
+      // No `rng` here any more. A generator created once and left to run is a
+      // position in a sequence, and the position depends on how many frames the
+      // tab has drawn — which is the one thing tabs disagree about. It is
+      // reseeded per simulation step instead, from `key` and the step index.
+      inst = { key, state: {}, noise: createNoise(key), initialised: false,
         /** Show time at which this layer was last switched on. See `age`. */
-        enabledAt: null };
+        enabledAt: null,
+        /** Simulation steps taken since then. See `SIM_HZ`. */
+        step: 0 };
       instanceState.set(key, inst);
     }
     inst.usedAt = generation;
@@ -268,16 +348,39 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
      * evening accumulating.
      */
     const sceneAt = project.show?.sceneChangeAt ?? null;
-    if (sceneAt !== lastSceneAt) {
-      lastSceneAt = sceneAt;
-      const active = (project.scenes || []).find((s) => s.id === project.show?.activeScene);
-      for (const [layerId, layerState] of Object.entries(active?.state || {})) {
-        if (!layerState?.enabled) continue;
-        for (const [key, inst] of instanceState) {
-          if (key.startsWith(`${layerId}:`)) inst.enabledAt = null;
-        }
-      }
-    }
+    lastSceneAt = sceneAt;
+    const active = (project.scenes || []).find((s) => s.id === project.show?.activeScene);
+    const sceneEnables = new Set(
+      Object.entries(active?.state || {})
+        .filter(([, layerState]) => layerState?.enabled)
+        .map(([layerId]) => layerId)
+    );
+
+    /**
+     * When a layer came on, in show time, as every tab computes it.
+     *
+     * Read out of the project rather than remembered locally, which is the whole
+     * point: a projector tab opened halfway through the evening has no history
+     * to remember, and used to conclude that everything had just started — so
+     * every one-shot fired again and every fade-in played again, on the wall,
+     * while the control tab showed a show that had settled long ago.
+     *
+     * Two stamps can say a layer came on, and the later one wins. `layer.onAt`
+     * is the control tab noticing the layer's own switch go up;
+     * `show.sceneChangeAt` is a scene being fired, which counts as a switch-on
+     * for the layers that scene enables — and counts again when the same scene
+     * is re-fired, which is what makes pressing a trigger twice replay it.
+     *
+     * A layer that has simply always been on has neither stamp and gets zero:
+     * its age is the age of the show, in every tab, rather than the age of
+     * whichever window happens to be looking at it.
+     */
+    const enabledAtFor = (layer) => {
+      const own = layer.onAt || 0;
+      const scene = sceneEnables.has(layer.id) ? (sceneAt || 0) : 0;
+      const wall = Math.max(own, scene);
+      return wall ? (showTimeOf(wall, time) ?? 0) : 0;
+    };
 
     const layers = effectiveLayers(project).filter((l) => l.enabled !== false);
     const soloed = layers.filter((l) => l.solo);
@@ -398,7 +501,8 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
           world,
           layer,
           state: inst.state,
-          rng: inst.rng,
+          /** Reseeded per simulation step, just below. Never a running stream. */
+          rng: null,
           noise: inst.noise,
           media: (id) => mediaPool?.get(id) ?? null,
           camera: () => camera?.() ?? null,
@@ -450,20 +554,34 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
         ctx.p = resolveParams(effect, layer, ctx);
 
         /**
-         * The moment it came on.
+         * The moment it came on — shifted by the stagger, like `t` itself, so a
+         * row of windows still comes up in sequence.
          *
-         * Disabled layers never reach this loop, so a gap between one frame and
-         * the next is exactly "it was switched off and switched on again". Two
-         * frames of slack, because a scene change and a dropped frame should
-         * not look like a retrigger.
+         * A change here means the layer was switched off and on again, or its
+         * scene was re-fired. That restarts the simulation from step zero, which
+         * is what makes pressing the same trigger twice replay the burst.
          */
-        if (inst.lastSeen === undefined || generation - inst.lastSeen > 2) inst.enabledAt = null;
+        const enabledAt = enabledAtFor(layer) - stagger;
+        /**
+         * A slack tolerance, not an exact compare.
+         *
+         * This is derived from a wall-clock stamp and the show clock, and a
+         * couple of milliseconds of disagreement between them means nothing.
+         * Treating that as "the layer was switched on again" would restart the
+         * simulation from step zero on every frame, so a stateful effect
+         * switched on mid-show would never accumulate anything at all — it would
+         * sit at one sixtieth of a second old for as long as it ran.
+         */
+        if (inst.enabledAt === null || Math.abs(inst.enabledAt - enabledAt) > RETRIGGER_SLACK) {
+          inst.enabledAt = enabledAt;
+          inst.step = 0;
+        }
         inst.lastSeen = generation;
-        if (inst.enabledAt === null || inst.enabledAt === undefined) inst.enabledAt = t;
-        ctx.age = t - inst.enabledAt;
+        ctx.age = Math.max(0, t - inst.enabledAt);
 
         if (!inst.initialised) {
           inst.initialised = true;
+          ctx.rng = makeRng(`${inst.key}#0`);
           if (effect.init) {
             try {
               const initial = effect.init(ctx);
@@ -474,6 +592,71 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera } = {}) {
             }
           }
         }
+
+        /**
+         * Advance the simulation to where show time says it should be.
+         *
+         * The number of steps taken by a given show time is a property of the
+         * show, not of the machine: `floor(age * SIM_HZ)`, every tab, whatever
+         * frame rate it manages. That plus a generator reseeded from the step
+         * index makes the whole simulation a pure function of the step number,
+         * which is the only way two projectors can agree about where a brick
+         * has fallen to.
+         *
+         * `draw` is still called exactly once, afterwards, with the real frame's
+         * time — so nothing pays for extra painting, and an effect that
+         * interpolates between steps still can.
+         */
+        const targetStep = Math.floor(ctx.age * SIM_HZ);
+        if (!effect.step) {
+          // Nothing to simulate, but the cursor still tracks show time — it is
+          // what indexes the generator below, and an effect whose sparks stopped
+          // moving because its seed stopped changing would be a poor trade.
+          inst.step = targetStep;
+        } else {
+          if (targetStep - inst.step > MAX_CATCHUP_STEPS) {
+            // Too far behind to run honestly. Start cold with a short warm-up.
+            inst.step = Math.max(0, targetStep - COLD_START_STEPS);
+          }
+          const stepDt = 1 / SIM_HZ;
+          ctx.dt = stepDt;
+          // No canvas during simulation: `step` decides what happens, `draw`
+          // decides what it looks like, and an effect that blurs the two would
+          // paint its catch-up frames on top of each other.
+          ctx.g = null;
+          while (inst.step < targetStep) {
+            inst.step++;
+            ctx.age = inst.step * stepDt;
+            ctx.t = inst.enabledAt + ctx.age;
+            ctx.beat = (ctx.t * (time.bpm || 120)) / 60;
+            ctx.beatPhase = ctx.beat - Math.floor(ctx.beat);
+            ctx.rng = makeRng(`${inst.key}#${inst.step}`);
+            try {
+              effect.step(ctx);
+            } catch (err) {
+              reportError(layer.id, effect.id, err);
+              break;
+            }
+          }
+          // Back to the frame's own view of time, and its canvas, for the paint.
+          ctx.g = target;
+          ctx.t = t;
+          ctx.dt = time.dt;
+          ctx.beat = beat;
+          ctx.beatPhase = beat - Math.floor(beat);
+          ctx.age = Math.max(0, t - inst.enabledAt);
+        }
+
+        /**
+         * Draw-time randomness is indexed too.
+         *
+         * An effect that scatters sparks without remembering them still has to
+         * scatter the *same* sparks in both tabs. Seeding from the step index
+         * rather than letting a stream run means the same show time produces the
+         * same numbers, and the sequence still moves on frame to frame because
+         * the step index does.
+         */
+        ctx.rng = makeRng(`${inst.key}~${inst.step}`);
 
         target.save();
         target.globalAlpha = useScratch ? 1 : opacity * master;

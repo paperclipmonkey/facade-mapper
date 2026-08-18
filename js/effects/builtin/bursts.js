@@ -66,16 +66,20 @@ const batBurst = {
   init() {
     return { swarm: null, born: -1 };
   },
-  draw({ g, p, shape, age, rng, state, noise }) {
-    const fade = envelope(age, p.duration);
-    if (fade <= 0) return;
-
-    const at = origin(shape);
+  /**
+   * Cast the swarm — once, at a moment every tab agrees on.
+   *
+   * This is the only stateful thing a burst does, and it has to happen here
+   * rather than on the first frame that gets drawn. `rng` is seeded from the
+   * simulation step, and the first frame lands on a different step depending on
+   * the frame rate: a tab at 60fps would cast from step one and a tab at 30fps
+   * from step two, so two projectors threw two different swarms out of the same
+   * window. `step` always runs from step one, whatever the frame rate.
+   */
+  step({ p, age, rng, state }) {
     const count = Math.round(clamp(p.count, 4, 200));
 
     /**
-     * Cast once per firing.
-     *
      * Keyed on the age going backwards, which is what a retrigger looks like
      * from in here — the layer was switched off and on, the clock restarted,
      * and this needs a fresh swarm rather than the tail of the last one.
@@ -99,6 +103,11 @@ const batBurst = {
       });
     }
     state.born = Math.min(state.born, age);
+  },
+  draw({ g, p, shape, age, state, noise }) {
+    const fade = envelope(age, p.duration);
+    if (fade <= 0 || !state.swarm) return;
+    const at = origin(shape);
 
     g.save();
     for (const b of state.swarm) {
@@ -244,10 +253,17 @@ const sparkBurst = {
   init() {
     return { sparks: null, born: -1 };
   },
-  draw({ g, p, shape, age, rng, state }) {
-    const fade = envelope(age, p.duration);
-    if (fade <= 0) return;
-    const at = origin(shape);
+  /**
+   * Cast the swarm — once, at a moment every tab agrees on.
+   *
+   * This is the only stateful thing a burst does, and it has to happen here
+   * rather than on the first frame that gets drawn. `rng` is seeded from the
+   * simulation step, and the first frame lands on a different step depending on
+   * the frame rate: a tab at 60fps would cast from step one and a tab at 30fps
+   * from step two, so two projectors threw two different swarms out of the same
+   * window. `step` always runs from step one, whatever the frame rate.
+   */
+  step({ p, age, rng, state }) {
     const count = Math.round(clamp(p.count, 5, 400));
 
     // Recast on a retrigger, which from in here is the age going backwards.
@@ -267,6 +283,11 @@ const sparkBurst = {
       });
     }
     state.born = Math.min(state.born, age);
+  },
+  draw({ g, p, shape, age, state }) {
+    const fade = envelope(age, p.duration);
+    if (fade <= 0 || !state.sparks) return;
+    const at = origin(shape);
 
     g.save();
     g.globalCompositeOperation = 'lighter';

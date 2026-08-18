@@ -30,6 +30,14 @@ export default {
     return { seeded: rng() };
   },
 
+  // Optional, and required for anything that carries state between frames.
+  // Runs at a fixed 60 steps a second whatever the frame rate, with a constant
+  // \`dt\` and no canvas — which is what makes two projectors covering the same
+  // wall paint the same animation. Move particles here; paint them in \`draw\`.
+  step({ p, shape, t, dt, state, rng, noise }) {
+    state.phase = (state.phase || 0) + p.speed * dt;
+  },
+
   draw({ g, p, shape, t, dt, i, n, state, rng, noise }) {
     const { bbox, path, sampler } = shape;
 
@@ -176,6 +184,37 @@ export const HELP_SECTIONS = [
   <strong>Course offset up</strong> to slide the whole lattice onto them. The lattice is anchored to
   the show rather than to each shape, so two walls either side of a door agree about where the
   courses are, and one pair of offsets registers all of them at once.
+</p>
+
+<h2>Why every tab shows the same thing</h2>
+<p>
+  Every tab renders the show for itself, from the same project and the same broadcast clock, at
+  whatever frame rate it can manage. Which is fine for an effect that is a function of the
+  time — a wash, a pulse, anything driven by noise — and was quietly not fine for anything that
+  <em>remembers</em>: particles, things that fall, things that spawn at a rate. Those depended on
+  how many frames the tab had drawn, so a projector and the control preview drifted apart, and two
+  projectors covering the same brickwork painted two different animations onto it.
+</p>
+<p>
+  Three things are pinned down so that cannot happen. <strong>When a layer came on</strong> is
+  recorded in the project rather than measured by each tab, so a projector opened halfway through
+  the evening no longer believes every one-shot has just been fired. <strong>Randomness</strong> is
+  seeded from the simulation step rather than running as a stream, so the same show time draws the
+  same numbers however many frames got there first. And <strong>the simulation</strong> runs at a
+  fixed sixty steps a second: by any given show time exactly the same number of steps has been
+  taken, in every tab.
+</p>
+<p>
+  Writing an effect, that means one rule: anything that changes <code>state</code> belongs in
+  <code>step</code>, and <code>draw</code> only paints. An effect with no <code>step</code> is
+  treated as a pure function of time and left alone, which is right for most of them.
+</p>
+<p>
+  <strong>The one gap.</strong> A tab opened — or left unrendered — for more than about ten seconds
+  cannot honestly replay the steps it missed, so it starts that effect cold and warms up over a
+  second and a half. It will be out of phase with the others until that layer next restarts.
+  Projector tabs are fullscreen and always drawing, so this is really only the control preview
+  after the window has been buried behind something else.
 </p>
 
 <h2>Multiple projectors</h2>
