@@ -99,28 +99,41 @@ export function paramRow(def, value, binding, handlers) {
       const readout = el('span', { class: 'param-value', text: fmt(current) });
 
       /**
-       * Put a value on the slider, widening the track if it does not fit.
+       * Put a value on the slider, held to the range the engine will honour.
        *
-       * A range input silently clamps whatever you assign to it. So a value
-       * outside the designed span — typed in below, or arrived at through a
-       * binding, or imported — used to leave the slider, the readout and the
-       * stored parameter all disagreeing, with nothing on screen to say so. The
-       * next nudge of the slider then threw the real value away, because the
-       * slider's idea of where it was had never been true.
+       * The range on a parameter is not a suggestion. `resolveParams` clamps
+       * every numeric parameter to `min`..`max` before the effect ever sees it,
+       * and deliberately: a modulator or an expression can produce anything, and
+       * effects should not have to defend themselves against it. So a value past
+       * the end of the range is not a bigger setting, it is a number that will be
+       * quietly reduced on its way to the wall.
        *
-       * The range on a parameter is a statement about what is *useful*, not a
-       * limit on what is possible, and the stored value is the thing that is
-       * true. So the track grows to admit it rather than the value being
-       * quietly rounded to fit the track.
+       * Which makes this the one thing the control must not do — accept a value
+       * it knows will not be used. Typing 10 into a control that stops at 3 used
+       * to store 10, display 10 and hand the effect 3, so every value above the
+       * limit looked identical and the slider appeared to have stopped working.
+       * Clamped here instead, and said out loud, so what you read is what is on
+       * the house.
        */
+      const limit = (n) => {
+        let v = Number(n);
+        if (!isFinite(v)) v = Number(def.default ?? 0);
+        if (def.min !== undefined) v = Math.max(Number(def.min), v);
+        if (def.max !== undefined) v = Math.min(Number(def.max), v);
+        return v;
+      };
+
       const place = (num) => {
-        if (num > Number(input.max)) input.max = String(num);
-        if (num < Number(input.min)) input.min = String(num);
         input.value = String(num);
         readout.textContent = fmt(num);
       };
 
-      place(current);
+      // A stored value out of range — an imported show, or an edit made while
+      // this control was still willing to accept one — is shown as the value
+      // that will actually be used rather than as itself.
+      const shown = limit(current);
+      place(shown);
+      if (shown !== current) commit(shown);
 
       input.addEventListener('input', () => {
         readout.textContent = fmt(Number(input.value));
@@ -133,8 +146,12 @@ export function paramRow(def, value, binding, handlers) {
         if (entered === null) return;
         const num = Number(entered);
         if (!isFinite(num)) return;
-        place(num);
-        commit(num);
+        const held = limit(num);
+        if (held !== num) {
+          toast(`${def.label || def.key} goes from ${fmt(Number(def.min ?? 0))} to ${fmt(Number(def.max ?? 1))}. Set to ${fmt(held)}.`);
+        }
+        place(held);
+        commit(held);
       });
       readout.title = 'Double-click to type a value';
       control.append(input, readout);
@@ -227,8 +244,27 @@ export function paramRow(def, value, binding, handlers) {
 
     case 'select': {
       const select = el('select');
-      for (const option of def.options || []) {
+      const options = def.options || [];
+      for (const option of options) {
         select.appendChild(el('option', { value: option, text: option, selected: option === value }));
+      }
+      /**
+       * A stored value that is not on the list still has to be shown.
+       *
+       * With no option marked selected a browser displays the *first* one, so an
+       * imported show carrying a font or a mode this build does not have read as
+       * though it were set to something it was not — and touching anything else
+       * in the row committed that reading. The effect meanwhile went on using
+       * the stored string and falling back internally, so the picture and the
+       * panel disagreed with nothing to say which was right.
+       */
+      const stored = value ?? def.default;
+      if (stored !== undefined && stored !== null && !options.includes(stored)) {
+        select.appendChild(el('option', {
+          value: String(stored),
+          text: `${stored} — not available`,
+          selected: true,
+        }));
       }
       select.addEventListener('change', () => commit(select.value));
       control.appendChild(select);
