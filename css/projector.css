@@ -10,6 +10,12 @@
 
 .projector-body.hide-cursor { cursor: none; }
 
+/* Click-to-align draws its own crosshair, and it is the thing being placed.
+   The system arrow beside it is a second, sharper mark half a centimetre away
+   on the wall, which is exactly the ambiguity the crosshair exists to remove. */
+.projector-body.pointing,
+.projector-body.pointing #overlay { cursor: none; }
+
 #output,
 #overlay {
   position: fixed;

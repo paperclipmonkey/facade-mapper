@@ -16,7 +16,7 @@
  *   node test/geometry.test.mjs
  */
 
-import { runCalibration, markerPositions, solveFromCorners } from '../js/control/calibration.js';
+import { runCalibration, markerPositions, solveFromCorners, solveFromPointPairs } from '../js/control/calibration.js';
 import { solveHomography, applyH, mat3Inverse, homographyError } from '../js/core/math.js';
 import { findBrightestBlob } from '../js/control/camera.js';
 import { computeRegion, sampleMesh } from '../js/render/warp.js';
@@ -363,6 +363,49 @@ async function calibrateAgainst(Hgt, opts = {}) {
   const patched = residualMesh(holed, H, axis, region);
   ok('a missed marker does not break the correction',
      patched !== null && patched.offsets.every((v) => Number.isFinite(v)));
+}
+
+/* ---- 7. Click-to-align point pairs ---- */
+{
+  // A known camera->projector mapping, sampled at four features that could
+  // plausibly be window corners: spread out, and none of them on the frame edge.
+  const Hgt = [1.32, 0.09, -0.13, -0.07, 1.18, -0.06, 0.24, -0.11, 1];
+  const features = [
+    { x: 0.18, y: 0.22 },
+    { x: 0.79, y: 0.17 },
+    { x: 0.84, y: 0.71 },
+    { x: 0.23, y: 0.8 },
+  ];
+  const pairs = features.map((f) => ({ camera: f, output: applyH(Hgt, f.x, f.y) }));
+
+  const solved = solveFromPointPairs(pairs);
+  ok('pointed pairs solve', !!solved);
+
+  let worst = 0;
+  for (const f of features) {
+    const got = applyH(solved.H, f.x, f.y);
+    const want = applyH(Hgt, f.x, f.y);
+    worst = Math.max(worst, Math.hypot(got.x - want.x, got.y - want.y));
+  }
+  ok('pointed pairs recover the mapping', worst < 1e-9, `worst ${worst.toExponential(2)}`);
+
+  // Four pairs fit exactly whatever they are, so the residual says nothing and
+  // must not be reported as a measurement of the alignment.
+  ok('four pairs are not rated on their residual', solved.quality.rating === 'pointed', solved.quality.rating);
+
+  // A fifth, deliberately misplaced, is the first thing that can be measured.
+  const slipped = pairs.concat([{ camera: { x: 0.5, y: 0.5 }, output: applyH(Hgt, 0.56, 0.44) }]);
+  const noisy = solveFromPointPairs(slipped);
+  ok('a misplaced fifth point shows up in the residual',
+     noisy.quality.meanPx > 8 && noisy.quality.rating !== 'pointed',
+     `${noisy.quality.meanPx.toFixed(1)} px, rated ${noisy.quality.rating}`);
+
+  ok('too few pairs are refused', solveFromPointPairs(pairs.slice(0, 3)) === null);
+  ok('collinear features are refused',
+     solveFromPointPairs([0.1, 0.3, 0.5, 0.7].map((t) => ({
+       camera: { x: t, y: t },
+       output: { x: t, y: t },
+     }))) === null);
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILURE(S)`}`);

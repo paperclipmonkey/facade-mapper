@@ -134,8 +134,30 @@ passing car — and re-solves if that clearly helps.
   patchy. If your camera app can lock them, do that first.
 
 If the camera can't manage it — too bright, too far, a phone that insists on
-auto-exposing — put a test grid up and drag the four corners by hand with the
-**Corners** tool. Same maths, worse input.
+auto-exposing — there are two ways to do it by hand, and they fail in different
+places.
+
+**Align by pointing** is usually the better one outdoors. Click a feature on the
+camera view — a window corner, the top of the door — then go to the projector
+tab, walk the projected crosshair onto that same feature on the real house, and
+click. Four of those solve the alignment, and it goes live as you give them, so
+you can watch the show settle onto the building. The arrow keys nudge the
+crosshair a pixel at a time, which is finer than you can place a mouse pointer
+on a wall thirty feet away, and shift makes it ten. Every reference point is a
+feature *of the house*, so you can spread them over the part of the wall that
+matters, and none of them has to be somewhere the beam happens to land.
+
+**Corners** is the other: put a test pattern up and drag four handles onto where
+the projector's own corners fall on the camera view. Same maths, and quick when
+you can see all four — but on a house the corners of the beam habitually land on
+the sky, the hedge and the drive, and a corner you cannot see is a corner you
+cannot put a handle on.
+
+The **corners** test pattern marks each corner of the output with an L, and the
+grid and corner patterns now draw over the show rather than replacing it, so a
+chase running round the shapes you traced stays visible while you line the
+projector up. The plain colour and greyscale patterns still take the screen over
+completely — those are for reading the lamp, not for aiming it.
 
 ## When the wall is not flat
 

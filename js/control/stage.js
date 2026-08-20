@@ -354,6 +354,13 @@ export function createStage({ canvas, wrap, app }) {
       return;
     }
 
+    // Click-to-align marks features on the camera picture, and only there: the
+    // pairs it collects are camera→projector, which is what an alignment is.
+    if (app.tool === 'point') {
+      app.pointAlignMark?.(cam);
+      return;
+    }
+
     if (app.tool === 'polygon' || app.tool === 'path') {
       addDraftPoint(world, ev.shiftKey);
       return;
@@ -426,6 +433,7 @@ export function createStage({ canvas, wrap, app }) {
       hover = app.tool === 'select' || app.tool === 'corners' || app.tool === 'square' || app.tool === 'depth'
         ? hitTest(cam)
         : hover;
+
       if (drafting) drafting.preview = world;
       return;
     }
@@ -700,6 +708,7 @@ export function createStage({ canvas, wrap, app }) {
     drawCorners(w, h);
     drawSquaring(w, h);
     drawScanPlacement(w, h);
+    drawFeaturePins(w, h);
     drawViewReadout(w, h);
   }
 
@@ -995,10 +1004,29 @@ export function createStage({ canvas, wrap, app }) {
       g.fillText(labels[i], c.x + 13 * ui, c.y);
     });
 
-    // Where each feature was said to be. Kept on screen after solving, because
-    // a pair in the wrong place is much easier to spot than to deduce from a
-    // placement that is slightly off.
-    const draft = app.scanDraft;
+    g.restore();
+  }
+
+  /**
+   * Where each feature of a pair was said to be, on the camera picture.
+   *
+   * Kept on screen after solving, because a pair put in the wrong place is much
+   * easier to spot as a pin on the wrong window than to deduce from a result
+   * that is merely slightly off.
+   *
+   * Both point-pair tools draw the same pins, and this is its own pass rather
+   * than part of either: it had been sitting inside the squaring tool's draw,
+   * which returns early unless that tool is open, so the pins the scan
+   * placement tells you to line features up with were never actually on screen.
+   */
+  function drawFeaturePins(w, h) {
+    const draft = app.tool === 'depth' ? app.scanDraft : null;
+    const align = app.tool === 'point' ? app.pointAlign : null;
+    if (!draft && !align) return;
+
+    g.save();
+    g.textBaseline = 'middle';
+
     if (draft) {
       draft.pairs.forEach((pair, i) => {
         drawPin(pair.camera.x * w, pair.camera.y * h, String(i + 1), '#7ee081');
@@ -1009,6 +1037,26 @@ export function createStage({ canvas, wrap, app }) {
         g.fillText(`Click feature ${draft.pairs.length + 1} here`, 14 * ui, 20 * ui);
       }
     }
+
+    if (align) {
+      align.pairs.forEach((pair, i) => {
+        drawPin(pair.camera.x * w, pair.camera.y * h, String(i + 1), '#7ee081');
+      });
+      // The half-finished pair gets a ring as well as a pin: its other half is
+      // not on this screen, it is out on the wall waiting for the crosshair,
+      // and the ring is what says "this one is still open".
+      if (align.picking) {
+        const px = align.picking.x * w;
+        const py = align.picking.y * h;
+        g.strokeStyle = '#ffd166';
+        g.lineWidth = 1.5 * ui;
+        g.beginPath();
+        g.arc(px, py, 14 * ui, 0, Math.PI * 2);
+        g.stroke();
+        drawPin(px, py, String(align.pairs.length + 1), '#ffd166');
+      }
+    }
+
     g.restore();
   }
 

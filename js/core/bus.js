@@ -39,6 +39,18 @@ export const MSG = {
   CALIB: 'calib',
   /** Projector -> control: the requested calibration frame is on screen. */
   CALIB_ACK: 'calib-ack',
+  /**
+   * Control -> one projector: put a crosshair up (or take it down).
+   *
+   * The other half of click-to-align. The projector draws a crosshair the
+   * operator drives around with the mouse, and the point of it is that it lands
+   * on the *building* — you walk it onto the real window corner you just marked
+   * on the camera view and click, which is a correspondence between the
+   * projector's output and the wall that needs no camera to observe it.
+   */
+  POINT: 'point',
+  /** Projector -> control: the crosshair was placed, in normalised output coordinates. */
+  POINTED: 'pointed',
   /** Control -> one/all: imperative actions (identify, fullscreen, reload). */
   COMMAND: 'command',
   /** Projector -> control: runtime error, so failures aren't invisible on a dark tab. */
