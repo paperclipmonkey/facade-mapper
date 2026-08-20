@@ -51,6 +51,7 @@ import {
   remapPoints,
   defaultRectifyQuad,
   createRectify,
+  cameraToWorld,
 } from '../core/rectify.js';
 import { mat3Inverse, applyH, solveHomography, homographyError } from '../core/math.js';
 import {
@@ -79,7 +80,7 @@ import { loadUserEffects, listByCategory, defaultParams, getEffect, getCompileEr
 import { captureScene, activateScene as applyScene, applySceneToLayers, sceneDrift, tickPlaylist, transitionProgress, effectiveLayers } from '../core/scenes.js';
 import { createCamera } from './camera.js';
 import { feed as extraFeed, pruneFeeds } from './feeds.js';
-import { runCalibration, checkDrift, solveFromCorners } from './calibration.js';
+import { runCalibration, checkDrift, solveFromCorners, solveFromPointPairs, POINT_PAIRS_NEEDED } from './calibration.js';
 import { createStage, defaultWorldQuad } from './stage.js';
 import { createAudioAnalyser } from './audio.js';
 import { renderInspector } from './inspector.js';
@@ -625,6 +626,7 @@ const TOOL_HINTS = {
   corners: 'Drag the four yellow handles to where the selected projector’s corners land on the house.',
   square: 'Drag the four handles onto something you know is rectangular, then say what shape it really is in the Setup panel.',
   depth: 'Point at the same feature in both pictures — a window corner on the scan, then the same corner on the camera view.',
+  point: 'Click a feature on the camera view, then walk the projected crosshair onto that same spot on the house and click.',
 };
 
 function setTool(tool) {
@@ -634,10 +636,12 @@ function setTool(tool) {
   // the project says.
   const leavingDepth = app.tool === 'depth' && tool !== 'depth';
   const leavingCorners = app.tool === 'corners' && tool !== 'corners';
+  const leavingPoint = app.tool === 'point' && tool !== 'point';
   if (leavingDepth) app.scanDraft = null;
   app.tool = tool;
   if (leavingDepth) app.renderScanPanel?.();
   if (leavingCorners) endCornersSession();
+  if (leavingPoint) endPointAlign();
   for (const button of document.querySelectorAll('.tool')) {
     button.classList.toggle('active', button.dataset.tool === tool);
   }
@@ -737,6 +741,189 @@ app.finishManualCorners = (projectorId) => {
   if (projectorId && app.cornersSession && app.cornersSession.projectorId !== projectorId) return;
   setTool('select');
 };
+
+/* ------------------------------------------------------------------ *
+ * Click-to-align
+ *
+ * The third way to align a projector, and on a real house at night usually the
+ * quickest. The camera solve needs a camera that can see the dots; the corners
+ * tool needs you to be able to see where the four corners of the beam land, and
+ * outdoors they habitually land on the sky, the hedge and the drive.
+ *
+ * Pointing needs neither. You mark a feature on the camera view — a window
+ * corner, the top of the door — and then walk a crosshair projected on the wall
+ * onto that same real feature and click. Both halves of the pair are things you
+ * can see: one in the picture, one on the building. Four pairs determine the
+ * mapping exactly, and because the features are on the wall by definition, they
+ * can be spread right across the part of it that matters.
+ *
+ * The pairs are camera→projector, which is what gets stored, so re-squaring the
+ * wall afterwards does not invalidate an alignment somebody stood outside for.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Null unless the tool is open.
+ *
+ * `picking` is a feature marked on the camera view whose twin on the wall has
+ * not been given yet — the half-finished pair the projector is showing a
+ * crosshair for.
+ */
+app.pointAlign = null;
+
+app.beginPointAlign = (projectorId) => {
+  const projector = app.project.projectors.find((p) => p.id === projectorId);
+  if (!projector) return;
+  if (!presence.forProjector(projectorId)) {
+    toast('Open this projector\u2019s tab first — the crosshair has to be projected on the wall.', 'bad');
+    return;
+  }
+  app.pushUndo();
+  app.pointAlign = { projectorId, pairs: [], picking: null, error: null, residual: 0 };
+  app.select({ type: 'projector', id: projectorId });
+  setTool('point');
+  refreshInspector();
+  toast('Click a feature on the camera view — a window corner, the top of the door.');
+};
+
+/** Take the crosshair down and close the tool. Nothing to apply; see below. */
+app.finishPointAlign = (projectorId) => {
+  if (app.tool !== 'point') return;
+  if (projectorId && app.pointAlign && app.pointAlign.projectorId !== projectorId) return;
+  setTool('select');
+};
+
+function endPointAlign() {
+  const draft = app.pointAlign;
+  app.pointAlign = null;
+  if (!draft) return;
+  bus.post(MSG.POINT, { projectorId: draft.projectorId, active: false });
+  refreshInspector();
+}
+
+/**
+ * A projector tab announcing itself while a pick is open gets asked again.
+ *
+ * Reloading a projector tab mid-alignment is not a rare event — it is what you
+ * do when it has gone wrong — and without this the crosshair never comes back
+ * and the tool sits waiting for an answer nothing is being asked for. The
+ * announcement repeats every few seconds, which makes re-asking free: the
+ * crosshair keeps whatever position it was nudged to.
+ */
+bus.on(MSG.HELLO, (payload) => {
+  if (!app.pointAlign?.picking) return;
+  if (payload?.projectorId !== app.pointAlign.projectorId) return;
+  askForPoint();
+});
+
+/** Ask the projector for the other half of the pair now being collected. */
+function askForPoint() {
+  const draft = app.pointAlign;
+  if (!draft?.picking) return;
+  bus.post(MSG.POINT, {
+    projectorId: draft.projectorId,
+    active: true,
+    label: `Put the cross on feature ${draft.pairs.length + 1}, then click`,
+  });
+}
+
+/**
+ * A click landed on the camera view while the tool is open.
+ *
+ * Clicking again before going to the projector re-marks the same feature rather
+ * than starting a second one — in the dark that is a correction, not a new pair.
+ */
+app.pointAlignMark = (cam) => {
+  const draft = app.pointAlign;
+  if (!draft) return false;
+  draft.picking = { x: cam.x, y: cam.y };
+  draft.error = null;
+  askForPoint();
+  refreshInspector();
+  return true;
+};
+
+/** Throw away the last pair, or the unfinished half of one. */
+app.pointAlignUndo = () => {
+  const draft = app.pointAlign;
+  if (!draft) return;
+  if (draft.picking) {
+    draft.picking = null;
+    bus.post(MSG.POINT, { projectorId: draft.projectorId, active: false });
+  } else {
+    draft.pairs.pop();
+  }
+  resolvePointAlign();
+  refreshInspector();
+};
+
+/**
+ * The crosshair was placed.
+ *
+ * Solving happens here rather than behind an Apply button, for the same reason
+ * the corners tool has none: the alignment is the thing being judged, so it has
+ * to be live while you judge it. From the fourth pair on, every further point
+ * visibly tightens the show onto the house.
+ */
+bus.on(MSG.POINTED, (payload) => {
+  const draft = app.pointAlign;
+  if (!draft || !draft.picking) return;
+  if (payload.projectorId && payload.projectorId !== draft.projectorId) return;
+
+  if (payload.cancel) {
+    draft.picking = null;
+    refreshInspector();
+    return;
+  }
+
+  draft.pairs.push({ camera: draft.picking, output: { x: payload.x, y: payload.y } });
+  draft.picking = null;
+  resolvePointAlign();
+  refreshInspector();
+});
+
+function resolvePointAlign() {
+  const draft = app.pointAlign;
+  if (!draft) return;
+  draft.error = null;
+  draft.residual = 0;
+  if (draft.pairs.length < POINT_PAIRS_NEEDED) return;
+
+  const projector = app.project.projectors.find((p) => p.id === draft.projectorId);
+  if (!projector) return;
+
+  const solved = solveFromPointPairs(draft.pairs);
+  if (!solved) {
+    // Four points on a line, or three of them in the same place. Worth saying,
+    // because the fix is to pick features further apart rather than to retry.
+    draft.error = 'Those points do not describe a flat wall seen from one place. '
+      + 'Spread them further apart — corners of different windows, not four corners of one.';
+    return;
+  }
+
+  draft.residual = solved.quality.meanNorm;
+  projector.calibration.H = solved.H;
+  projector.calibration.mode = 'manual';
+  projector.calibration.quality = solved.quality;
+  projector.calibration.calibratedAt = Date.now();
+  // Keep the hand-drag handles in step with what pointing just solved, so
+  // switching to the Corners tool for a nudge starts from this alignment
+  // rather than from wherever the handles were last left.
+  projector.calibration.worldQuad = quadFromMatrix(solved.H);
+  app.commit();
+}
+
+/** Where a camera→projector matrix puts the projector's own corners, in world space. */
+function quadFromMatrix(H) {
+  const inv = mat3Inverse(H);
+  if (!inv) return null;
+  const quad = [[0, 0], [1, 0], [1, 1], [0, 1]].map(([u, v]) => {
+    const cam = applyH(inv, u, v);
+    if (!cam) return null;
+    const world = cameraToWorld(app.project, cam);
+    return { x: world.x, y: world.y };
+  });
+  return quad.every(Boolean) ? quad : null;
+}
 
 /**
  * Set every projector's soft edges from where they actually overlap.
@@ -3629,6 +3816,7 @@ function onKeyDown(ev) {
       // A half-finished correspondence is the innermost thing to abandon, before
       // the tool it belongs to.
       if (app.tool === 'depth' && app.scanDraft?.picking) app.scanUndoPair();
+      else if (app.tool === 'point' && app.pointAlign?.picking) app.pointAlignUndo();
       else if (!stage.cancelDraft() && app.tool !== 'select') setTool('select');
       break;
     case 'Backspace':

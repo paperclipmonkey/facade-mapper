@@ -41,6 +41,11 @@ is for.
 - **Camera auto-alignment.** Each projector flashes a grid of dots; the camera
   watches where they land and solves the projector-to-camera mapping. You then
   draw on the camera picture and it appears on the right part of the house.
+- **Or align by pointing**, when the camera can't manage it. Click a window
+  corner on the camera view, then walk a projected crosshair onto that same
+  corner of the real house and click. Four of those and the show snaps onto the
+  building — no camera solve, and no need to see where the corners of the beam
+  land.
 - **Square up the wall.** The projector being off-axis is solved by alignment;
   the *camera* being off-axis is not, and it is the one you can see — generated
   texture like brickwork comes out regular from where the camera stands and fans

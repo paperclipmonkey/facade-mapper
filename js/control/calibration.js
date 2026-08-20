@@ -432,6 +432,41 @@ export function solveFromCorners(worldQuad, rectifyH = null) {
   return { H, quality: { ...assessQuality(H, src, dst), rating: 'manual' } };
 }
 
+/**
+ * Alignment from pairs of "this spot on the camera view is that spot in the
+ * output".
+ *
+ * The camera solve and the corners tool both need the projector's own frame to
+ * be observable: the first needs a camera that can see the dots, the second
+ * needs you to be able to see where the four corners of the beam land. Outdoors
+ * that second one is the weak link — the corners of a projector aimed at a
+ * house habitually fall on the sky, the hedge and the drive, and a corner you
+ * cannot see is a corner you cannot put a handle on.
+ *
+ * Pointing has no such requirement. The reference points are features of the
+ * *building* — a window corner, the top of the door — so they are by definition
+ * on the wall, and you can choose ones that are spread across it. Four of them
+ * determine the homography exactly; more improve it in the least-squares sense
+ * and, unlike four, actually measure whether one was put in the wrong place.
+ *
+ * @param {{camera:{x,y}, output:{x,y}}[]} pairs
+ */
+export const POINT_PAIRS_NEEDED = 4;
+
+export function solveFromPointPairs(pairs) {
+  if (!Array.isArray(pairs) || pairs.length < 4) return null;
+  const src = pairs.map((p) => ({ x: p.camera.x, y: p.camera.y }));
+  const dst = pairs.map((p) => ({ x: p.output.x, y: p.output.y }));
+  const H = solveHomography(src, dst);
+  if (!H || !mat3Inverse(H)) return null;
+  const quality = assessQuality(H, src, dst);
+  // With exactly four pairs the fit is exact by construction, so its residual
+  // is zero and rating it "excellent" would be reporting the arithmetic rather
+  // than the alignment. Only a fifth pair onwards is a measurement.
+  if (pairs.length <= 4) quality.rating = 'pointed';
+  return { H, quality };
+}
+
 /** The projector's output boundary, expressed in world space, for the preview overlay. */
 export function projectorOutline(H, steps = 1) {
   const inv = H ? mat3Inverse(H) : null;

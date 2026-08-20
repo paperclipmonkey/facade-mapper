@@ -62,6 +62,17 @@ let audio = { level: 0, low: 0, mid: 0, high: 0 };
 
 /** Calibration takes over the screen entirely while it runs. */
 let calibFrame = null;
+
+/**
+ * Click-to-align: a crosshair the operator drives onto a real feature.
+ *
+ * Null unless the control tab has asked for a point. `pointAt` outlives the
+ * asking, because the pairs are collected one after another and the second
+ * feature is rarely on the other side of the house from the first — starting
+ * each pick where the last one finished saves crossing the wall every time.
+ */
+let pointing = null;
+let pointAt = { x: 0.5, y: 0.5 };
 let identifyUntil = 0;
 let statusVisible = false;
 let noticeTimer = null;
@@ -343,6 +354,16 @@ function drawOverlay(now) {
   const pattern = projector?.testPattern || 'off';
   const identifying = now < identifyUntil;
 
+  if (pointing) {
+    // Pointing is exclusive. You are being asked to find a corner of the real
+    // building through the projected light, so the least light on it the
+    // better — a test pattern or the show underneath is glare on the very
+    // thing you are aiming at.
+    overlay.style.opacity = '1';
+    drawPointing(g, w, h, now);
+    return;
+  }
+
   if (pattern === 'off' && !identifying) {
     overlay.style.opacity = '0';
     return;
@@ -381,9 +402,44 @@ function drawCalibrationFrame(g, w, h, frame) {
   }
 }
 
+/**
+ * Patterns that replace the show with a flat field, rather than drawing over it.
+ *
+ * White, the primaries and the greyscale ramp are measurements: you are reading
+ * the lamp, the colour and the black level off the wall, so anything else in the
+ * frame is contamination. The grid and the corner marks are the opposite kind of
+ * thing — they exist to be lined up against the building, and on a manual
+ * alignment the show is what you are lining up. Blacking it out hid the very
+ * animation that tells you the shapes have landed on the right windows, so the
+ * alignment patterns now draw on top of it.
+ */
+const OPAQUE_PATTERNS = new Set(['white', 'red', 'green', 'blue', 'greyscale']);
+
+/**
+ * Stroke a path twice: a dark casing first, then the bright line inside it.
+ *
+ * Alignment marks sit over the running show now rather than over a black field,
+ * and a white line across a lit window is not a line. One extra stroke keeps
+ * every mark readable whatever is underneath it.
+ */
+function haloStroke(g, colour, width, trace) {
+  g.strokeStyle = 'rgba(0,0,0,0.85)';
+  g.lineWidth = width * 2.2;
+  g.beginPath();
+  trace(g);
+  g.stroke();
+  g.strokeStyle = colour;
+  g.lineWidth = width;
+  g.beginPath();
+  trace(g);
+  g.stroke();
+}
+
 function drawTestPattern(g, w, h, pattern) {
-  g.fillStyle = '#000';
-  g.fillRect(0, 0, w, h);
+  if (OPAQUE_PATTERNS.has(pattern)) {
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, w, h);
+  }
 
   if (pattern === 'white' || pattern === 'red' || pattern === 'green' || pattern === 'blue') {
     g.fillStyle = { white: '#fff', red: '#f00', green: '#0f0', blue: '#00f' }[pattern];
@@ -393,56 +449,85 @@ function drawTestPattern(g, w, h, pattern) {
 
   if (pattern === 'grid') {
     const step = Math.round(Math.min(w, h) / 16);
-    g.strokeStyle = '#00ff88';
-    g.lineWidth = Math.max(1, step / 40);
-    g.beginPath();
-    for (let x = 0; x <= w; x += step) {
-      g.moveTo(x, 0);
-      g.lineTo(x, h);
-    }
-    for (let y = 0; y <= h; y += step) {
-      g.moveTo(0, y);
-      g.lineTo(w, y);
-    }
-    g.stroke();
+    g.lineCap = 'butt';
+    g.lineJoin = 'miter';
 
-    g.strokeStyle = '#ff0055';
-    g.lineWidth = Math.max(2, step / 12);
-    g.strokeRect(g.lineWidth / 2, g.lineWidth / 2, w - g.lineWidth, h - g.lineWidth);
-    g.beginPath();
-    g.moveTo(0, 0);
-    g.lineTo(w, h);
-    g.moveTo(w, 0);
-    g.lineTo(0, h);
-    g.stroke();
+    haloStroke(g, '#00ff88', Math.max(1, step / 40), (c) => {
+      for (let x = 0; x <= w; x += step) {
+        c.moveTo(x, 0);
+        c.lineTo(x, h);
+      }
+      for (let y = 0; y <= h; y += step) {
+        c.moveTo(0, y);
+        c.lineTo(w, y);
+      }
+    });
 
-    g.fillStyle = '#fff';
+    // The border is the frame edge itself, so it is drawn half a width inside:
+    // centred on the edge, a projector would only ever show you half of it.
+    const border = Math.max(2, step / 12);
+    haloStroke(g, '#ff0055', border, (c) => {
+      c.rect(border / 2, border / 2, w - border, h - border);
+      c.moveTo(0, 0);
+      c.lineTo(w, h);
+      c.moveTo(w, 0);
+      c.lineTo(0, h);
+    });
+
+    const label = `${w} × ${h}`;
     g.font = `${Math.round(Math.min(w, h) / 22)}px system-ui, sans-serif`;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    g.fillText(`${w} × ${h}`, w / 2, h / 2);
+    g.lineJoin = 'round';
+    g.lineWidth = Math.max(3, Math.min(w, h) / 160);
+    g.strokeStyle = 'rgba(0,0,0,0.85)';
+    g.strokeText(label, w / 2, h / 2);
+    g.fillStyle = '#fff';
+    g.fillText(label, w / 2, h / 2);
     return;
   }
 
   if (pattern === 'corners') {
-    const size = Math.min(w, h) * 0.14;
-    g.strokeStyle = '#fff';
-    g.lineWidth = Math.max(2, size / 18);
+    const size = Math.min(w, h) * 0.15;
+    const width = Math.max(3, size / 14);
+
+    /*
+     * Every leg used to be laid down the frame edge itself, and a stroke is
+     * centred on its path: half of each mark was outside the canvas and never
+     * reached the lamp. What survived was a couple of pixels in the outermost
+     * row of the panel — the row a projector's own overscan eats first, and the
+     * row that most often lands past the end of the wall. The corners were being
+     * drawn and were still not there to line anything up against.
+     *
+     * Offsetting each apex inward by half the line width puts the *outer* edge
+     * of the stroke on the frame edge, so the mark still says exactly where the
+     * corner of the output falls, at its full thickness.
+     */
+    const inset = width / 2;
+    g.lineCap = 'butt';
+    g.lineJoin = 'miter';
     for (const [cx, cy, dx, dy] of [
-      [0, 0, 1, 1],
-      [w, 0, -1, 1],
-      [w, h, -1, -1],
-      [0, h, 1, -1],
+      [inset, inset, 1, 1],
+      [w - inset, inset, -1, 1],
+      [w - inset, h - inset, -1, -1],
+      [inset, h - inset, 1, -1],
     ]) {
-      g.beginPath();
-      g.moveTo(cx, cy + dy * size);
-      g.lineTo(cx, cy);
-      g.lineTo(cx + dx * size, cy);
-      g.stroke();
+      haloStroke(g, '#fff', width, (c) => {
+        c.moveTo(cx, cy + dy * size);
+        c.lineTo(cx, cy);
+        c.lineTo(cx + dx * size, cy);
+      });
     }
-    g.beginPath();
-    g.arc(w / 2, h / 2, size / 2, 0, Math.PI * 2);
-    g.stroke();
+
+    haloStroke(g, '#fff', width, (c) => {
+      c.moveTo(w / 2 - size / 2, h / 2);
+      c.lineTo(w / 2 + size / 2, h / 2);
+      c.moveTo(w / 2, h / 2 - size / 2);
+      c.lineTo(w / 2, h / 2 + size / 2);
+    });
+    haloStroke(g, '#fff', width, (c) => {
+      c.arc(w / 2, h / 2, size / 2, 0, Math.PI * 2);
+    });
     return;
   }
 
@@ -454,6 +539,71 @@ function drawTestPattern(g, w, h, pattern) {
       g.fillRect((i * w) / steps, h * 0.3, w / steps + 1, h * 0.4);
     }
   }
+}
+
+/**
+ * The crosshair, drawn to be found from the end of the path.
+ *
+ * Full-frame hairlines rather than a compact reticle: a small mark on a house
+ * at night is genuinely hard to locate, and two lines that cross the whole
+ * output can be picked up anywhere along their length and followed in. The
+ * bright core at the intersection is the part you actually place, and it is
+ * the only part drawn at full brightness so that it stays the thing your eye
+ * goes to.
+ */
+function drawPointing(g, w, h, now) {
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, w, h);
+
+  const x = pointAt.x * w;
+  const y = pointAt.y * h;
+  const unit = Math.min(w, h);
+  const pulse = 0.5 + 0.5 * Math.sin(now / 260);
+
+  g.lineCap = 'butt';
+  g.lineJoin = 'miter';
+  g.strokeStyle = `rgba(0,255,136,${0.5 + 0.3 * pulse})`;
+  g.lineWidth = Math.max(2, unit / 450);
+  g.beginPath();
+  g.moveTo(0, y);
+  g.lineTo(w, y);
+  g.moveTo(x, 0);
+  g.lineTo(x, h);
+  g.stroke();
+
+  // The core: a gap at the centre so the thing being aimed at is not covered
+  // by the mark aiming at it.
+  const gap = unit * 0.012;
+  const arm = unit * 0.05;
+  haloStroke(g, '#ffffff', Math.max(2, unit / 420), (c) => {
+    c.moveTo(x - arm, y);
+    c.lineTo(x - gap, y);
+    c.moveTo(x + gap, y);
+    c.lineTo(x + arm, y);
+    c.moveTo(x, y - arm);
+    c.lineTo(x, y - gap);
+    c.moveTo(x, y + gap);
+    c.lineTo(x, y + arm);
+  });
+  haloStroke(g, '#ffffff', Math.max(1.5, unit / 700), (c) => {
+    c.arc(x, y, gap, 0, Math.PI * 2);
+  });
+
+  const label = pointing?.label || 'Put the cross on the feature and click';
+  const size = Math.round(unit / 34);
+  g.font = `600 ${size}px system-ui, sans-serif`;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.lineJoin = 'round';
+  g.lineWidth = Math.max(3, size / 4);
+  g.strokeStyle = 'rgba(0,0,0,0.9)';
+  const lines = [label, 'Arrow keys nudge · Enter places it · Esc cancels'];
+  lines.forEach((line, i) => {
+    const ly = h - size * (2.6 - i * 1.4);
+    g.strokeText(line, w / 2, ly);
+    g.fillStyle = i ? 'rgba(255,255,255,0.6)' : '#00ff88';
+    g.fillText(line, w / 2, ly);
+  });
 }
 
 function drawIdentify(g, w, h, now) {
@@ -494,6 +644,13 @@ function frame(now) {
         bus.post(MSG.CALIB_ACK, { tabId: bus.tabId, projectorId, index: calibFrame?.index ?? -1 });
       });
     }
+    return;
+  }
+
+  if (pointing) {
+    // Same reasoning as the black field behind the crosshair: the operator is
+    // looking for a real edge on a real building, and the show is light on it.
+    warp?.clear();
     return;
   }
 
@@ -606,6 +763,11 @@ bus.on(MSG.CALIB, (payload) => {
   calibFrame = { ...payload, pendingAck: true };
 });
 
+bus.on(MSG.POINT, (payload) => {
+  if (payload.projectorId && payload.projectorId !== projectorId) return;
+  setPointing(payload.active ? { label: payload.label || '' } : null);
+});
+
 bus.on(MSG.COMMAND, (payload) => {
   if (payload.projectorId && payload.projectorId !== projectorId) return;
   switch (payload.action) {
@@ -655,6 +817,95 @@ function requestFullscreen() {
     notify(`Could not go fullscreen: ${err.message}`);
   });
 }
+
+/* ------------------------------------------------------------------ *
+ * Click-to-align
+ *
+ * The overlay is `pointer-events: none` for the whole of the rest of the
+ * night — a projector tab that can be clicked is a projector tab somebody
+ * accidentally drags a selection across — so it is turned on only while a
+ * point is being asked for, and off again the moment one is given.
+ * ------------------------------------------------------------------ */
+
+function setPointing(next) {
+  pointing = next;
+  overlay.style.pointerEvents = next ? 'auto' : 'none';
+  document.body.classList.toggle('pointing', !!next);
+}
+
+function movePointTo(clientX, clientY) {
+  const rect = overlay.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  pointAt = {
+    x: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
+    y: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
+  };
+}
+
+/**
+ * Nudge, in whole output pixels.
+ *
+ * A mouse on a trestle table in the dark does not place a point on a window
+ * reveal thirty feet away, and the error it leaves is a couple of pixels. The
+ * arrow keys are the part of this that makes the alignment better than the one
+ * you get by dragging corners: they move the mark by exactly one pixel of the
+ * thing being aligned.
+ */
+function nudgePoint(dx, dy, coarse) {
+  const step = coarse ? 10 : 1;
+  pointAt = {
+    x: Math.min(1, Math.max(0, pointAt.x + (dx * step) / Math.max(1, output.width))),
+    y: Math.min(1, Math.max(0, pointAt.y + (dy * step) / Math.max(1, output.height))),
+  };
+}
+
+function placePoint() {
+  if (!pointing) return;
+  bus.post(MSG.POINTED, { tabId: bus.tabId, projectorId, x: pointAt.x, y: pointAt.y });
+  setPointing(null);
+}
+
+function cancelPoint() {
+  if (!pointing) return;
+  bus.post(MSG.POINTED, { tabId: bus.tabId, projectorId, cancel: true });
+  setPointing(null);
+}
+
+overlay.addEventListener('pointermove', (ev) => {
+  if (!pointing) return;
+  movePointTo(ev.clientX, ev.clientY);
+});
+
+overlay.addEventListener('pointerdown', (ev) => {
+  if (!pointing) return;
+  ev.preventDefault();
+  movePointTo(ev.clientX, ev.clientY);
+  placePoint();
+});
+
+window.addEventListener('keydown', (ev) => {
+  if (!pointing || ev.metaKey || ev.ctrlKey) return;
+  const nudges = {
+    arrowleft: [-1, 0],
+    arrowright: [1, 0],
+    arrowup: [0, -1],
+    arrowdown: [0, 1],
+  };
+  const key = ev.key.toLowerCase();
+  const nudge = nudges[key];
+  if (nudge) {
+    ev.preventDefault();
+    nudgePoint(nudge[0], nudge[1], ev.shiftKey);
+    return;
+  }
+  if (key === 'enter' || key === ' ') {
+    ev.preventDefault();
+    placePoint();
+  } else if (key === 'escape') {
+    ev.preventDefault();
+    cancelPoint();
+  }
+});
 
 window.addEventListener('keydown', (ev) => {
   if (ev.metaKey || ev.ctrlKey || ev.altKey) return;

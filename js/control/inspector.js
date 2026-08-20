@@ -11,6 +11,7 @@ import { SHAPE_TAGS, RESERVED_KEYS } from '../core/state.js';
 import { getEffect, listByCategory, defaultParams } from '../effects/registry.js';
 import { openEffectPicker } from './effectPicker.js';
 import { layerIssues } from './diagnostics.js';
+import { POINT_PAIRS_NEEDED } from './calibration.js';
 import { checkReachable, fireWebhook } from './webhooks.js';
 
 export function renderInspector(container, app) {
@@ -686,6 +687,61 @@ function renderProjector(container, app, id) {
         : 'Manual mode: put the projector on a test grid, then drag its four corners to where they land on the camera view. No camera needed — a photograph of the house works, as long as you can see where the corners fall.',
     })
   );
+
+  /* --- Click-to-align --- */
+
+  const align = app.tool === 'point' && app.pointAlign?.projectorId === projector.id ? app.pointAlign : null;
+  const pointBtn = el('button', {
+    type: 'button',
+    class: align ? 'btn small primary' : 'btn small',
+    text: align ? 'Done pointing' : 'Align by pointing…',
+  });
+  pointBtn.disabled = !align && !peer;
+  pointBtn.addEventListener('click', () => {
+    if (align) app.finishPointAlign(projector.id);
+    else app.beginPointAlign(projector.id);
+  });
+
+  const pointActions = [pointBtn];
+  if (align) {
+    const undoBtn = el('button', { type: 'button', class: 'btn small', text: 'Undo last' });
+    undoBtn.disabled = !align.pairs.length && !align.picking;
+    undoBtn.addEventListener('click', () => app.pointAlignUndo());
+    pointActions.push(undoBtn);
+  }
+  container.appendChild(el('div', { class: 'panel-actions' }, pointActions));
+
+  if (align) {
+    const need = POINT_PAIRS_NEEDED - align.pairs.length;
+    const step = align.error
+      ? align.error
+      : align.picking
+        ? `Now go to the projector tab and walk the crosshair onto that same spot on the house. `
+          + `Arrow keys nudge it a pixel at a time; click or press Enter to place it. `
+          + `(${align.pairs.length + 1} of ${POINT_PAIRS_NEEDED})`
+        : need > 0
+          ? `Click a feature on the camera view — a window corner, the top of the door. ${need} more to go.`
+          // Four points fit exactly whatever they are, so quoting their
+          // residual would be reporting the arithmetic rather than the
+          // alignment. It only becomes a number worth showing at five.
+          : `Aligned from ${align.pairs.length} points${
+            align.pairs.length > POINT_PAIRS_NEEDED
+              ? `, agreeing to ${fmt(align.residual * 1920)} px of a 1920-wide output`
+              : ''
+          }. Point at another feature to tighten it and to check none of them slipped, or press Done.`;
+    container.appendChild(el('p', { class: align.error ? 'panel-note issue bad' : 'panel-note', text: step }));
+  } else {
+    container.appendChild(
+      el('p', {
+        class: 'panel-note',
+        text: peer
+          ? 'Pointing: mark a feature on the camera view, then drive a projected crosshair onto that same feature '
+            + 'on the real house and click. Four of those align the projector. The points are on the building rather '
+            + 'than on the edge of the beam, so it still works when the projector overshoots the wall.'
+          : 'Pointing needs this projector’s tab open — the crosshair it puts up is the half of each pair that lands on the house.',
+      })
+    );
+  }
 
   /* --- Output --- */
 
