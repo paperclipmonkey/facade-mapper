@@ -14,6 +14,7 @@
 import { createBus, MSG } from '../core/bus.js';
 import { createClock } from '../core/clock.js';
 import { createLink } from '../core/link.js';
+import { applyDrawMessage } from '../core/drawing.js';
 import { loadProject, getBlob } from '../core/storage.js';
 import { migrateProject, worldSize } from '../core/state.js';
 import { worldToProjector } from '../core/rectify.js';
@@ -188,9 +189,29 @@ function cameraFrame() {
  * Project handling
  * ------------------------------------------------------------------ */
 
+/**
+ * Ask for whatever has already been drawn.
+ *
+ * A tab opened at nine o'clock has missed every stroke that made the picture,
+ * and there is no replaying them — so it asks, once per surface, and is sent
+ * the lot. Done from here rather than at boot because the project usually
+ * arrives after this tab does, and until it has there is nothing to ask about.
+ */
+const askedForDrawings = new Set();
+function requestDrawings() {
+  for (const layer of project?.layers || []) {
+    if (layer.effect !== 'live-draw') continue;
+    const surface = (layer.params?.surface || '').trim() || layer.id;
+    if (askedForDrawings.has(surface)) continue;
+    askedForDrawings.add(surface);
+    bus.post(MSG.DRAW, { kind: 'request', surface });
+  }
+}
+
 async function setProject(next) {
   const previousEffectSignature = signatureOfUserEffects(project);
   project = next;
+  requestDrawings();
 
   if (signatureOfUserEffects(project) !== previousEffectSignature) {
     const errors = await loadUserEffects(project.userEffects || []);
@@ -629,6 +650,19 @@ bus.on(MSG.COMMAND, (payload) => {
 
 bus.on(MSG.MEDIA, () => {
   if (project) mediaPool.sync(project.media || []);
+});
+
+/**
+ * Ink from a drawing tablet.
+ *
+ * Applied here rather than sent as pixels: every tab runs the same messages
+ * through the same store and paints the same drawing, which is the same reason
+ * effects use a seeded generator. Two projectors overlapping on one wall have
+ * to agree about what is drawn on it.
+ */
+bus.on(MSG.DRAW, (payload) => {
+  if (payload?.kind === 'request') return;
+  applyDrawMessage(payload);
 });
 
 /**

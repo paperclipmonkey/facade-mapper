@@ -16,6 +16,7 @@ import { createBus, createPresence, MSG } from '../core/bus.js';
 import { createClock, formatTime } from '../core/clock.js';
 import { createLink } from '../core/link.js';
 import { now as linkNow } from '../core/time.js';
+import { applyDrawMessage, drawingFor, snapshotOf } from '../core/drawing.js';
 import {
   loadOrCreateProject,
   saveProject,
@@ -2282,6 +2283,20 @@ const REMOTE_ACTIONS = {
   },
 
   identify: ({ id } = {}) => app.identifyProjector(id),
+
+  /**
+   * Somewhere to draw, asked for from the tablet holding the pencil.
+   *
+   * This is the one verb that adds anything to the project, and it is here
+   * because the alternative is walking back indoors to press a button before
+   * you can draw. It still goes through this tab's own `addLayer`, undo step
+   * and all — a remote asks, the control tab decides, and the project is still
+   * only ever written in one place.
+   */
+  'add-draw-layer': () => {
+    const layer = app.addLayer('live-draw');
+    if (layer) toast('Drawing layer added — draw on the tablet.', 'good');
+  },
 };
 
 /* ------------------------------------------------------------------ *
@@ -2385,6 +2400,10 @@ function renderLinkDialog() {
       el('div', { class: 'link-url' }, [
         el('span', { class: 'link-url-what', text: 'Phone remote' }),
         el('code', { text: `${base}/remote.html${suffix}` }),
+      ]),
+      el('div', { class: 'link-url' }, [
+        el('span', { class: 'link-url-what', text: 'Tablet, to draw on the house' }),
+        el('code', { text: `${base}/draw.html${suffix}` }),
       ]),
       el('div', { class: 'link-url' }, [
         el('span', { class: 'link-url-what', text: 'Second laptop, driving a projector' }),
@@ -3427,6 +3446,24 @@ function wire() {
 
   bus.on(MSG.ACTION, (payload) => runRemoteAction(payload));
 
+  /**
+   * Ink from a drawing tablet.
+   *
+   * Every tab applies these itself and lands on the same drawing, so this tab
+   * is not in the path of a pencil — it keeps a copy for the same reason it
+   * keeps everything else: so that a projector tab opened halfway through the
+   * evening can be told what is already on the wall. There is no replaying a
+   * thousand individual strokes, so it gets the lot in one message.
+   */
+  bus.on(MSG.DRAW, (payload) => {
+    if (payload?.kind === 'request') {
+      const surface = drawingFor(payload.surface);
+      if (surface?.strokes.length) bus.post(MSG.DRAW, snapshotOf(payload.surface));
+      return;
+    }
+    applyDrawMessage(payload);
+  });
+
   bus.on(MSG.ERROR, (payload) => {
     toast(`Projector: ${payload.message}`, 'bad');
   });
@@ -3827,6 +3864,19 @@ async function boot() {
    * listening.
    */
   setInterval(() => publishShowState(), 500);
+
+  /**
+   * Ask whoever is holding a pencil what is already on the wall.
+   *
+   * This tab is the one that answers that question for everybody else, so after
+   * a reload it has to get its own copy back from somewhere. The tablet keeps
+   * its own and answers if nothing else does.
+   */
+  for (const layer of app.project.layers) {
+    if (layer.effect === 'live-draw') {
+      bus.post(MSG.DRAW, { kind: 'request', surface: (layer.params?.surface || '').trim() || layer.id });
+    }
+  }
 
   // The schedule only needs checking about as often as the minute changes.
   tickSchedule();

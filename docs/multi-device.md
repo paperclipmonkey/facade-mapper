@@ -15,6 +15,7 @@ serving the app and relaying the messages the tabs already send each other.
 
 - [Starting it](#starting-it)
 - [The remote](#the-remote)
+- [Drawing on the house](#drawing-on-the-house)
 - [A second computer driving projectors](#a-second-computer-driving-projectors)
 - [Why the clock is the hard part](#why-the-clock-is-the-hard-part)
 - [What does not cross the link](#what-does-not-cross-the-link)
@@ -38,6 +39,9 @@ Facade Mapper — serving this folder, link open.
   Phone remote             http://192.168.1.23:8000/remote.html
   Second laptop            http://192.168.1.23:8000/projector.html
 ```
+
+The **Devices** button in the control tab's top bar repeats those addresses,
+including the drawing page for a tablet.
 
 No dependencies and no install — it is Node's own HTTP server with a WebSocket
 written by hand on top of it, which is roughly two hundred lines and the reason
@@ -76,6 +80,53 @@ run out of battery mid-evening without the show noticing.
 The page asks to keep the screen awake, and it lays itself out for whatever it
 is on: a phone gets one column of thumb-sized buttons, a laptop gets the same
 controls spread out.
+
+## Drawing on the house
+
+`draw.html` on an iPad, with an Apple Pencil or a finger. What you draw is on
+the wall while the pencil is still moving.
+
+1. In the control tab, add the **Live drawing** effect and point it at a wall,
+   a window, or nothing at all — a layer with no targets covers the whole
+   facade, which is usually what you want to draw on.
+2. Open the drawing address on the tablet. If there is no drawing layer yet the
+   page offers to ask the control tab for one, so you do not have to walk back
+   indoors to press a button.
+3. Draw.
+
+The page shows the area you are drawing into as a dashed box, with the rest of
+the traced facade faint around it, so a window you are drawing on has the door
+and the roofline in the right places off its edges. Colour, width, rub out,
+undo and clear are along the bottom, and the bars fade out of the way while the
+pencil is down.
+
+**Pressure** drives the width of the line, which is most of the difference
+between a drawn stroke and a plotted one. **Pencil** — the toggle at the end of
+the bar — turns on automatically the first time a stylus is seen, and stops the
+heel of your hand drawing while you write.
+
+### What is actually sent
+
+A stroke beginning, a handful of points, a stroke ending. Nothing the size of a
+drawing, and never anything that touches the project — the project is broadcast
+whole and saved on every change, and putting a pencil in that path would rewrite
+the entire show sixty times a second. Every tab in the show applies the same
+messages and arrives at the same picture, the same way every tab in the show
+runs the same seeded generator: two projectors covering one wall have to agree
+about what is drawn on it.
+
+Coordinates are normalised to the target shape's own box, so a drawing lands on
+the window it was drawn for whatever the camera resolution is, follows the shape
+if it is re-traced, and appears on all four windows at once if the layer points
+at four.
+
+A tab that opens later has missed every stroke, so it asks for the drawing and
+is sent the lot in one message — from the control tab, which keeps a copy of
+everything, or from the tablet itself if the control tab has been reloaded since
+the drawing was made.
+
+Drawing is *not* saved with the show. It lives as long as the tabs do, which
+suits what it is for; export a screenshot if you drew something you want to keep.
 
 ## A second computer driving projectors
 
@@ -123,6 +174,8 @@ clock is, which is the first thing to look at if two projectors disagree.
   they were imported to, and are not sent over the link. A video effect on a
   second computer will draw nothing and say so. Import the media on that machine
   too, or keep video on the projectors driven by the show machine.
+- **Drawing**, in the other direction, does cross — it is show state rather than
+  show content, and small enough to send as it happens.
 - **The camera.** It belongs to the tab that opened it. Alignment, motion
   triggers and camera-feed effects run on the show machine.
 - **Sound.** Trigger sounds play from the control tab only, as they always have.
@@ -160,13 +213,13 @@ it sends.
 ## How it fits together
 
 ```
-  laptop in the hall                        garage laptop        phone
-  ┌───────────────────────────┐             ┌────────────┐    ┌────────┐
-  │ control tab               │             │ projector  │    │ remote │
-  │   ├ BroadcastChannel ─────┼── same      │    tab     │    │        │
-  │   └ projector tabs        │   browser   └─────┬──────┘    └───┬────┘
-  │                           │                   │               │
-  │   server.mjs ◄────────────┴───── WebSocket ───┴───────────────┘
+  laptop in the hall                  garage laptop      phone      iPad
+  ┌───────────────────────────┐       ┌───────────┐   ┌────────┐  ┌──────┐
+  │ control tab               │       │ projector │   │ remote │  │ draw │
+  │   ├ BroadcastChannel ─────┼─ same │    tab    │   │        │  │      │
+  │   └ projector tabs        │  brwsr└─────┬─────┘   └───┬────┘  └──┬───┘
+  │                           │             │             │          │
+  │   server.mjs ◄────────────┴── WebSocket ┴─────────────┴──────────┘
   │     static files + relay + "what time do you make it?"
   └───────────────────────────┘
 ```

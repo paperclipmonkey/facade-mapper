@@ -22,6 +22,7 @@ import creatures from './builtin/creatures.js';
 import facade from './builtin/facade.js';
 import brickwork from './builtin/brickwork.js';
 import bursts from './builtin/bursts.js';
+import live from './builtin/live.js';
 
 export const CATEGORIES = [
   'basic',
@@ -37,7 +38,7 @@ export const CATEGORIES = [
 ];
 
 const builtins = new Map();
-for (const list of [basic, paths, facade, brickwork, bursts, atmosphere, halloween, christmas, creatures, text, mediaEffects]) {
+for (const list of [basic, paths, facade, brickwork, bursts, atmosphere, halloween, christmas, creatures, text, mediaEffects, live]) {
   for (const def of list) builtins.set(def.id, normaliseEffect(def, true));
 }
 

@@ -58,6 +58,14 @@ export const MSG = {
   SHOW: 'show',
   /** Remote -> control: do something (go to a scene, black out, fire a trigger). */
   ACTION: 'action',
+  /**
+   * Drawing tablet -> everyone: ink.
+   *
+   * Small and incremental — a stroke beginning, a handful of points, a stroke
+   * ending — rather than anything the size of a drawing. The strokes are show
+   * state and never enter the project; see core/drawing.js for why.
+   */
+  DRAW: 'draw',
 };
 
 export function createBus(role = 'unknown') {

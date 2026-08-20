@@ -429,6 +429,24 @@ export const HELP_SECTIONS = [
   there is nothing to reconcile if the phone goes flat halfway through the evening.
 </p>
 
+<h2>Drawing on the house</h2>
+<p>
+  Add the <strong>Live drawing</strong> effect, point it at a wall or a window — or at nothing,
+  which covers the whole facade — and open <code>draw.html</code> on an iPad. What you draw with the
+  pencil is on the wall while the pencil is still moving, pressure and all.
+</p>
+<p>
+  The page shows the area you are drawing into as a dashed box with the rest of the traced facade
+  faint around it, so a window you are drawing on has the door and the roofline in the right places
+  off its edges. The heel of your hand stops drawing the first time a stylus is seen.
+</p>
+<p class="muted">
+  <strong>Fade after</strong> is the parameter worth knowing about: at zero the ink stays until
+  somebody clears it, and above zero every stroke fades over that many seconds — the difference
+  between a mural and writing in light. Drawing is not saved with the show; it lives as long as the
+  tabs do.
+</p>
+
 <h2>A second computer driving projectors</h2>
 <p>
   Open <code>projector.html</code> on it from the same address and pick a projector. It receives the
