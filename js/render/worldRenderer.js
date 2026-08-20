@@ -138,20 +138,83 @@ function frameShape(world) {
 const SIM_HZ = 60;
 
 /**
- * How far a frame is allowed to catch up, and where it restarts if it cannot.
+ * Catching up, when a tab joins a show that has been running for hours.
  *
- * A tab opened an hour into a show is 216,000 steps behind, and there is no
- * honest way to run those: it starts cold instead, warms up for a second and a
- * half, and is out of phase with the tabs that have been running until that
- * layer next restarts. That is the one case this scheme does not cover, and
- * covering it would mean one tab broadcasting its state to the others.
+ * This used to be a single frame's allowance — ten seconds of steps — and
+ * anything beyond it started cold, a second and a half old, permanently out of
+ * phase with the tabs that had been running. For a one-shot that is invisible.
+ * For anything that accumulates it is the whole picture: a projector tab opened
+ * at nine o'clock grew its *own* ivy from bare brick while the control tab
+ * showed a wall that had been covered since six, and Breach opened its first
+ * hole nine seconds after the tab appeared rather than where the holes actually
+ * were. Two tabs, two different shows, on the same house.
  *
- * The catch-up allowance is generous enough to absorb a backgrounded tab
- * returning, a long paint, or a project reload — the cases where the tab really
- * is only a moment behind and should quietly close the gap rather than reset.
+ * The fix is to stop treating a long gap as unrunnable. A simulation step is a
+ * pure function of the step index — that is the whole design — so the missing
+ * steps *can* simply be run, and measured on this library they run at a hundred
+ * thousand a second: an hour of Breach is about a third of a second of work.
+ * What that cannot be is one frame's work, so it is spread over frames against
+ * a wall-clock budget. The tab paints the past for a moment, races forward
+ * through it, and lands exactly where every other tab is — no negotiation, no
+ * broadcast state, no divergence to live with for the rest of the evening.
+ *
+ * `FREE_CATCHUP_STEPS` is the gap small enough to close without touching the
+ * budget at all, so a tab that is merely a few frames behind — a long paint, a
+ * project reload — closes it in one frame exactly as it always did, and never
+ * pays for a clock read.
  */
-const MAX_CATCHUP_STEPS = SIM_HZ * 10;
+const CATCHUP_BUDGET_MS = 12;
+const FREE_CATCHUP_STEPS = SIM_HZ;
+/** How often the budget is checked, in steps. A clock read per step is waste. */
+const BUDGET_CHECK_EVERY = 64;
+
+/**
+ * The gap that is finally too big to run, and where a tab restarts if it hits it.
+ *
+ * Eight hours: past any show anybody runs, so in practice this is a backstop
+ * against a clock that has jumped rather than a thing that happens on the
+ * night. Below it the tab catches up honestly, however long that takes.
+ */
+const MAX_CATCHUP_STEPS = SIM_HZ * 3600 * 8;
 const COLD_START_STEPS = Math.round(SIM_HZ * 1.5);
+
+/**
+ * Frames of catching up that may fail to close any of the gap before the
+ * instance gives up and starts cold.
+ *
+ * An effect whose step costs more than a frame's budget can never converge, and
+ * a tab that stays minutes behind for ever is worse than one that restarts: it
+ * is showing a different moment of the show from every other tab, and would go
+ * on doing so all evening. Ten seconds of losing ground is the test.
+ */
+const STALLED_FRAMES = 600;
+
+/**
+ * The frame's catch-up allowance, as a thing that can be asked whether it is
+ * spent. Created once per frame and shared by every instance in it.
+ *
+ * `performance` is not guaranteed anywhere this runs — the test harness drives
+ * the renderer in plain Node, and effects are meant to run in a worker one day
+ * — so the clock is resolved once, and a missing one means no budget rather
+ * than a crash: the catch-up then runs to completion in a single frame, which
+ * is exactly what a headless harness wants.
+ */
+const now = typeof performance === 'object' && typeof performance.now === 'function'
+  ? () => performance.now()
+  : null;
+
+function createCatchUpBudget() {
+  if (!now) return { spent: () => false };
+  let deadline = null;
+  return {
+    spent() {
+      // Started on first use, not at the top of the frame: the budget is for
+      // catching up, and it should not be eaten by the drawing that came first.
+      if (deadline === null) deadline = now() + CATCHUP_BUDGET_MS;
+      return now() > deadline;
+    },
+  };
+}
 
 /**
  * How far `enabledAt` may move before it counts as the layer being re-fired.
@@ -307,6 +370,18 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
     const settings = project.settings || {};
     generation++;
     sweepInstances();
+
+    /**
+     * One catch-up allowance for the whole frame, shared by every instance.
+     *
+     * Per-instance it would multiply: twenty stateful layers on a tab that has
+     * just opened would each take their twelve milliseconds and the frame would
+     * take a quarter of a second. Shared, a busy show takes longer to converge
+     * and no single frame is ever hurt by it. Instances that are already in
+     * step never touch it — they never get past their free allowance — so this
+     * costs nothing on an ordinary frame.
+     */
+    const catchUp = createCatchUpBudget();
 
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.globalAlpha = 1;
@@ -634,16 +709,33 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
           inst.step = targetStep;
         } else {
           if (targetStep - inst.step > MAX_CATCHUP_STEPS) {
-            // Too far behind to run honestly. Start cold with a short warm-up.
+            // Beyond running honestly at all. Start cold with a short warm-up.
             inst.step = Math.max(0, targetStep - COLD_START_STEPS);
+            inst.stalled = 0;
           }
+          const behindBefore = targetStep - inst.step;
           const stepDt = 1 / SIM_HZ;
           ctx.dt = stepDt;
           // No canvas during simulation: `step` decides what happens, `draw`
           // decides what it looks like, and an effect that blurs the two would
           // paint its catch-up frames on top of each other.
           ctx.g = null;
+          /**
+           * A small gap is simply closed; a real catch-up comes out of the
+           * frame's shared budget.
+           *
+           * Keeping up costs one or two steps, so the ordinary frame runs
+           * exactly as it did — no clock reads, no budget. Up to a second of
+           * gap is the same deal, which covers a long paint or a project
+           * reload. Anything larger is a tab that has joined a show already in
+           * progress, and *that* is metered: fifty stateful layers each helping
+           * themselves to a free second would be fifty seconds of simulation in
+           * one frame.
+           */
+          let free = behindBefore <= FREE_CATCHUP_STEPS ? behindBefore : 0;
           while (inst.step < targetStep) {
+            if (free > 0) free -= 1;
+            else if ((inst.step & (BUDGET_CHECK_EVERY - 1)) === 0 && catchUp.spent()) break;
             inst.step++;
             ctx.age = inst.step * stepDt;
             ctx.t = inst.enabledAt + ctx.age;
@@ -657,6 +749,27 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
               break;
             }
           }
+
+          /**
+           * Losing ground, frame after frame.
+           *
+           * An effect whose step costs more than the whole frame budget can
+           * never converge, and a tab that stays minutes behind for the rest of
+           * the evening is worse than one that restarts — it is quietly showing
+           * a different moment of the show from every other tab. Ten seconds of
+           * failing to gain is taken as proof it cannot, and it starts cold,
+           * which is what this code did for every long gap before.
+           */
+          if (targetStep - inst.step >= behindBefore && behindBefore > 0) {
+            inst.stalled = (inst.stalled || 0) + 1;
+            if (inst.stalled > STALLED_FRAMES) {
+              inst.step = Math.max(0, targetStep - COLD_START_STEPS);
+              inst.stalled = 0;
+            }
+          } else {
+            inst.stalled = 0;
+          }
+
           // Back to the frame's own view of time, and its canvas, for the paint.
           ctx.g = target;
           ctx.t = t;

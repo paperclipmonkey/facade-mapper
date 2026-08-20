@@ -429,9 +429,15 @@ const shapes = {
     g.textBaseline = 'middle';
     g.clip(shape.path);
 
+    // `state.count`, not a bare `count`: the scattering moved into `step` so
+    // every tab places the same glyphs, and the local this once read went with
+    // it — leaving a ReferenceError thrown out of `draw` on every frame, which
+    // the renderer catches and reports as a broken layer. A single glyph drew
+    // nothing at all.
+    const single = state.count === 1;
     for (const spot of state.spots) {
-      const sx = count === 1 ? bbox.cx : bbox.x + lerp(0.5, spot.x, p.scatter) * bbox.w;
-      const baseY = count === 1 ? bbox.cy : bbox.y + lerp(0.5, spot.y, p.scatter) * bbox.h;
+      const sx = single ? bbox.cx : bbox.x + lerp(0.5, spot.x, p.scatter) * bbox.w;
+      const baseY = single ? bbox.cy : bbox.y + lerp(0.5, spot.y, p.scatter) * bbox.h;
       const drift = p.drift !== 0 ? frac(t * p.drift + spot.phase) * bbox.h - bbox.h / 2 : 0;
       const sy = baseY + drift + Math.sin(t * 2 + spot.phase) * bbox.h * p.bob;
 

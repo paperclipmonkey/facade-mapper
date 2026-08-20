@@ -367,5 +367,38 @@ console.log('\n— a layer switched on mid-show —\n');
     `${log.length} ops against ${reference} for an equally old layer`);
 }
 
+/* ------------------------------------------------------------------ *
+ * A tab opened long after the show started
+ * ------------------------------------------------------------------ */
+
+console.log('\n— a projector tab opened hours into the evening —\n');
+{
+  /**
+   * The case the fixed-step scheme used to give up on.
+   *
+   * Catching up was allowed ten seconds and no more; past that the instance
+   * started cold, a second and a half old. For a one-shot that is invisible —
+   * it has nothing to remember. For anything that accumulates it is the entire
+   * picture, and it is what "the preview looks great but the projector tab is
+   * doing something different" turned out to be: the projector grew its own
+   * ivy from bare brick, hours behind the wall the control tab was showing, and
+   * the two never converged because nothing ever brought them back together.
+   *
+   * Both effects here are chosen for having a history rather than a state: a
+   * vine is *only* where it has been, and a breach opens its first hole nine
+   * seconds in, so a cold-started tab paints nothing at all to begin with.
+   */
+  for (const [id, params] of [['vine', {}], ['breach', { rate: 30, holes: 2, arms: 1 }]]) {
+    const project = projectWith(id, params);
+    const throughout = runTab(project, { until: 45, fps: 60, startAt: 0 });
+    const justOpened = runTab(project, { until: 45, fps: 60, startAt: 43 });
+    ok(`${id}: a tab opened two seconds ago paints the same wall as one open all along`,
+      justOpened === throughout, firstDifference(throughout, justOpened));
+    ok(`${id}: and there is something on the wall to compare`,
+      throughout.split('\n').filter(Boolean).length > 50,
+      `${throughout.split('\n').filter(Boolean).length} ops`);
+  }
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nall good');
 process.exit(failures ? 1 : 0);

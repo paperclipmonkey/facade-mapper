@@ -149,6 +149,37 @@ the facade and should treat the windows as solid.
 > rebuilt sixty times a second. `stable` holds the same values before
 > modulation: identical every frame until a slider actually moves.
 
+## Simulating at a fixed rate
+
+`draw` is called once per rendered frame, at whatever rate the tab manages. That
+is fine for anything that is a function of `t` — but not for anything that
+*remembers*, because two tabs drawing at different rates then take different
+numbers of steps and drift apart on the wall.
+
+So an effect that carries a simulation splits it in two: a `step(ctx)` that
+changes `state` and never touches the canvas, and a `draw(ctx)` that paints
+`state` and never changes it.
+
+```js
+  step({ p, dt, rng, state }) { /* dt is always 1/60. No `g` here. */ },
+  draw({ g, p, state }) { /* paints what step decided. Writes nothing. */ },
+```
+
+The renderer calls `step` exactly `floor(age * 60)` times by show time `age`, in
+every tab, with a constant `dt` and `rng` reseeded from the step index. The whole
+simulation is therefore a function of the step number, which is what lets two
+projectors agree about where a brick has fallen to.
+
+Two consequences worth designing for:
+
+- **`step` is replayed.** A projector tab opened three hours into the evening
+  runs the three hours of steps it missed, spread over the next second or so of
+  frames, and arrives exactly where the other tabs are. Keep a step cheap, and
+  keep it free of anything that grows without bound.
+- **Anything that writes to `state` belongs in `step`.** Including drawing into
+  an accumulation canvas — that canvas *is* state. A `draw` that also grows the
+  plant paints a different plant in every tab.
+
 ## Accumulating rather than redrawing
 
 If your effect only ever *adds* — growth, trails, accretion — draw into a canvas
