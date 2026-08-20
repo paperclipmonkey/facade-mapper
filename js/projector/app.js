@@ -75,6 +75,13 @@ let pointing = null;
 let pointAt = { x: 0.5, y: 0.5 };
 let identifyUntil = 0;
 let statusVisible = false;
+/**
+ * What the last frame was still winding forward, as `{ layers, behind }`.
+ *
+ * Read from the renderer after each frame rather than asked for on demand, so
+ * the status panel and the frame loop are looking at the same instant.
+ */
+let syncState = { layers: 0, behind: 0 };
 let noticeTimer = null;
 
 let frames = 0;
@@ -630,6 +637,10 @@ function frame(now) {
     frames = 0;
     fpsAt = now;
     if (statusVisible) updateStatus();
+  } else if (statusVisible && syncState.layers) {
+    // Twice a second is the right rate for a frame counter and far too slow to
+    // watch a catch-up close, which is over in a second or two.
+    updateStatus();
   }
 
   drawOverlay(now);
@@ -675,6 +686,7 @@ function frame(now) {
     region,
     pixelSize: { w: worldCanvas.width, h: worldCanvas.height },
   });
+  syncState = worldRenderer.catchingUp();
 
   try {
     warp.draw(worldCanvas, {
@@ -712,6 +724,23 @@ function updateStatus() {
   document.getElementById('statusShow').textContent = transport.running
     ? `running · ${transport.t.toFixed(1)}s`
     : 'paused';
+
+  /**
+   * Whether anything is still winding forward to where the show actually is.
+   *
+   * A tab reloaded mid-evening runs the simulation it missed before it paints
+   * anything — the effects that carry a history are held back rather than shown
+   * racing — so for a second or two after a reload some of the wall is
+   * deliberately dark. This is the line that says so, and this is exactly when
+   * somebody is looking at it: the panel shows itself for six seconds on load.
+   */
+  document.getElementById('statusSync').textContent = syncState.layers
+    ? `catching up · ${syncState.layers} layer${syncState.layers === 1 ? '' : 's'}, ${
+        syncState.behind < 60
+          ? `${syncState.behind.toFixed(0)}s`
+          : `${Math.round(syncState.behind / 60)} min`
+      } behind`
+    : 'in step';
 
   /**
    * How far this machine's clock has been corrected, and how well it is known.

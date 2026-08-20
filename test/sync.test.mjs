@@ -128,7 +128,7 @@ function projectWith(effectId, params, extra = {}) {
  * fresh at that point, exactly as a projector tab opened mid-show would be, but
  * the clock carries on from where the show actually is.
  */
-function runTab(project, { until = 5, fps = 60, jitterSeed = null, startAt = 0 } = {}) {
+function runTab(project, { until = 5, fps = 60, jitterSeed = null, startAt = 0, include = 'all' } = {}) {
   /**
    * Two logs, compared differently, because they answer different questions.
    *
@@ -191,7 +191,17 @@ function runTab(project, { until = 5, fps = 60, jitterSeed = null, startAt = 0 }
       pixelSize: { w: 640, h: 360 },
     });
   }
-  return [...frame, ...bake].join('\n');
+  /**
+   * `include: 'frame'` compares the picture on the wall and nothing else.
+   *
+   * For two tabs that have both been running, the bake history has to match too
+   * — the strokes an effect lays into its accumulation canvas are the show as
+   * much as the blit is. For a tab that *joined late* it legitimately does not:
+   * that tab spent its first moments catching up, deliberately painting none of
+   * it, so its history is bound to be shorter. What has to be identical is
+   * where it ended up.
+   */
+  return (include === 'frame' ? frame : [...frame, ...bake]).join('\n');
 }
 
 const firstDifference = (a, b) => {
@@ -390,14 +400,47 @@ console.log('\n— a projector tab opened hours into the evening —\n');
    */
   for (const [id, params] of [['vine', {}], ['breach', { rate: 30, holes: 2, arms: 1 }]]) {
     const project = projectWith(id, params);
-    const throughout = runTab(project, { until: 45, fps: 60, startAt: 0 });
-    const justOpened = runTab(project, { until: 45, fps: 60, startAt: 43 });
+    const throughout = runTab(project, { until: 45, fps: 60, startAt: 0, include: 'frame' });
+    const justOpened = runTab(project, { until: 45, fps: 60, startAt: 43, include: 'frame' });
     ok(`${id}: a tab opened two seconds ago paints the same wall as one open all along`,
       justOpened === throughout, firstDifference(throughout, justOpened));
+    // Not a formality: without it the comparison above would pass on an
+    // effect that painted nothing in either tab. A vine is one blit and its
+    // shoot glows, so the bar is low and deliberately so.
     ok(`${id}: and there is something on the wall to compare`,
-      throughout.split('\n').filter(Boolean).length > 50,
+      throughout.split('\n').filter(Boolean).length > 10,
       `${throughout.split('\n').filter(Boolean).length} ops`);
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * What catching up looks like from the front of the house
+ * ------------------------------------------------------------------ */
+
+console.log('\n— a tab still catching up paints nothing, not the fast-forward —\n');
+{
+  /**
+   * Running the missing steps is the mechanism; showing them is not.
+   *
+   * Reload a projector tab and the simulation races through hours of show in a
+   * second or two. Painted, that is the ivy growing at a hundred times speed
+   * and the bricks falling like rain, on the house, in front of whoever is
+   * watching — and it reads as a fault rather than as an effect. So an instance
+   * more than a second behind is stepped and not drawn.
+   *
+   * Five minutes of gap and three frames to close it in: comfortably still
+   * catching up when the picture is taken.
+   */
+  const project = projectWith('vine');
+  const stillBehind = runTab(project, { until: 300.05, fps: 60, startAt: 300, include: 'frame' });
+  ok('a tab three frames into a five-minute catch-up paints nothing',
+    stillBehind.length === 0, `${stillBehind.split('\n').filter(Boolean).length} ops`);
+
+  // And the same three frames from a standing start do paint — otherwise the
+  // assertion above would hold for an effect that never draws at all.
+  const fromTheStart = runTab(project, { until: 0.05, fps: 60, startAt: 0, include: 'frame' });
+  ok('while the same effect from the show\'s start does',
+    fromTheStart.length > 0, `${fromTheStart.split('\n').filter(Boolean).length} ops`);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nall good');

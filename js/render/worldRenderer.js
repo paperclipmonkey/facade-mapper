@@ -190,6 +190,27 @@ const COLD_START_STEPS = Math.round(SIM_HZ * 1.5);
 const STALLED_FRAMES = 600;
 
 /**
+ * A layer that is still catching up is not shown catching up.
+ *
+ * The simulation racing forward is the whole mechanism, and painting it is the
+ * one thing that must not happen: reload a projector and the wall showed the
+ * ivy growing at a hundred times speed and the bricks falling like rain, for a
+ * second or two, in front of whoever is watching the house. It also looks
+ * exactly like a fault, which is worse than looking like nothing.
+ *
+ * So an instance more than a second behind is stepped but not drawn, and fades
+ * up over a third of a second once it has landed. Held per instance, because
+ * the whole point is that the rest of the show — the wash, the fog, everything
+ * that is a function of `t` and therefore never behind — carries on untouched
+ * while one layer settles.
+ *
+ * A second, not zero: a tab keeping up is a step or two behind at every frame
+ * by definition, and hiding *that* would hide the show.
+ */
+const SETTLE_BEHIND_STEPS = SIM_HZ;
+const SETTLE_SECONDS = 0.35;
+
+/**
  * The frame's catch-up allowance, as a thing that can be asked whether it is
  * spent. Created once per frame and shared by every instance in it.
  *
@@ -273,6 +294,18 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
   const share = new Map();
   /** `show.sceneChangeAt` as of the last frame, to spot a scene being re-fired. */
   let lastSceneAt = null;
+  /**
+   * Layers that were catching up or fading in on the last frame.
+   *
+   * Read one frame late on purpose. The fade is a *group* alpha — the layer is
+   * composited through the scratch buffer and blitted once — and whether to use
+   * the scratch buffer has to be decided before the layer's effects run, while
+   * how far it has settled is only known after. A frame's lag on a third of a
+   * second of fade is nothing, and the flag is always set well before the fade
+   * begins: an instance cannot settle without having been hidden first.
+   */
+  let settlingLayers = new Set();
+  let nextSettling = new Set();
   let frameShapeCache = null;
   let frameShapeKey = '';
 
@@ -301,7 +334,15 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
         /** Show time at which this layer was last switched on. See `age`. */
         enabledAt: null,
         /** Simulation steps taken since then. See `SIM_HZ`. */
-        step: 0 };
+        step: 0,
+        /** Steps still owed at the last frame. See `SETTLE_BEHIND_STEPS`. */
+        behind: 0,
+        /**
+         * How far up this instance has faded after catching up. Starts at one:
+         * an instance that has never been behind has nothing to settle from,
+         * and must not fade in every time a layer is created.
+         */
+        settled: 1 };
       instanceState.set(key, inst);
     }
     inst.usedAt = generation;
@@ -533,8 +574,16 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
       const softness = layer.softness || 0;
       const opacity = layer.opacity ?? 1;
       const blend = layer.blend || 'source-over';
-      const useScratch = softness > 0 || opacity < 1 || blend !== 'source-over';
+      // A layer coming back from catching up is composited as a group whatever
+      // else it does, because that is the only place a fade can be applied that
+      // an effect setting its own `globalAlpha` cannot ignore.
+      const settling = settlingLayers.has(layer.id);
+      const useScratch = softness > 0 || opacity < 1 || blend !== 'source-over' || settling;
       let target = g;
+      /** The least-settled instance in this layer, for the group fade below. */
+      let layerSettled = 1;
+      /** Whether anything reached the buffer, so an empty one is not blitted. */
+      let painted = false;
 
       if (useScratch) {
         const sg = getScratch(pixelSize.w, pixelSize.h);
@@ -780,6 +829,31 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
         }
 
         /**
+         * Still catching up: stepped, not painted.
+         *
+         * The simulation has to run — that is how it lands in step with every
+         * other tab — but nobody wants to watch it run. Skipping the draw
+         * outright rather than drawing it transparent also saves the paint,
+         * which is worth having on the frames where the tab is already
+         * spending its budget on the catch-up.
+         */
+        inst.behind = effect.step ? Math.max(0, targetStep - inst.step) : 0;
+        if (inst.behind > SETTLE_BEHIND_STEPS) {
+          // `layerSettled` is deliberately left alone: the group fade is the
+          // minimum over the instances that *drew*. A layer pointed at five
+          // windows, one of which is still catching up, shows the four that are
+          // ready rather than hiding all five behind an alpha of zero.
+          inst.settled = 0;
+          nextSettling.add(layer.id);
+          continue;
+        }
+        if (inst.settled < 1) {
+          inst.settled = Math.min(1, inst.settled + Math.max(0, time.dt || 0) / SETTLE_SECONDS);
+          if (inst.settled < 1) nextSettling.add(layer.id);
+        }
+        layerSettled = Math.min(layerSettled, inst.settled);
+
+        /**
          * Draw-time randomness is indexed too.
          *
          * An effect that scatters sparks without remembering them still has to
@@ -805,6 +879,10 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
         target.shadowColor = 'transparent';
         if ('filter' in target) target.filter = 'none';
 
+        // Set before the call, not after: an effect that throws half way
+        // through has still put pixels in the buffer, and they have to be
+        // composited or the layer flickers on the frame it failed.
+        painted = true;
         try {
           effect.draw(ctx);
         } catch (err) {
@@ -813,10 +891,13 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
         target.restore();
       }
 
-      if (useScratch) {
+      // Nothing to composite: every target was held back for catching up. The
+      // blit would be a full-frame copy of an empty buffer, and a blurred one
+      // where the layer is soft.
+      if (useScratch && painted) {
         g.save();
         g.setTransform(1, 0, 0, 1, 0, 0);
-        g.globalAlpha = opacity * master;
+        g.globalAlpha = opacity * master * layerSettled;
         g.globalCompositeOperation = blend;
         // Softness is authored in world pixels so it means the same thing
         // regardless of the projector's buffer resolution.
@@ -830,6 +911,35 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
     }
 
     g.setTransform(1, 0, 0, 1, 0, 0);
+
+    const spent = settlingLayers;
+    settlingLayers = nextSettling;
+    spent.clear();
+    nextSettling = spent;
+  }
+
+  /**
+   * What is still catching up, for anything that wants to say so.
+   *
+   * The projector's status panel is the caller that matters: reload a tab and
+   * the panel is already up, so the one moment somebody is looking at it is the
+   * moment this is worth reading. `behind` is in seconds of show time, because
+   * that is the question being asked — how far back is this tab.
+   */
+  function catchingUp() {
+    let layers = 0;
+    let behind = 0;
+    const seen = new Set();
+    for (const inst of instanceState.values()) {
+      if (inst.behind <= SETTLE_BEHIND_STEPS) continue;
+      behind = Math.max(behind, inst.behind / SIM_HZ);
+      const layerId = inst.key.slice(0, inst.key.indexOf(':'));
+      if (!seen.has(layerId)) {
+        seen.add(layerId);
+        layers += 1;
+      }
+    }
+    return { layers, behind };
   }
 
   /**
@@ -854,5 +964,5 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
     reportedErrors.clear();
   }
 
-  return { render, gc, resetLayer, geometry, clearErrors: () => reportedErrors.clear() };
+  return { render, gc, resetLayer, geometry, catchingUp, clearErrors: () => reportedErrors.clear() };
 }
