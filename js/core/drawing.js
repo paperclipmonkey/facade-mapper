@@ -39,8 +39,27 @@ export const PRESSURE_SCALE = 255;
 const MAX_STROKES = 500;
 const MAX_POINTS = 120000;
 
+/**
+ * How many surfaces there can be.
+ *
+ * One per drawing layer, so a show has one or two and a busy one has five. The
+ * cap is not about them: it is about the fact that a surface is created by
+ * being *named*, and anything on the wifi can name one. Without this, a bad
+ * client — or a bug in a good one — inventing a new name per message grows this
+ * map until the tab runs out of memory.
+ *
+ * New names are refused at the cap rather than evicting old ones, because
+ * evicting is the failure that matters: it would let a stranger push the actual
+ * drawing off the wall.
+ */
+const MAX_SURFACES = 32;
+
+/** Message kinds this store knows about. */
+const KINDS = new Set(['begin', 'points', 'end', 'undo', 'clear', 'full']);
+
 /** surfaceId -> surface. A surface is one layer's worth of drawing. */
 const surfaces = new Map();
+let warnedAboutSurfaces = false;
 
 function makeSurface(id) {
   return {
@@ -58,14 +77,21 @@ function makeSurface(id) {
      * not moved, and has to start again when it has.
      */
     generation: 0,
-    updatedAt: 0,
+    updatedAt: now(),
   };
 }
 
-export function surfaceFor(id) {
+function surfaceFor(id) {
   const key = id || '__default__';
   let surface = surfaces.get(key);
   if (!surface) {
+    if (surfaces.size >= MAX_SURFACES) {
+      if (!warnedAboutSurfaces) {
+        warnedAboutSurfaces = true;
+        console.warn(`[drawing] ignoring "${key}": already holding ${MAX_SURFACES} drawing surfaces`);
+      }
+      return null;
+    }
     surface = makeSurface(key);
     surfaces.set(key, surface);
   }
@@ -107,8 +133,18 @@ function trim(surface) {
  * Returns whether anything changed, so a caller can avoid pointless work.
  */
 export function applyDrawMessage(msg) {
-  if (!msg || typeof msg.kind !== 'string') return false;
-  const surface = surfaceFor(msg.surface);
+  if (!msg || !KINDS.has(msg.kind)) return false;
+
+  /**
+   * Only a message that *starts* a drawing may bring a surface into existence.
+   *
+   * Everything else has to be about one that already is, which is what stops a
+   * stream of "clear that surface over there" for names nobody has ever drawn
+   * on from filling the map with empty surfaces.
+   */
+  const opens = msg.kind === 'begin' || msg.kind === 'full';
+  const surface = opens ? surfaceFor(msg.surface) : drawingFor(msg.surface);
+  if (!surface) return false;
 
   switch (msg.kind) {
     case 'begin': {
@@ -234,4 +270,5 @@ export function snapshotOf(id) {
 /** For tests, and for a tab that is closing a show and opening another. */
 export function resetDrawings() {
   surfaces.clear();
+  warnedAboutSurfaces = false;
 }

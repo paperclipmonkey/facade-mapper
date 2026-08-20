@@ -36,6 +36,13 @@ import { offscreen } from '../lib.js';
  */
 const MAX_BUFFER = 1600;
 
+/**
+ * Width for a stroke that arrived without one, as a percentage of the shape's
+ * short edge. Only reachable from a hand-written message; the drawing page
+ * always sends what the slider says.
+ */
+export const DEFAULT_NIB = 2.2;
+
 export function bufferSize(bbox) {
   const scale = Math.min(1, MAX_BUFFER / Math.max(bbox.w, bbox.h, 1));
   return {
@@ -152,7 +159,18 @@ export function paintStroke(g, stroke, size, params, alpha, from = 0) {
 
   const sx = size.w / DRAW_SCALE;
   const sy = size.h / DRAW_SCALE;
-  const base = (params.width * Math.min(size.w, size.h)) / 100;
+  /**
+   * The nib the stroke was drawn with, scaled by the layer.
+   *
+   * The width belongs to the stroke, not to the layer: somebody picked it on
+   * the tablet, mid-drawing, and every stroke on a surface can be different.
+   * The layer's own control is a multiplier over all of them, for the case
+   * where a whole drawing wants to be heavier on the wall than it looked on
+   * the glass. Both are a percentage of the shape's short edge, so a stroke is
+   * the same weight relative to the window whatever size the window is.
+   */
+  const nib = stroke.width > 0 ? stroke.width : DEFAULT_NIB;
+  const base = (nib * (params.scale ?? 1) * Math.min(size.w, size.h)) / 100;
   const halfWidth = (i) => Math.max(0.25, (base * (0.35 + (0.65 * pts[i * 3 + 2]) / PRESSURE_SCALE)) / 2);
 
   const rgb = hexToRgb(stroke.color);
@@ -193,7 +211,17 @@ const liveDraw = {
   description:
     'Ink drawn from a tablet, in real time. Open the drawing page on an iPad and whatever you draw lands inside this layer’s shapes.',
   params: [
-    { key: 'width', type: 'range', label: 'Line width', default: 2.2, min: 0.2, max: 12, step: 0.1 },
+    {
+      key: 'scale',
+      type: 'range',
+      label: 'Line weight',
+      default: 1,
+      min: 0.1,
+      max: 4,
+      step: 0.05,
+      // A multiplier over whatever nib each stroke was drawn with, not a width
+      // of its own — the widths are the artist's and vary within one drawing.
+    },
     { key: 'glow', type: 'range', label: 'Glow', default: 0.7, min: 0, max: 2, step: 0.05 },
     { key: 'level', type: 'range', label: 'Brightness', default: 1, min: 0, max: 3, step: 0.01 },
     {
@@ -231,9 +259,8 @@ const liveDraw = {
     if (!surface || !surface.strokes.length) return;
 
     const canvas = syncInk(state, surface, bufferSize(bbox), {
-      width: p.width,
+      scale: p.scale,
       glow: p.glow,
-      blend: p.blend,
       fade: p.fade,
     });
     if (!canvas) return;
@@ -270,7 +297,16 @@ export function surfaceIdFor(layer, params) {
  */
 export function syncInk(state, surface, size, params) {
   const fading = params.fade > 0;
-  const key = `${size.w}x${size.h}|${params.width}|${params.glow}|${params.blend}|${fading}`;
+  /**
+   * What is actually baked into the buffer.
+   *
+   * The layer's blend is deliberately absent: it applies when the finished ink
+   * is composited onto the show, never inside the buffer, so changing it does
+   * not make a single pixel in here wrong. Including it meant flipping between
+   * additive and normal repainted an evening's drawing from scratch for no
+   * reason at all.
+   */
+  const key = `${size.w}x${size.h}|${params.scale}|${params.glow}|${fading}`;
 
   // Rebuilt when the buffer changes size, or when a parameter that affects
   // every stroke moves — and never otherwise, because that is the costly path.

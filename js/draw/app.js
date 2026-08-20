@@ -47,6 +47,10 @@ const link = createLink(bus, {
    * dragged on the laptop cannot fill a tablet's socket with stale shows.
    */
   subscribe: [MSG.PROJECT, MSG.DRAW, MSG.CLOCK, MSG.SHOW],
+  // The dot in the corner is the only thing telling somebody in the garden
+  // whether what they are drawing is reaching the house. It has to follow the
+  // socket rather than only being set when a project happens to arrive.
+  onStatus: () => updateNotice(),
 });
 
 const canvas = $('pad');
@@ -62,12 +66,24 @@ const ink = {};
 
 const tool = {
   color: '#ff7a18',
-  /** Width as a percentage of the shape's short edge, matching the effect. */
-  width: 8,
+  /**
+   * Nib width as a percentage of the target shape's short edge.
+   *
+   * The same unit the ink is painted in, so the dot beside the slider is the
+   * size the line will actually be, and a stroke is the same weight relative to
+   * the window whatever size the window is.
+   */
+  width: 2.2,
   erase: false,
-  /** Once a pencil has been seen, fingers and palms stop drawing. */
+  /**
+   * Fingers and palms do not draw.
+   *
+   * Switched on by itself the first time a stylus is seen — which is the point
+   * at which the heel of a hand becomes a problem — and switchable back off,
+   * because somebody who puts the pencil down and wants to carry on with a
+   * finger should be able to.
+   */
   pencilOnly: false,
-  sawPen: false,
 };
 
 /** The stroke in progress, and the points not yet sent. */
@@ -234,9 +250,16 @@ function pressureOf(event) {
 }
 
 function accepts(event) {
-  if (event.pointerType === 'pen') return true;
-  if (event.pointerType === 'mouse') return true;
-  return !(tool.pencilOnly || tool.sawPen);
+  if (event.pointerType === 'pen' || event.pointerType === 'mouse') return true;
+  return !tool.pencilOnly;
+}
+
+/** Turn palm rejection on the first time a stylus touches the glass. */
+function noticePen() {
+  if (tool.pencilOnly) return;
+  tool.pencilOnly = true;
+  $('btnPencilOnly').setAttribute('aria-pressed', 'true');
+  toast('Pencil only — fingers and palms will not draw. Press Pencil to allow them.');
 }
 
 function beginStroke(event) {
@@ -315,6 +338,7 @@ function layoutView() {
     w = h * aspect;
   }
   view = { x: (window.innerWidth - w) / 2, y: top + (availableH - h) / 2, w, h };
+  updateNib();
   dirty = true;
 }
 
@@ -340,9 +364,8 @@ function frame() {
 
   if (surface?.strokes.length) {
     const buffer = syncInk(ink, surface, { w: Math.round(view.w), h: Math.round(view.h) }, {
-      width: layer?.params?.width ?? 2.2,
+      scale: layer?.params?.scale ?? 1,
       glow: layer?.params?.glow ?? 0.7,
-      blend: 'lighter',
       fade: layer?.params?.fade ?? 0,
     });
     if (buffer) g.drawImage(buffer, view.x, view.y, view.w, view.h);
@@ -411,7 +434,7 @@ function drawGuides() {
 
 canvas.addEventListener('pointerdown', (event) => {
   if (!layer || !target) return;
-  if (event.pointerType === 'pen') tool.sawPen = true;
+  if (event.pointerType === 'pen') noticePen();
   if (!accepts(event)) return;
   event.preventDefault();
   try {
@@ -485,7 +508,11 @@ function buildSwatches() {
 
 function updateNib() {
   const nib = $('nib');
-  nib.style.setProperty('--nib', `${Math.max(4, Math.min(26, tool.width * 0.9))}px`);
+  // The width is a percentage of the drawable box's short edge, so this is the
+  // real size of the line, not an illustration of it — clamped only where the
+  // dot would outgrow the toolbar.
+  const short = Math.min(view.w, view.h);
+  nib.style.setProperty('--nib', `${Math.max(3, Math.min(26, (tool.width / 100) * short))}px`);
   nib.style.setProperty('--nib-color', tool.erase ? '#666' : tool.color);
 }
 
@@ -493,6 +520,18 @@ $('width').addEventListener('input', (event) => {
   tool.width = Number(event.target.value);
   updateNib();
 });
+
+// The toast helper the remote has, for the one thing this page has to say.
+let toastTimer = null;
+function toast(message) {
+  const node = $('toast');
+  node.textContent = message;
+  node.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    node.hidden = true;
+  }, 4000);
+}
 
 $('btnErase').addEventListener('click', () => {
   tool.erase = !tool.erase;

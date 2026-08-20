@@ -175,6 +175,21 @@ console.log('\n— A tab that arrived late —');
   applyDrawMessage({ kind: 'full', surface: 'wall', strokes: [{ id: 'x', pts: [1, 2, 3] }] });
   const stroke = drawingFor('wall').strokes[0];
   ok('a snapshot missing its optional fields still loads', stroke.color === '#ffffff' && stroke.width === 1);
+
+  // Every stroke carries the nib it was drawn with; they vary inside one
+  // drawing, which is why the width cannot live on the layer.
+  resetDrawings();
+  drawStroke('wall', 'thin', { width: 0.8 });
+  drawStroke('wall', 'fat', { width: 9.5 });
+  const widths = drawingFor('wall').strokes.map((x) => x.width);
+  ok('each stroke keeps the width it was drawn with', widths.join(',') === '0.8,9.5', widths.join(','));
+  const kept = JSON.parse(JSON.stringify(snapshotOf('wall')));
+  resetDrawings();
+  applyDrawMessage(kept);
+  ok(
+    'and keeps it through a snapshot',
+    drawingFor('wall').strokes.map((x) => x.width).join(',') === '0.8,9.5'
+  );
   ok('an empty snapshot is a way of saying "nothing here"', applyDrawMessage({ kind: 'full', surface: 'empty' }) === true);
   ok('and leaves an empty surface', drawingFor('empty').strokes.length === 0);
 }
@@ -199,6 +214,41 @@ console.log('\n— Bounded —');
   ok('the oldest are gone', !surface.strokes.some((s) => s.id === 's0'));
   ok('and the point count still matches the strokes', surface.points === surface.strokes.reduce((n, s) => n + s.pts.length / 3, 0));
   ok('dropping them counts as losing something', surface.generation > 0);
+}
+
+/* ------------------------------------------------------------------ *
+ * What a stranger on the wifi can do
+ * ------------------------------------------------------------------ */
+
+console.log('\n— Surfaces are not free to invent —');
+
+{
+  /**
+   * A surface exists because something named it, and anything on the network
+   * can name one. Two rules keep that from being a way to fill a projector
+   * tab's memory: only a message that starts a drawing may open a surface, and
+   * there is a limit on how many there can be.
+   */
+  resetDrawings();
+  ok('clearing a surface nobody drew on does nothing', applyDrawMessage({ surface: 'nowhere', kind: 'clear' }) === false);
+  ok('undoing one does nothing', applyDrawMessage({ surface: 'nowhere', kind: 'undo' }) === false);
+  ok('ending a stroke on one does nothing', applyDrawMessage({ surface: 'nowhere', kind: 'end', id: 'a' }) === false);
+  ok('and points for one do nothing', applyDrawMessage({ surface: 'nowhere', kind: 'points', id: 'a', pts: [1, 2, 3] }) === false);
+  ok('none of which invented a surface', surfaceIds().length === 0, surfaceIds().join(','));
+
+  ok('an unknown kind is refused', applyDrawMessage({ surface: 'x', kind: 'destroy-everything' }) === false);
+  ok('and did not invent one either', surfaceIds().length === 0);
+
+  resetDrawings();
+  for (let i = 0; i < 40; i++) {
+    applyDrawMessage({ surface: `spam-${i}`, kind: 'begin', id: `s${i}`, color: '#fff', width: 1 });
+  }
+  ok('the number of surfaces is capped', surfaceIds().length === 32, `${surfaceIds().length}`);
+  /**
+   * Refused rather than evicted, and that is the important half: evicting would
+   * let a stranger push the drawing that is actually on the wall out of memory.
+   */
+  ok('the ones already there are the ones kept', surfaceIds().includes('spam-0') && !surfaceIds().includes('spam-39'));
 }
 
 /* ------------------------------------------------------------------ *

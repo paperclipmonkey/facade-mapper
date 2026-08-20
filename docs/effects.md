@@ -318,6 +318,12 @@ on every window at once if the layer points at every window. Width follows pen
 pressure, which is most of the difference between a drawn line and a plotted
 one.
 
+The nib belongs to the *stroke*, picked on the tablet and different for every
+stroke in a drawing, so the layer has no width of its own — **Line weight** is a
+multiplier over all of them, for a drawing that wants to be heavier on the wall
+than it looked on the glass. Both are a percentage of the shape's short edge, so
+a stroke is the same weight relative to a window whatever size the window is.
+
 **Fade after** is the parameter worth knowing about. At zero the ink stays until
 somebody clears it, and the layer costs one blit a frame however much has been
 drawn on it. Above zero every stroke fades out over that many seconds, and the
