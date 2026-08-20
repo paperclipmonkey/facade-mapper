@@ -14,6 +14,8 @@
 
 import { createBus, createPresence, MSG } from '../core/bus.js';
 import { createClock, formatTime } from '../core/clock.js';
+import { createLink } from '../core/link.js';
+import { now as linkNow } from '../core/time.js';
 import {
   loadOrCreateProject,
   saveProject,
@@ -131,6 +133,27 @@ const app = {
   camera,
   bus,
 };
+
+/**
+ * The show, on the network.
+ *
+ * Off GitHub Pages this finds nothing and stays quiet. Served by `server.mjs`
+ * it joins the link, which does two things: puts this tab's broadcasts on the
+ * wire so a projector tab on another laptop is part of the same show, and pulls
+ * every device onto one clock so they agree what "now" means. The remote pages
+ * on phones are on the other end of it.
+ */
+let linkState = null;
+const link = createLink(bus, {
+  role: 'control',
+  label: 'Control',
+  onStatus: (state) => {
+    linkState = state;
+    updateLinkUI();
+  },
+});
+app.link = link;
+linkState = link.state();
 
 const sound = createSoundPlayer({ onError: (m) => toast(m, 'bad') });
 const motion = createMotionDetector();
@@ -2076,6 +2099,376 @@ function toggleBlackout() {
 }
 
 /* ------------------------------------------------------------------ *
+ * Remotes
+ *
+ * A phone at the end of the path, or a second laptop in the hall, running
+ * remote.html. They hold no project: they are sent a digest of what the show is
+ * doing and they send back what somebody pressed.
+ *
+ * That asymmetry is the point. The control tab stays the only place the project
+ * is edited — the invariant the whole cross-tab design rests on — so a remote
+ * cannot conflict with it, cannot half-save a scene from the garden, and can be
+ * closed, lost or run out of battery without the show noticing.
+ * ------------------------------------------------------------------ */
+
+/** Remotes re-announce every few seconds; publishing to nobody is wasted work. */
+let remotesUntil = 0;
+let lastDigestAt = 0;
+/** Last measured preview frame rate, so a remote can show it without asking. */
+let previewFps = 0;
+
+/**
+ * What the show is doing, small enough to send at a phone twice a second.
+ *
+ * Not the project. The project is every shape, every parameter and the source
+ * of every custom effect, and a remote needs none of it — it needs the names of
+ * the buttons and which one is lit. A couple of kilobytes against a couple of
+ * hundred, over somebody's garden wifi, several times a second.
+ */
+function showDigest() {
+  const project = app.project;
+  const transport = clock.getTransport();
+  const show = project.show || {};
+  const scenes = project.scenes || [];
+  const at = linkNow();
+
+  return {
+    name: project.name,
+    transport: {
+      running: transport.running,
+      startEpoch: transport.startEpoch,
+      pausedAt: transport.pausedAt,
+      bpm: transport.bpm,
+    },
+    master: project.settings.master ?? 1,
+    blackout: !!project.settings.blackout,
+    activeScene: show.activeScene || null,
+    scenes: scenes.map((s) => ({ id: s.id, name: s.name, hotkey: s.hotkey })),
+    /**
+     * Triggers carry the instant they are next ready rather than how long is
+     * left. A countdown has to be re-sent to stay true; an instant does not, so
+     * the phone can run the last three seconds of a cooldown smoothly on a
+     * digest that arrived at the start of it.
+     */
+    triggers: (project.triggers || [])
+      .filter((t) => t.enabled !== false)
+      .map((t) => ({
+        id: t.id,
+        name: t.name,
+        source: t.source,
+        scene: scenes.find((s) => s.id === t.sceneId)?.name || '',
+        armedAt: at + app.triggerArmedIn(t.id, t.cooldown) * 1000,
+      })),
+    layers: (project.layers || []).map((l) => ({
+      id: l.id,
+      name: l.name || getEffect(l.effect)?.name || l.effect,
+      enabled: l.enabled !== false,
+      solo: !!l.solo,
+    })),
+    playlist: {
+      running: !!show.running,
+      length: (show.playlist || []).length,
+      index: show.playlistIndex ?? 0,
+    },
+    projectors: (project.projectors || []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      blackout: !!p.blackout,
+      enabled: p.enabled !== false,
+      aligned: !!p.calibration?.H,
+      live: !!presence.forProjector(p.id),
+    })),
+    schedule: {
+      enabled: !!project.schedule?.enabled,
+      note: describeSchedule(project.schedule),
+    },
+    health: { fps: Math.round(previewFps), tabs: presence.list().length },
+  };
+}
+
+function publishShowState(force = false) {
+  const now = performance.now();
+  if (!force) {
+    if (now - lastDigestAt < 450) return;
+    if (Date.now() > remotesUntil) return;
+  }
+  lastDigestAt = now;
+  bus.post(MSG.SHOW, showDigest());
+}
+
+/**
+ * Put a scene on the wall for a remote.
+ *
+ * Deliberately not `app.activateScene`, which also loads the scene's values
+ * into the editor and pushes an undo step. That is right when you press the
+ * button yourself and wrong from a phone, where it would quietly rewrite the
+ * layers somebody is editing at the laptop. Triggers and the playlist take this
+ * same route, for the same reason.
+ */
+function remoteScene(sceneId) {
+  const scene = (app.project.scenes || []).find((s) => s.id === sceneId);
+  if (!scene) return;
+  applyScene(app.project, sceneId);
+  markDirty();
+  broadcast(true);
+  renderSceneButtons($('sceneButtons'), app);
+  toast(`${scene.name} — from a remote`);
+}
+
+/**
+ * What a remote is allowed to ask for.
+ *
+ * Every entry goes through this tab's own path for the job — the function the
+ * button calls, or the button itself — so there is exactly one copy of each
+ * behaviour and blackout-from-a-phone cannot drift away from blackout-from-
+ * here. The command palette is built this way and for the same reason.
+ *
+ * The list is also the security model. It is a fixed set of verbs over a link
+ * that is only as private as the wifi it runs on: a remote can run the show and
+ * cannot rewrite it, whatever it sends.
+ */
+const REMOTE_ACTIONS = {
+  'toggle-play': () => togglePlay(),
+  play: () => {
+    if (!clock.getTransport().running) togglePlay();
+  },
+  pause: () => {
+    if (clock.getTransport().running) togglePlay();
+  },
+  stop: () => $('btnStop').click(),
+
+  blackout: ({ on } = {}) => {
+    const wanted = on === undefined ? !app.project.settings.blackout : !!on;
+    if (wanted !== !!app.project.settings.blackout) toggleBlackout();
+  },
+
+  scene: ({ id } = {}) => remoteScene(id),
+
+  'scene-step': ({ delta = 1 } = {}) => {
+    const scenes = app.project.scenes || [];
+    if (!scenes.length) return;
+    const index = scenes.findIndex((s) => s.id === app.project.show?.activeScene);
+    const next = index < 0 ? 0 : (((index + delta) % scenes.length) + scenes.length) % scenes.length;
+    remoteScene(scenes[next].id);
+  },
+
+  trigger: ({ id } = {}) => app.fireTrigger(id),
+
+  master: ({ value } = {}) => {
+    const level = Number(value);
+    if (!isFinite(level)) return;
+    app.project.settings.master = Math.max(0, Math.min(1, level));
+    $('master').value = app.project.settings.master;
+    app.commitLive();
+  },
+
+  'run-show': ({ on } = {}) => {
+    const running = !!app.project.show?.running;
+    if (on === undefined || !!on !== running) $('btnRunShow').click();
+  },
+
+  layer: ({ id, enabled } = {}) => {
+    const layer = app.project.layers.find((l) => l.id === id);
+    if (!layer) return;
+    layer.enabled = enabled === undefined ? layer.enabled === false : !!enabled;
+    app.commit();
+  },
+
+  'projector-blackout': ({ id, on } = {}) => {
+    const projector = app.project.projectors.find((p) => p.id === id);
+    if (!projector) return;
+    projector.blackout = on === undefined ? !projector.blackout : !!on;
+    app.commit();
+  },
+
+  identify: ({ id } = {}) => app.identifyProjector(id),
+};
+
+/* ------------------------------------------------------------------ *
+ * The link indicator
+ * ------------------------------------------------------------------ */
+
+const LINK_LABELS = {
+  off: 'This browser',
+  checking: 'Devices…',
+  unavailable: 'This browser',
+  connecting: 'Linking…',
+  linked: 'Linked',
+};
+
+/** Said once per sighting, not once per peer update. */
+let warnedAboutSecondControl = false;
+
+function updateLinkUI() {
+  const button = $('btnLink');
+  if (!button || !linkState) return;
+  const { status, peers } = linkState;
+  const count = peers?.length || 0;
+
+  /**
+   * Two control tabs on one show.
+   *
+   * Both of them believe they own the project and both broadcast the whole
+   * thing after every change, so each one's edits are overwritten by the
+   * other's a fraction of a second later. There is no sensible merge here and
+   * no lock worth building: the answer is to notice and say so, once, while
+   * somebody is still standing at the keyboard that should not be open.
+   */
+  const others = (peers || []).filter((p) => p.role === 'control');
+  if (others.length && !warnedAboutSecondControl) {
+    warnedAboutSecondControl = true;
+    toast(
+      'Another control tab is on this link. Two of them will overwrite each other — ' +
+        'keep one, and use remote.html on the other device.',
+      'bad'
+    );
+  } else if (!others.length) {
+    warnedAboutSecondControl = false;
+  }
+
+  button.dataset.link = status;
+  $('linkLabel').textContent =
+    status === 'linked' ? (count ? `${count} device${count === 1 ? '' : 's'}` : 'Linked') : LINK_LABELS[status] || 'Devices';
+  button.title =
+    status === 'linked'
+      ? `Sharing this show with ${count} other device${count === 1 ? '' : 's'}`
+      : 'Bring a phone or a second laptop onto this show';
+
+  if ($('linkDialog')?.open) renderLinkDialog();
+}
+
+/**
+ * The dialog behind that button.
+ *
+ * Its real job is answering "what do I type into the phone?", which is why the
+ * addresses are the first thing in it and are the ones the *server* reported
+ * rather than anything this tab guessed — the control tab is on `localhost`,
+ * and `localhost` on a phone is the phone.
+ */
+function renderLinkDialog() {
+  const body = $('linkBody');
+  if (!body || !linkState) return;
+  clear(body);
+
+  const { status, addresses, peers, sync, server, device, key } = linkState;
+  const suffix = key ? `?key=${encodeURIComponent(key)}` : '';
+
+  if (status !== 'linked' && status !== 'connecting') {
+    body.appendChild(
+      el('p', {
+        text:
+          'This show is running in one browser. Everything moves between the tabs over ' +
+          'BroadcastChannel, which never leaves the machine — and cannot reach a phone.',
+      })
+    );
+    body.appendChild(el('p', { text: 'To put another device on it, run this next to the project:' }));
+    body.appendChild(el('pre', { class: 'link-command', text: 'node server.mjs' }));
+    body.appendChild(
+      el('p', {
+        class: 'panel-note',
+        text:
+          'Then reload this page on the address it prints, and open the same address on the ' +
+          'phone. No install, no dependencies — it is a static file server with a socket on it.',
+      })
+    );
+    return;
+  }
+
+  if (status === 'connecting') {
+    body.appendChild(el('p', { text: 'Reconnecting to the link…' }));
+  }
+
+  const base = addresses?.[0] || location.origin;
+  body.appendChild(el('h3', { text: 'Open on another device' }));
+  body.appendChild(
+    el('div', { class: 'link-urls' }, [
+      el('div', { class: 'link-url' }, [
+        el('span', { class: 'link-url-what', text: 'Phone remote' }),
+        el('code', { text: `${base}/remote.html${suffix}` }),
+      ]),
+      el('div', { class: 'link-url' }, [
+        el('span', { class: 'link-url-what', text: 'Second laptop, driving a projector' }),
+        el('code', { text: `${base}/projector.html${suffix}` }),
+      ]),
+    ])
+  );
+  if (addresses?.length > 1) {
+    body.appendChild(
+      el('p', { class: 'panel-note', text: `Other addresses for this machine: ${addresses.slice(1).join(', ')}` })
+    );
+  }
+
+  body.appendChild(el('h3', { text: `On the link (${(peers?.length || 0) + 1})` }));
+  const list = el('div', { class: 'list link-peers' });
+  list.appendChild(
+    el('div', { class: 'list-item' }, [
+      el('span', { class: 'item-title', text: 'Control' }),
+      el('span', { class: 'item-sub', text: 'this tab' }),
+    ])
+  );
+  for (const peer of peers || []) {
+    list.appendChild(
+      el('div', { class: 'list-item' }, [
+        el('span', { class: 'item-title', text: peer.label || peer.role || 'Device' }),
+        el('span', {
+          class: 'item-sub',
+          text: peer.device === device ? 'this machine, another tab' : peer.role,
+        }),
+      ])
+    );
+  }
+  body.appendChild(list);
+
+  /**
+   * The number that decides whether two projectors agree.
+   *
+   * Worth showing, because when it is wrong the symptom is on the wall and
+   * looks like anything but a clock: one projector a beat behind the other on
+   * an overlap, or a crossfade that starts twice.
+   */
+  body.appendChild(el('h3', { text: 'Clocks' }));
+  const drift = Math.abs(sync?.offset || 0);
+  body.appendChild(
+    el('p', {
+      class: 'panel-note',
+      text: sync?.synced
+        ? `This machine's clock is ${
+            drift < 1 ? 'in step with' : `${Math.round(drift)} ms ${sync.offset > 0 ? 'behind' : 'ahead of'}`
+          } ${server || 'the link server'}, over a round trip of ${
+            sync.rtt < 1 ? 'under a millisecond' : `${Math.round(sync.rtt)} ms`
+          }. Every device corrects onto that one clock, which is what keeps two projectors painting the same frame of the same animation.`
+        : 'Measuring how far this machine is from the link server…',
+    })
+  );
+
+  body.appendChild(
+    el('p', {
+      class: 'panel-note',
+      text:
+        'Camera access needs localhost or HTTPS, so keep tracing and alignment on this machine. ' +
+        'Media you have imported lives in this browser and is not sent over the link, so a video ' +
+        'effect on another laptop will draw nothing.',
+    })
+  );
+}
+
+function runRemoteAction(payload) {
+  const action = REMOTE_ACTIONS[payload?.action];
+  if (!action) {
+    console.warn('[remote] ignoring unknown action', payload?.action);
+    return;
+  }
+  try {
+    action(payload);
+  } catch (err) {
+    console.error('[remote] action failed', payload.action, err);
+  }
+  // Answer immediately rather than on the next tick, so a button on a phone
+  // lights up when it is pressed instead of a quarter of a second later.
+  publishShowState(true);
+}
+
+/* ------------------------------------------------------------------ *
  * Main loop
  * ------------------------------------------------------------------ */
 
@@ -2102,6 +2495,7 @@ function reportHealth(renderMs) {
   const elapsed = now - health.since;
   if (elapsed < 500) return;
   const fps = (health.frames * 1000) / elapsed;
+  previewFps = fps;
   const perFrame = health.renderMs / health.frames;
   const node = $('stageFps');
   node.textContent = `${fps.toFixed(0)} fps · ${perFrame.toFixed(1)} ms`;
@@ -2134,7 +2528,10 @@ function reportHealth(renderMs) {
  */
 let layerWasOn = new Map();
 function stampLayerSwitchOns() {
-  const now = Date.now();
+  // Link time, not `Date.now()`: this stamp is read by every tab in the show,
+  // including ones on other machines, and an `age` measured against the wrong
+  // clock restarts every one-shot the moment it arrives.
+  const now = linkNow();
   const next = new Map();
   let changed = false;
 
@@ -2535,6 +2932,11 @@ function wire() {
     openHelp('setup');
   });
 
+  $('btnLink').addEventListener('click', () => {
+    renderLinkDialog();
+    $('linkDialog').showModal();
+  });
+
   $('btnEffectDocs').addEventListener('click', () => {
     // Straight to the API, because that is what the button beside the code
     // editor is for. It used to open the same fourteen-heading scroll as the
@@ -2741,7 +3143,7 @@ function wire() {
     app.select({ type: 'trigger', id: trigger.id });
     app.commit();
     if (!app.project.scenes.length) {
-      toast('Build the scare you want, save it as a scene, then point this trigger at it.');
+      toast('Build the look you want, save it as a scene, then point this trigger at it.');
     }
   });
 
@@ -3003,12 +3405,27 @@ function wire() {
   });
 
   bus.on(MSG.HELLO, (payload) => {
-    // A projector tab that just opened needs the current state immediately.
+    /**
+     * A remote saying hello is also a remote saying it is still there.
+     *
+     * The digest is only worth assembling and posting while something is on the
+     * other end of it, and this is how that is known. Remotes re-announce every
+     * few seconds, so the window is generous enough to cover one missed
+     * announcement and short enough that a phone put back in a pocket stops the
+     * traffic within a few seconds.
+     */
+    if (payload?.role === 'remote') {
+      remotesUntil = Date.now() + 9000;
+    }
+    // A tab that just opened needs the current state immediately.
     if (payload?.requestState) {
       broadcast(true);
       broadcastClock();
+      publishShowState(true);
     }
   });
+
+  bus.on(MSG.ACTION, (payload) => runRemoteAction(payload));
 
   bus.on(MSG.ERROR, (payload) => {
     toast(`Projector: ${payload.message}`, 'bad');
@@ -3030,6 +3447,7 @@ function wire() {
     exportShow: () => $('btnExport').click(),
     importShow: () => $('btnImport').click(),
     help: () => $('btnHelp').click(),
+    devices: () => $('btnLink').click(),
     calibrate: () => {
       const projector = app.selectedProjector() || app.project.projectors[0];
       if (projector) app.startCalibration(projector.id);
@@ -3323,6 +3741,20 @@ async function boot() {
     onWebhook: (trigger, when, result) => {
       if (!result.ok) toast(`${trigger.name} (${when}): ${result.error}`, 'bad');
     },
+    /**
+     * A hold that ended without a frame being drawn.
+     *
+     * The runtime normally reports back through the return value of its tick,
+     * which the render loop acts on. When it lets a hold go on its own timer —
+     * because this tab is behind another window while somebody works the show
+     * from a phone — there is no tick to return to, so it says so here instead.
+     */
+    onChange: () => {
+      markDirty();
+      broadcast(true);
+      renderSceneButtons($('sceneButtons'), app);
+      publishShowState(true);
+    },
   });
 
   mediaPool.sync(app.project.media || []);
@@ -3380,6 +3812,21 @@ async function boot() {
   // Projector tabs derive time from the wall clock, so they need reminding of
   // the transport state whenever it might have changed underneath them.
   setInterval(broadcastClock, 3000);
+
+  /**
+   * The digest that feeds the remotes, on a timer rather than the render loop.
+   *
+   * Somebody working the show from the garden has this tab behind something
+   * else, or the laptop lid nearly shut — and a browser stops calling
+   * `requestAnimationFrame` in a tab that is not visible. Pressing a button on
+   * the phone still works either way, because that arrives as a message and is
+   * acted on immediately; it is the *readout* that would otherwise freeze, and
+   * a remote showing a scene that stopped being live ten minutes ago is worse
+   * than one showing nothing. Timers are throttled to about once a second in a
+   * hidden tab, which is plenty. It publishes nothing at all when no remote is
+   * listening.
+   */
+  setInterval(() => publishShowState(), 500);
 
   // The schedule only needs checking about as often as the minute changes.
   tickSchedule();

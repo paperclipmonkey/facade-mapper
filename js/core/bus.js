@@ -6,10 +6,17 @@
  * to GitHub Pages as plain static files. A localStorage-event fallback covers
  * browsers without BroadcastChannel.
  *
- * Timing note: every tab uses Date.now() as the shared clock. Tabs in one browser
- * on one machine read the same system clock, so "show time" needs no negotiation —
- * each tab computes `(Date.now() - showStartEpoch) / 1000` and lands on the same
+ * Timing note: every tab uses the clock in core/time.js. Tabs in one browser on
+ * one machine read the same system clock, so "show time" needs no negotiation —
+ * each tab computes `(now() - showStartEpoch) / 1000` and lands on the same
  * frame without drift.
+ *
+ * Off this machine, BroadcastChannel is the wrong shape entirely: it is
+ * same-origin *and* same-browser. A second laptop or a phone joins by way of
+ * core/link.js, which is a transport rather than a second bus — it mirrors what
+ * this tab posts onto a WebSocket and feeds what arrives back in through
+ * `receive`, so every handler below is written once and neither knows nor cares
+ * which side of the wire a message came from.
  */
 
 const CHANNEL = 'facade-mapper';
@@ -40,11 +47,23 @@ export const MSG = {
   MEDIA: 'media',
   /** Control -> all: the depth scan was imported, re-placed or removed. */
   SCAN: 'scan',
+  /**
+   * Control -> remotes: a small digest of what the show is doing.
+   *
+   * The project itself is far too big to push at a phone several times a second
+   * — it carries every shape, every parameter and the source of any custom
+   * effect. A remote needs scene names and what is lit, which is a couple of
+   * kilobytes. See `showDigest` in the control tab.
+   */
+  SHOW: 'show',
+  /** Remote -> control: do something (go to a scene, black out, fire a trigger). */
+  ACTION: 'action',
 };
 
 export function createBus(role = 'unknown') {
   const tabId = `${role}-${Math.random().toString(36).slice(2, 9)}`;
   const listeners = new Map();
+  const mirrors = new Set();
   let channel = null;
 
   const dispatch = (msg) => {
@@ -79,6 +98,13 @@ export function createBus(role = 'unknown') {
 
   function post(type, payload, to = null) {
     const msg = { type, payload, from: tabId, to, at: Date.now() };
+    for (const fn of mirrors) {
+      try {
+        fn(msg);
+      } catch (err) {
+        console.warn('[bus] mirror failed for', type, err);
+      }
+    }
     if (channel) {
       channel.postMessage(msg);
     } else {
@@ -114,12 +140,32 @@ export function createBus(role = 'unknown') {
     });
   }
 
+  /**
+   * Watch everything this tab posts, so a transport can carry it off the machine.
+   *
+   * Only *posts* are mirrored, never messages arriving from elsewhere. A message
+   * that came in over the link is not re-sent, and one that came in over
+   * BroadcastChannel is already on the link courtesy of the tab that posted it —
+   * which is what stops two linked tabs on one machine from echoing each other
+   * round the network forever.
+   */
+  function mirror(fn) {
+    mirrors.add(fn);
+    return () => mirrors.delete(fn);
+  }
+
+  /** Deliver a message that arrived from off-machine, as though it were local. */
+  function receive(msg) {
+    dispatch(msg);
+  }
+
   function close() {
     channel?.close();
     listeners.clear();
+    mirrors.clear();
   }
 
-  return { tabId, post, on, once, close, role };
+  return { tabId, post, on, once, mirror, receive, close, role };
 }
 
 /**

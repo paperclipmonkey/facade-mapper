@@ -393,6 +393,80 @@ export const HELP_SECTIONS = [
 `,
   },
   {
+    id: 'devices',
+    label: 'More than one device',
+    html: `
+<h2>A phone, or a second computer</h2>
+<p>
+  Everything normally happens inside one browser — the control tab, the projector tabs, and a
+  channel between them that never leaves the machine. That is what makes this a static site with
+  no account and no server. It also stops at the edge of the laptop.
+</p>
+<p>
+  To get past it, run this in the project folder on the machine driving the projectors:
+</p>
+<pre>node server.mjs</pre>
+<p>
+  It prints the addresses to use, and the <strong>Devices</strong> button in the top bar repeats
+  them. No install and no dependencies — it is a static file server with a socket on it.
+</p>
+<p class="muted">
+  Open the control page at <code>localhost</code>, not at the network address. Camera access needs
+  HTTPS or localhost, so the alignment camera will not start on a LAN address. Everything else is
+  happy on either.
+</p>
+
+<h2>The remote</h2>
+<p>
+  <code>remote.html</code> on a phone is the show in your hand: blackout big enough to hit without
+  looking, one tap per scene, a button per trigger with its cooldown counting down, transport and
+  master. Behind a disclosure it also carries effects on and off, and per-projector blackout with a
+  <strong>Flash</strong> button — which is the only practical way to tell three projectors apart
+  from the end of the path.
+</p>
+<p>
+  It holds no project and cannot edit one. This tab stays the only place the show is written, so
+  there is nothing to reconcile if the phone goes flat halfway through the evening.
+</p>
+
+<h2>A second computer driving projectors</h2>
+<p>
+  Open <code>projector.html</code> on it from the same address and pick a projector. It receives the
+  project, the transport and the clock over the link and renders identically. Alignment and tracing
+  stay here, on the machine with the camera.
+</p>
+
+<h2>The clock</h2>
+<p>
+  Show time is a subtraction from a shared wall clock, and two machines do not agree about what time
+  it is — a laptop that has been in a shed since last autumn is routinely a second out. A second is
+  enough for two projectors on one wall to paint different frames of the same animation, which does
+  not look like a timing fault; it looks like one projector running the wrong show.
+</p>
+<p>
+  So each device measures its offset from the server, the way NTP does, and every wall-clock stamp
+  that crosses a machine is written and read in that shared time. The <strong>Devices</strong>
+  dialog shows the measurement, and so does a projector tab's status overlay (<kbd>I</kbd>). If two
+  projectors disagree, that is the number to look at.
+</p>
+
+<h2>What does not cross</h2>
+<p>
+  Media stays in the browser it was imported to, so a video effect on a second computer draws
+  nothing and says so. The camera belongs to the tab that opened it. Trigger sounds play from this
+  tab only. And <strong>leave this tab visible</strong> — a browser stops rendering a hidden tab,
+  and this is what advances the playlist and watches for motion. Buttons on a remote work either
+  way; it is the show's own clockwork that stops.
+</p>
+<p class="muted">
+  Anything on your network can join. If that is not what you want — a venue, a shared network —
+  start it with <code>node server.mjs --key something</code> and the address becomes
+  <code>…/remote.html?key=something</code>. A remote can only ever do the things on its list; it
+  cannot edit the show, whatever it sends.
+</p>
+`,
+  },
+  {
     id: 'keys',
     label: 'Keyboard',
     html: `

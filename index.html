@@ -31,6 +31,9 @@
         <button type="button" id="btnPalette" class="btn" title="Search everything (Ctrl+K)">
           Search <kbd class="kbd-hint">⌘K</kbd>
         </button>
+        <button type="button" id="btnLink" class="btn link-pill" data-link="checking" title="Bring a phone or a second laptop onto this show">
+          <span class="link-dot" aria-hidden="true"></span><span id="linkLabel">Devices</span>
+        </button>
         <button type="button" id="btnOpenProjector" class="btn primary">Open projector tab</button>
         <button type="button" id="btnShows" class="btn">Shows</button>
         <button type="button" id="btnExport" class="btn">Export</button>
@@ -372,6 +375,12 @@
 
     <dialog id="effectDialog" class="dialog dialog-wide">
       <div class="dialog-body" id="effectDialogBody"></div>
+      <form method="dialog" class="dialog-actions"><button class="btn">Close</button></form>
+    </dialog>
+
+    <dialog id="linkDialog" class="dialog">
+      <h2>Devices</h2>
+      <div id="linkBody" class="link-body"></div>
       <form method="dialog" class="dialog-actions"><button class="btn">Close</button></form>
     </dialog>
 

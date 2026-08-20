@@ -13,6 +13,7 @@
 
 import { createBus, MSG } from '../core/bus.js';
 import { createClock } from '../core/clock.js';
+import { createLink } from '../core/link.js';
 import { loadProject, getBlob } from '../core/storage.js';
 import { migrateProject, worldSize } from '../core/state.js';
 import { worldToProjector } from '../core/rectify.js';
@@ -31,6 +32,17 @@ const pickerEl = document.getElementById('picker');
 
 const bus = createBus('projector');
 const clock = createClock();
+
+/**
+ * Joining the show from wherever this tab happens to be.
+ *
+ * Opened from the control machine's own browser this finds a link server and
+ * uses it for nothing much — BroadcastChannel already reached this tab. Opened
+ * on a second laptop it is the only reason this tab knows there is a show at
+ * all: the project, the transport and, crucially, the clock all arrive over it.
+ * Opened from GitHub Pages it finds nothing and stays quiet.
+ */
+const link = createLink(bus, { role: 'projector', label: 'Projector' });
 
 let project = null;
 let projectorId = new URLSearchParams(location.search).get('p');
@@ -543,6 +555,28 @@ function updateStatus() {
   document.getElementById('statusShow').textContent = transport.running
     ? `running · ${transport.t.toFixed(1)}s`
     : 'paused';
+
+  /**
+   * How far this machine's clock has been corrected, and how well it is known.
+   *
+   * On the machine running the server this reads as a millisecond or two. On a
+   * second laptop it is however wrong that laptop's clock is — and when two
+   * projectors on one wall disagree, this is the first line to look at, from
+   * the ladder, by pressing I.
+   */
+  const state = link.state();
+  const sync = state.sync;
+  const drift = Math.abs(sync.offset);
+  document.getElementById('statusLink').textContent =
+    state.status === 'linked'
+      ? sync.synced
+        ? `${state.server || 'linked'} · ${
+            drift < 1 ? 'in step' : `${sync.offset > 0 ? '+' : '-'}${Math.round(drift)} ms`
+          } (±${sync.rtt < 2 ? '<1' : Math.round(sync.rtt / 2)} ms)`
+        : `${state.server || 'linked'} · syncing`
+      : state.status === 'connecting'
+        ? 'reconnecting'
+        : 'this browser only';
 }
 
 /* ------------------------------------------------------------------ *

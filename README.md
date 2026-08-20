@@ -81,6 +81,11 @@ is for.
   look stuck to it.
 - **It reacts.** Point a motion trigger at the path and the house does something
   when somebody walks up it.
+- **Run it from your pocket.** `node server.mjs` puts a phone or a second laptop
+  on the same show — big scene buttons, blackout and triggers in your hand,
+  where the show is actually seen. The same link lets a second computer drive
+  projectors of its own, on a clock shared with the first, so two machines paint
+  the same frame of the same animation rather than two.
 - **It runs itself.** A nightly schedule turns the show on at dusk and off at
   bedtime, without you going near the laptop.
 - **Programmable.** Any numeric parameter can be driven by an LFO, the beat, the
@@ -119,6 +124,7 @@ different order, it is work you will lose.
 | | |
 | --- | --- |
 | [Setting up a house](docs/setting-up.md) | Cameras, projector tabs, alignment, walls that aren't flat, overlapping projectors, running it every night |
+| [More than one device](docs/multi-device.md) | The phone remote, a second computer driving projectors, and the shared clock |
 | [The effect library](docs/effects.md) | Targeting, paths, the look, modulation, triggers, and how the effects are built |
 | [Writing your own effects](docs/writing-effects.md) | The `draw` contract, the `fx` helpers, and the three rules |
 | [Performance](docs/performance.md) | The budget, the benchmark, and the traps that cost more than a frame |
@@ -148,6 +154,10 @@ A Chromium-based browser or Firefox, on the machine driving the projectors.
 Needs `BroadcastChannel`, `getUserMedia` and WebGL. Camera access requires a
 secure context, which GitHub Pages provides.
 
+Putting a phone or a second computer on the show additionally needs Node 18 or
+newer on the show machine, for `server.mjs` — nothing else, and nothing to
+install. See [more than one device](docs/multi-device.md).
+
 ## Running locally
 
 Plain ES modules with no build step, but module imports need a real HTTP server —
@@ -156,14 +166,18 @@ opening `index.html` from disk will not work.
 ```bash
 git clone https://github.com/paperclipmonkey/facade-mapper.git
 cd facade-mapper
-python3 -m http.server 8000
+node server.mjs
 # then open http://localhost:8000
 ```
+
+That is also the server that puts a phone or a second laptop on the show — it
+prints the addresses to use. It has no dependencies; `python3 -m http.server
+8000` still serves the app perfectly well if you only ever want one machine.
 
 Tests are plain Node, no dependencies:
 
 ```bash
-node test/geometry.test.mjs && node test/runtime.test.mjs && node test/collide.test.mjs && node test/obstacles.test.mjs && node test/figures.test.mjs
+node test/geometry.test.mjs && node test/runtime.test.mjs && node test/collide.test.mjs && node test/obstacles.test.mjs && node test/figures.test.mjs && node test/link.test.mjs
 ```
 
 And `test/bench.html`, served over HTTP, benchmarks every effect on your own

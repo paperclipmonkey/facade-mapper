@@ -9,17 +9,24 @@
  * Only the control tab runs this. It fires by activating a scene through the
  * normal path, which broadcasts like any other change, so the projector tabs
  * need no concept of triggers at all.
+ *
+ * Its own timing — cooldowns, holds, the next timer firing — is local to this
+ * tab and stays on the local clock. The one number that leaves the machine is
+ * the scene change stamp, which every tab reads, and that one is link time.
  */
 
 import { activateScene } from '../core/scenes.js';
+import { now as linkNow } from '../core/time.js';
 import { createMotionGate } from './motion.js';
 import { fireWebhook } from './webhooks.js';
 
-export function createTriggerRuntime({ app, sound, onFired, onWebhook } = {}) {
+export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange } = {}) {
   const gate = createMotionGate();
 
   /** Scene to restore when the current hold expires, and when. */
   let holding = null;
+  /** Wake-up for the end of a hold. See `armWake`. */
+  let wakeTimer = null;
   /** Next scheduled firing per timer trigger. */
   const timerNext = new Map();
   /** Latest measured activity per trigger, for the UI meters. */
@@ -56,6 +63,7 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook } = {}) {
     const hold = Math.max(0, trigger.hold ?? 0);
     if (hold > 0) {
       holding = { until: Date.now() + hold * 1000, restoreTo, triggerId: trigger.id };
+      armWake(hold * 1000 + 60);
     } else {
       holding = null;
     }
@@ -96,6 +104,24 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook } = {}) {
   }
 
   /**
+   * Make sure the end of a hold happens even if nothing is drawing.
+   *
+   * `tick` is normally called once per frame, and a browser stops calling
+   * `requestAnimationFrame` altogether in a tab that is not visible. That used
+   * not to matter: nobody was looking. A phone in the garden changes it — you
+   * fire a scare from the path with the control tab behind something on the
+   * laptop, and without this the house stays mid-scare until somebody goes back
+   * inside and clicks on the window. Timers are throttled in a hidden tab but
+   * they do still run, which is all a six-second hold needs.
+   */
+  function armWake(ms) {
+    clearTimeout(wakeTimer);
+    wakeTimer = setTimeout(() => {
+      if (tick()) onChange?.();
+    }, ms);
+  }
+
+  /**
    * Called once per frame from the control tab.
    *
    * @param {object} motionSample { activityFor(trigger) => number|null }
@@ -116,7 +142,9 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook } = {}) {
         const show = app.project.show || {};
         show.previousScene = show.activeScene ?? null;
         show.activeScene = null;
-        show.sceneChangeAt = now;
+        // Link time: every tab reads this stamp to work out how far through the
+        // fade it is, including tabs on another machine.
+        show.sceneChangeAt = linkNow();
         show.fade = 0.8;
       }
       holding = null;
@@ -166,6 +194,7 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook } = {}) {
 
   function cancelHold() {
     holding = null;
+    clearTimeout(wakeTimer);
   }
 
   return {

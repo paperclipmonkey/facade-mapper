@@ -11,6 +11,7 @@
  */
 
 import { rgba, clamp, TAU, frac, lerp } from '../../core/math.js';
+import { now as linkNow } from '../../core/time.js';
 
 export const FONT_STACKS = {
   system: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
@@ -327,9 +328,10 @@ const countdown = {
   ],
   draw({ g, p, shape }) {
     // Deliberately reads the wall clock, not show time — a countdown to a real
-    // moment shouldn't pause when the transport does.
+    // moment shouldn't pause when the transport does. Link time rather than
+    // `Date.now()`, so two machines don't tick over to midnight a second apart.
     const target = Date.parse(String(p.target).replace(' ', 'T'));
-    const now = Date.now();
+    const now = linkNow();
     let label;
     let secondFraction = 0;
 
