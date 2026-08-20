@@ -26,6 +26,7 @@ import { createLinkServer, encodeFrame, createFrameReader, acceptKey, resolveSta
 import { estimateOffset, setClockOffset, resetClockOffset, now, clockOffset, clockSync } from '../js/core/time.js';
 import { createClock } from '../js/core/clock.js';
 import path from 'node:path';
+import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -264,6 +265,16 @@ ok('a dot inside a name is still fine', resolveStaticPath('/js/core/link.js', RO
 ok('--port is read', parseArgs(['--port', '9123']).port === 9123);
 ok('--port=n is read too', parseArgs(['--port=9123']).port === 9123);
 ok('a key can be required', parseArgs(['--key', 'boo']).key === 'boo');
+// Zero is how you ask the operating system for a free port, so it has to
+// survive the validation rather than being mistaken for nothing.
+ok('--port 0 means "pick one"', parseArgs(['--port', '0']).port === 0);
+ok('a key with an "=" in it survives', parseArgs(['--key=a=b']).key === 'a=b');
+for (const bad of [['--port', 'eight'], ['--port', '-5'], ['--port', '99999'], ['--port'], ['--port', '80.5']]) {
+  const parsed = parseArgs(bad);
+  ok(`"${bad.join(' ')}" is refused rather than ignored`, parsed.errors.length === 1 && parsed.port === 8000, parsed.errors[0]);
+}
+ok('an unknown option is refused', parseArgs(['--colour']).errors.length === 1);
+ok('valid arguments produce no complaints', parseArgs(['--port=1', '--host=127.0.0.1', '--key=x']).errors.length === 0);
 
 /* ------------------------------------------------------------------ *
  * The relay, for real
@@ -329,6 +340,37 @@ if (typeof WebSocket === 'undefined') {
     !typesFor(sameMachine).includes('project'),
     typesFor(sameMachine).join(',')
   );
+
+  /**
+   * The requests that used to end the evening.
+   *
+   * `GET //` is a protocol-relative URL with no host and `new URL` throws on
+   * it; so does any Host header with a space in it. Thrown inside a request
+   * handler that is an uncaught rejection, which takes the process with it —
+   * and with it the phone remote and every second machine. One line from a
+   * port scanner should cost a 400, not the show.
+   */
+  const rawRequest = (lines) =>
+    new Promise((resolve) => {
+      const socket = net.connect(address.port, '127.0.0.1', () => socket.write(`${lines}\r\n\r\n`));
+      let data = '';
+      socket.on('data', (chunk) => (data += chunk));
+      socket.on('close', () => resolve(data.split('\r\n')[0]));
+      socket.on('error', () => resolve('(no answer)'));
+      setTimeout(() => {
+        socket.destroy();
+        resolve(data.split('\r\n')[0] || '(no answer)');
+      }, 800);
+    });
+
+  ok('"GET //" is answered, not fatal', (await rawRequest('GET // HTTP/1.1\r\nHost: 127.0.0.1')).includes('400'));
+  ok('a Host header with a space in it is too', (await rawRequest('GET / HTTP/1.1\r\nHost: a b')).includes('400'));
+  ok(
+    'and an upgrade with a broken target',
+    (await rawRequest('GET // HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13')).includes('400')
+  );
+  const stillThere = await fetch(`${base}/link/info`);
+  ok('the server is still serving afterwards', stillThere.status === 200);
 
   const peers = control.inbox.filter((m) => m.type === 'link/peers').pop();
   ok('everyone is told who else is here', peers?.peers.length === 4, `${peers?.peers.length}`);

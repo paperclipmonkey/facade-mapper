@@ -130,6 +130,26 @@ function streamFile(req, res, file) {
   return stream.pipe(res);
 }
 
+/**
+ * The URL of a request, or null if it is not one.
+ *
+ * `new URL` throws on a request target it cannot make sense of, and there are
+ * two of those a stranger can send from a terminal: `GET //`, which reads as a
+ * protocol-relative URL with no host, and any `Host:` header with a space or a
+ * bracket in it. A throw inside a request handler is an uncaught exception, and
+ * an uncaught exception ends the process — so one malformed line from a port
+ * scanner used to take the show off every phone and every second machine in the
+ * garden. The only sensible answer to a request that cannot be parsed is to say
+ * so and carry on.
+ */
+function requestUrl(req) {
+  try {
+    return new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  } catch {
+    return null;
+  }
+}
+
 function send(res, status, body, type = 'text/plain; charset=utf-8') {
   res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
   res.end(body);
@@ -294,10 +314,27 @@ let nextClientId = 1;
 export function createLinkServer({ root = ROOT, key = null, name = os.hostname() } = {}) {
   const clients = new Set();
 
-  const server = http.createServer(async (req, res) => {
+  /**
+   * Nothing a stranger sends gets to end the evening.
+   *
+   * The handler is async, so anything it throws becomes an unhandled rejection
+   * — which modern Node treats as fatal. This server sits there unattended for
+   * hours with a phone and a second machine depending on it, so every request
+   * ends in a response or a log line, never in a dead process.
+   */
+  const server = http.createServer((req, res) => {
+    handleRequest(req, res).catch((err) => {
+      console.error('[link] request failed', err);
+      if (res.headersSent) res.destroy();
+      else send(res, 500, 'Something went wrong serving that');
+    });
+  });
+
+  async function handleRequest(req, res) {
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
 
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const url = requestUrl(req);
+    if (!url) return send(res, 400, 'Bad request');
 
     /**
      * How a page finds out whether it is being served by this, or by GitHub
@@ -324,10 +361,20 @@ export function createLinkServer({ root = ROOT, key = null, name = os.hostname()
     }
 
     return serveStatic(req, res, root);
-  });
+  }
 
   server.on('upgrade', (req, socket) => {
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    try {
+      handleUpgrade(req, socket);
+    } catch (err) {
+      console.error('[link] upgrade failed', err);
+      socket.destroy();
+    }
+  });
+
+  function handleUpgrade(req, socket) {
+    const url = requestUrl(req);
+    if (!url) return reject(socket, 400, 'Bad request');
     if (url.pathname !== '/link') return reject(socket, 404, 'No such endpoint');
 
     const wsKey = req.headers['sec-websocket-key'];
@@ -407,7 +454,7 @@ export function createLinkServer({ root = ROOT, key = null, name = os.hostname()
     socket.on('close', () => drop(null));
 
     log(`${client.role} ${client.id} joined — ${clients.size} on the link`);
-  });
+  }
 
   function handleMessage(client, text) {
     let msg;
@@ -562,18 +609,49 @@ export function localAddresses(port) {
   return out;
 }
 
+/**
+ * A port number, or null.
+ *
+ * Zero is a real answer — it is how you ask the operating system for whatever
+ * port is free, which is what the tests do — so this cannot be the usual
+ * `Number(x) || fallback`, where zero is indistinguishable from nonsense.
+ * Everything that is not a whole number in range is nonsense, and saying so
+ * beats quietly listening somewhere other than where you were told.
+ */
+function parsePort(raw) {
+  const port = Number(raw);
+  if (raw === undefined || raw === '' || !Number.isInteger(port) || port < 0 || port > 65535) return null;
+  return port;
+}
+
 export function parseArgs(argv) {
-  const options = { port: 8000, host: '0.0.0.0', key: null, help: false };
+  const options = { port: 8000, host: '0.0.0.0', key: null, help: false, errors: [] };
+
+  const setPort = (raw) => {
+    const port = parsePort(raw);
+    if (port === null) options.errors.push(`Not a port number: ${raw ?? '(nothing)'}`);
+    else options.port = port;
+  };
+  const setHost = (raw) => {
+    if (!raw) options.errors.push('--host needs an address');
+    else options.host = raw;
+  };
+  const setKey = (raw) => {
+    if (!raw) options.errors.push('--key needs a value');
+    else options.key = raw;
+  };
+
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const value = () => argv[++i];
-    if (arg === '--port' || arg === '-p') options.port = Number(value()) || options.port;
-    else if (arg === '--host') options.host = value();
-    else if (arg === '--key') options.key = value();
+    if (arg === '--port' || arg === '-p') setPort(value());
+    else if (arg === '--host') setHost(value());
+    else if (arg === '--key') setKey(value());
     else if (arg === '--help' || arg === '-h') options.help = true;
-    else if (/^--port=/.test(arg)) options.port = Number(arg.split('=')[1]) || options.port;
-    else if (/^--host=/.test(arg)) options.host = arg.split('=')[1];
-    else if (/^--key=/.test(arg)) options.key = arg.split('=')[1];
+    else if (/^--port=/.test(arg)) setPort(arg.slice('--port='.length));
+    else if (/^--host=/.test(arg)) setHost(arg.slice('--host='.length));
+    else if (/^--key=/.test(arg)) setKey(arg.slice('--key='.length));
+    else options.errors.push(`Unknown option: ${arg}`);
   }
   return options;
 }
@@ -582,7 +660,7 @@ const HELP = `Facade Mapper link server
 
   node server.mjs [options]
 
-  --port, -p <n>   Port to listen on (default 8000)
+  --port, -p <n>   Port to listen on (default 8000; 0 picks a free one)
   --host <addr>    Interface to bind (default 0.0.0.0, i.e. the whole network)
   --key <secret>   Require ?key=<secret> to join the link
   --help, -h       This
@@ -596,6 +674,12 @@ async function main() {
     console.log(HELP);
     return;
   }
+  if (options.errors.length) {
+    for (const message of options.errors) console.error(message);
+    console.error('\n' + HELP);
+    process.exitCode = 1;
+    return;
+  }
 
   const link = createLinkServer({ key: options.key });
   try {
@@ -604,7 +688,9 @@ async function main() {
     console.error(
       err.code === 'EADDRINUSE'
         ? `Port ${options.port} is already busy. Try: node server.mjs --port ${options.port + 1}`
-        : `Could not start: ${err.message}`
+        : err.code === 'EACCES'
+          ? `Not allowed to listen on port ${options.port}. Ports below 1024 need root; try --port 8000.`
+          : `Could not start: ${err.message}`
     );
     process.exitCode = 1;
     return;
