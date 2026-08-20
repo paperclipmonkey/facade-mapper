@@ -271,7 +271,9 @@ export const HELP_SECTIONS = [
   <code>window, door</code> by default. <strong>Bouncing Balls</strong> ricochet off the glass,
   <strong>Serpent</strong> steers round the door rather than across it, and
   <strong>Creeping Vine</strong> spreads over the brickwork and creeps <em>around</em> the frames,
-  seeking out bare wall and wrapping every opening it finds.
+  seeking out bare wall and wrapping every opening it finds. <strong>Ditsy Flowers</strong> and
+  <strong>Paisley</strong> paper the wall with a repeating print, cut at the openings the way a
+  decorator cuts it rather than hung over the glass.
 </p>
 <p>
   Point one at the shape tagged <code>wall</code> and it stays on the wall; leave the targets empty

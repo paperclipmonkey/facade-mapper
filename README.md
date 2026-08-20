@@ -50,10 +50,11 @@ is for.
   the lattice onto the real ones.
 - **Draw over the real view** — a live camera, or a photograph of the house
   taken in daylight so you can trace indoors.
-- **Around fifty effects.** Blood drips, lightning, fire, candlelit windows,
+- **Around sixty effects.** Blood drips, lightning, fire, candlelit windows,
   figures behind glass, bats, rain, searchlights, fog, snow, Santa, icicles,
-  window frost, fairy lights, fireworks. **Browse…** on any layer renders all of
-  them live, on a shape like the one you are pointing at, so you pick by eye.
+  window frost, fairy lights, fireworks, wallpaper, and a pot of flowers that
+  wilts and blows its petals down the wall. **Browse…** on any layer renders all
+  of them live, on a shape like the one you are pointing at, so you pick by eye.
 - **It can read the building.** Walk round the front with a scanning app and
   drop the `.glb` in. The app fits the wall's own plane, builds a metric relief
   map of it — how far every point stands in front of or behind that plane — and

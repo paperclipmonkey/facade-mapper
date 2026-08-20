@@ -1,6 +1,6 @@
 # The effect library
 
-Around fifty effects, and a **Browse…** button on every layer that renders all
+Around sixty effects, and a **Browse…** button on every layer that renders all
 of them live, on a shape like the one you are pointing at. Pick by eye; this
 file is for the ideas behind them.
 
@@ -78,6 +78,9 @@ by default.
 | **Creeping Vine** | Ivy, mould or veins spreading over the brickwork and creeping *around* the frames. Seeks out bare wall and wraps every opening it finds. |
 | **Brickwork** | A course of brick laid over the shape, in running bond, with openings cut cleanly where the windows are. |
 | **Breach** | Bricks work loose, shudder, and drop out — and something reaches through the hole they leave. Goes directly over Brickwork. |
+| **Flowers** | A bunch growing out of the bottom edge of the shape and swaying, with one slider from fresh to dead and the petals blowing away. |
+| **Ditsy Flowers** | A small floral print over the whole wall, cut around the openings rather than hung over them. |
+| **Paisley** | Botehs in a half-drop repeat, with rosettes, fronds, tendrils, suns and dots packed in between them. |
 
 **Keeping the vine alive.** Growth is permanent by construction — that is what
 makes a wall of ivy cost one `drawImage` a frame — so left alone it fills to its
@@ -228,6 +231,113 @@ Three more settings are worth knowing:
   its own step length, so a very thick arm cannot navigate a facade at all — it
   wedges against the first window frame and spends the evening as a stub. If
   yours are not going anywhere, that is why.
+
+### Papering the wall
+
+**Ditsy Flowers** and **Paisley** are prints: one motif repeated over the whole
+of whatever you point them at. They are here rather than in *basic* because they
+treat the openings the way a decorator does — the paper is *cut* at the reveal,
+not hung over the glass — and because on a pale rendered wall they do the same
+job Brickwork does, which is to give the wall a surface so that everything above
+them stops looking like a slide on a sheet.
+
+A few things are worth knowing.
+
+**The lattice is anchored to the building, not to the shape.** Two walls either
+side of a door are laid on one grid and cannot disagree about where the pattern
+is. This is the same decision as Brickwork's course offsets and it is there for
+the same reason: anchoring to each shape's own bounding box gives every traced
+area its own private pattern, and no combination of settings will bring them
+into line, because the disagreement is in the anchor rather than in the numbers.
+
+**Nothing overlaps.** A print is a layout, not a scatter: two teardrops crossing
+read as one unrecognisable object, and a filler dropped on top of the motif it
+was meant to set off reads as damage. So the motifs ask for more room than the
+lattice has and are then *shrunk to fit* — where two would collide they divide
+the distance between them and end up exactly touching. That is why the sizes
+vary the way they do: what decides how big a motif is is the layout around it
+rather than a number somebody typed.
+
+Two consequences follow, and both are deliberate. Anything already on the wall
+stays exactly where and as it is when something new arrives beside it — a bold
+motif never gives way to a filler — so **Density** can be swept without the
+pattern rearranging itself. And a motif's footprint follows the *shape* of its
+artwork rather than a circle round it: a boteh is long, thin and bent, and
+reserving a circle for it would leave four fifths of a cell of ground nothing
+could ever get into.
+
+**It is layered.** A print is not one motif repeated. Paisley puts bold
+teardrops on every other cell of a half-drop repeat, middling ones on the cells
+between, and a fine ground of small botehs, fronds, tendrils, suns and dots
+scattered round both — that last layer is **Density**, and at nought you get the
+bare repeat. Ditsy Flowers is deliberately a scatter instead, one bag of motifs
+in every cell, which is what a ditsy is; its Density adds buds and leaves into
+the gaps. Half of every print is stamped mirrored, because a boteh has a hand
+and a wall of teardrops all hooking the same way is a rubber stamp.
+
+**Ground** is a colour and a level, and the level is the interesting one. At the
+top the wall is painted out and you get the printed article. At nought only the
+motifs are lit, and the ground of the print is the actual wall — brick, render,
+whatever is there — which is usually the better answer outdoors and always the
+cheaper one in light. The flower centres are cut out rather than painted for the
+same reason: they are the ground showing through, so they stay right whichever
+way you set it.
+
+**It moves, and it is meant to be driven.** One travelling wave crosses the whole
+building, and each motif reads it where it stands, so neighbours rock nearly
+together and the far end of the house is half a beat behind — a gust going
+across a wall rather than a few hundred things that happen to be wobbling.
+
+| | |
+| --- | --- |
+| **Sway** | How far the gust leans each motif. |
+| **Swell** | How much it breathes them in and out as it passes. |
+| **Breeze speed** | How fast the gust travels. Set it to nought and the wall holds still until something else moves it. |
+| **Gust phase** | Where the gust is, in turns. This is the one to bind: a saw LFO across it drives the whole wall from the beat instead of from the clock, and comes round to where it started rather than jumping. |
+| **Shimmer** | A second wave, crossing in brightness rather than in angle. |
+| **Fill** | How much of its packed space each motif takes. One is a tessellation — everything exactly touching — and anything less opens the ground up without moving a thing. Bind it to the level and the whole print tightens and loosens with the music. |
+| **Density** | How much fine ground there is between the bold motifs. Bound to an envelope, the pattern fills in on the beat and thins out after it. |
+| **Turn** | Every motif, turned together, in turns. Paisley only; a rosette does not care which way up it is. |
+| **Drift** | Slides the whole print, which is a good deal stranger and worth trying once. |
+
+Fill and Swell only ever take *less* than the packing allowed, which is what
+keeps the no-overlap guarantee true at every instant rather than on average — a
+print bound to the microphone can pulse as hard as you like and still never put
+one teardrop through another.
+
+**Motif size** sets the repeat, and everything scales with it: turn Paisley's up
+past 600 and one boteh covers the front of the house. Cost is the number of
+motifs on the wall rather than what is in them, and the pitch quietly opens out
+rather than letting a very small setting on a very large wall put forty thousand
+of them in a frame. The layout is worked out once and kept until something that
+shapes it moves, so a wall that is only breathing costs nothing to keep
+breathing.
+
+### Flowers, and letting them die
+
+**Flowers** grows a bunch out of the bottom edge of the shape it is given. It is
+meant to be traced directly above something real — a window box, a wall pot, the
+top of a hedge — so that the plant appears to be growing in it; the stems root on
+the outline you drew rather than on the floor of its bounding box, so a shape
+traced round the pot itself works as well as a rectangle above it. Nothing is
+clipped: the flowers lean out over the brickwork and the petals blow across it,
+which is the point.
+
+**Wilt** is the control worth binding to something. At nought it is a fresh
+bunch; at one the stems have gone over, the leaves hang, the colour has gone to
+the **Withered** hue and every petal has left. In between, petals let go one at a
+time and blow away on the same wind the stems are answering.
+
+It is a *position* rather than a process, which has two consequences that are
+easy to miss and both wanted. Sliding it back down puts the petals back, so a
+slow LFO gives you a bunch that dies and recovers all evening rather than one
+that is spent after the first pass. And what the flower looks like depends only
+on where the slider is — so a projector tab opened at ten o'clock shows the same
+half-bare flower as the one that has been running since dusk, which a shedding
+*rate* could not do.
+
+For Halloween, bind it to an LFO at a couple of minutes a cycle, or to a motion
+trigger: the flowers are fine until somebody walks up the path.
 
 ## Effects that happen once
 

@@ -64,6 +64,9 @@ jobs:
       - name: Brickwork and breach tests
         run: node test/brickwork.test.mjs
 
+      - name: Flowers and print tests
+        run: node test/floral.test.mjs
+
       - name: One-shot burst tests
         run: node test/bursts.test.mjs
 
