@@ -1,0 +1,190 @@
+/* The drawing surface.
+   One canvas filling the screen, with everything else pushed to the edges: a
+   tablet held up in front of a house is not a place for chrome. The bars fade
+   back while the pencil is moving and come back when it stops. */
+
+.draw-body {
+  height: 100%;
+  overflow: hidden;
+  /* No rubber-banding, no pull-to-refresh, no pinch zoom fighting the pencil. */
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pad {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  display: block;
+}
+
+/* ------------------------------------------------------------------ *
+ * Chrome
+ * ------------------------------------------------------------------ */
+
+.draw-head {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: calc(env(safe-area-inset-top) + 8px) 14px 8px;
+  background: linear-gradient(color-mix(in srgb, var(--bg) 82%, transparent), transparent);
+  transition: opacity 0.25s ease;
+}
+
+.draw-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex: none;
+}
+.draw-dot[data-link='linked'] {
+  background: var(--good);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent);
+}
+.draw-dot[data-link='connecting'],
+.draw-dot[data-link='checking'] { background: var(--warn); }
+.draw-dot[data-link='unavailable'],
+.draw-dot[data-link='off'] { background: var(--bad); }
+
+.draw-select {
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font: inherit;
+  max-width: 45vw;
+}
+
+.draw-target {
+  color: var(--text-faint);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draw-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 14px calc(env(safe-area-inset-bottom) + 10px);
+  background: linear-gradient(transparent, color-mix(in srgb, var(--bg) 88%, transparent) 40%);
+  transition: opacity 0.25s ease;
+}
+
+/* Out of the way while the pencil is down, back the moment it lifts. Pointer
+   events go with it, so a stroke that ends over the toolbar does not press a
+   button on the way up. */
+.drawing .draw-head,
+.drawing .draw-bar {
+  opacity: 0.12;
+  pointer-events: none;
+}
+
+.swatches {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.swatch {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+  padding: 0;
+  cursor: pointer;
+  flex: none;
+}
+
+.swatch[aria-pressed='true'] {
+  border-color: var(--text);
+  transform: scale(1.12);
+}
+
+.draw-width {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 160px;
+}
+
+.draw-width input[type='range'] {
+  width: 130px;
+  height: 44px;
+  accent-color: var(--accent);
+}
+
+/* A dot the size of the line you are about to draw. Faster to read than a
+   number, and the number would be in units of nothing anybody knows. */
+.nib {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-content: center;
+  flex: none;
+}
+.nib::after {
+  content: '';
+  display: block;
+  width: var(--nib, 8px);
+  height: var(--nib, 8px);
+  border-radius: 50%;
+  background: var(--nib-color, #fff);
+}
+
+.draw-tools { display: flex; gap: 8px; }
+
+.tool {
+  min-height: 44px;
+  padding: 8px 14px;
+  background: var(--bg-raised);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tool[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--accent) 24%, var(--bg-raised));
+  border-color: var(--accent);
+}
+
+.draw-notice {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  max-width: 30em;
+  margin: 0;
+  padding: 16px 18px;
+  text-align: center;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  color: var(--text-dim);
+}
+
+.draw-notice p { margin: 0; }

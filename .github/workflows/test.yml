@@ -82,3 +82,6 @@ jobs:
 
       - name: Cross-device link, clock sync and relay tests
         run: node test/link.test.mjs
+
+      - name: Live drawing store tests
+        run: node test/drawing.test.mjs

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <title>Draw — Facade Mapper</title>
+    <meta name="description" content="Draw on the house from a tablet, in real time." />
+    <meta name="theme-color" content="#0c0e13" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✏️</text></svg>" />
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/draw.css" />
+  </head>
+  <body class="draw-body">
+    <canvas id="pad" class="pad"></canvas>
+
+    <div class="draw-notice" id="notice" role="status">
+      <p id="noticeText">Looking for the show…</p>
+      <button type="button" class="tool" id="btnAddLayer" hidden>Add a drawing layer</button>
+    </div>
+
+    <header class="draw-head" id="head">
+      <span class="draw-dot" id="linkDot" data-link="checking" aria-hidden="true"></span>
+      <select id="surfacePicker" class="draw-select" aria-label="Which drawing layer"></select>
+      <span class="draw-target" id="targetName"></span>
+    </header>
+
+    <footer class="draw-bar" id="bar">
+      <div class="swatches" id="swatches"></div>
+
+      <label class="draw-width">
+        <input type="range" id="width" min="0.4" max="12" step="0.1" value="2.2" aria-label="Line width" />
+        <span class="nib" id="nib" aria-hidden="true"></span>
+      </label>
+
+      <div class="draw-tools">
+        <button type="button" class="tool" id="btnErase" aria-pressed="false">Rub out</button>
+        <button type="button" class="tool" id="btnUndo">Undo</button>
+        <button type="button" class="tool" id="btnClear">Clear</button>
+        <button type="button" class="tool" id="btnPencilOnly" aria-pressed="false" title="Ignore fingers and palms">Pencil</button>
+      </div>
+    </footer>
+
+    <div class="toast" id="toast" hidden></div>
+
+    <script type="module" src="js/draw/app.js"></script>
+  </body>
+</html>
