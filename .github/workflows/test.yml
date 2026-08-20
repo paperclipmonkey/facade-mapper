@@ -25,6 +25,7 @@ jobs:
       - name: Check every module parses
         run: |
           status=0
+          node --check server.mjs || exit 1
           for file in $(find js -name '*.js' | sort); do
             cp "$file" /tmp/check.mjs
             if ! node --check /tmp/check.mjs; then
@@ -81,3 +82,6 @@ jobs:
 
       - name: Scan pipeline against a realistic garden
         run: node test/scanreal.test.mjs
+
+      - name: Cross-device link, clock sync and relay tests
+        run: node test/link.test.mjs

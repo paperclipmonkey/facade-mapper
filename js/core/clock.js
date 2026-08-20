@@ -4,13 +4,20 @@
  * All tabs derive show time from the same wall clock, so no tab has to ask
  * another what time it is. Pausing stores the elapsed time; resuming back-dates
  * the start epoch so the maths stays a single subtraction.
+ *
+ * The wall clock is `now()` from core/time.js rather than `Date.now()`, which
+ * is the same number on one machine and the *link server's* number on a second
+ * one. That is what lets a laptop in the garage and a laptop in the hall run
+ * one show: they subtract the same start epoch from the same idea of now.
  */
+
+import { now } from './time.js';
 
 export function createClock() {
   let transport = {
     running: false,
-    /** Wall-clock ms such that showTime = (Date.now() - startEpoch) / 1000. */
-    startEpoch: Date.now(),
+    /** Wall-clock ms such that showTime = (now() - startEpoch) / 1000. */
+    startEpoch: now(),
     /** Where the clock was frozen, in seconds. */
     pausedAt: 0,
     bpm: 120,
@@ -20,7 +27,7 @@ export function createClock() {
   let lastFrameWall = performance.now();
 
   function timeNow() {
-    return transport.running ? (Date.now() - transport.startEpoch) / 1000 : transport.pausedAt;
+    return transport.running ? (now() - transport.startEpoch) / 1000 : transport.pausedAt;
   }
 
   /** Call once per rendered frame. Returns everything effects need about time. */
@@ -29,13 +36,13 @@ export function createClock() {
      * One reading of the wall clock, used for both `t` and `wall`.
      *
      * They are two views of the same instant and consumers subtract one from the
-     * other — that is how a switch-on time recorded as `Date.now()` becomes a
+     * other — that is how a switch-on time recorded on the wall clock becomes a
      * show time. Reading the clock twice put a millisecond of noise into that
      * difference, so the answer wobbled frame to frame instead of being a
      * constant, and anything comparing it against a stored value saw a change
      * every single frame.
      */
-    const nowMs = Date.now();
+    const nowMs = now();
     const t = transport.running ? (nowMs - transport.startEpoch) / 1000 : transport.pausedAt;
     const wallNow = performance.now();
 
@@ -76,7 +83,7 @@ export function createClock() {
 
   function play() {
     if (transport.running) return getTransport();
-    transport.startEpoch = Date.now() - transport.pausedAt * 1000;
+    transport.startEpoch = now() - transport.pausedAt * 1000;
     transport.running = true;
     return getTransport();
   }
@@ -91,7 +98,7 @@ export function createClock() {
   function stop() {
     transport.running = false;
     transport.pausedAt = 0;
-    transport.startEpoch = Date.now();
+    transport.startEpoch = now();
     lastT = 0;
     return getTransport();
   }

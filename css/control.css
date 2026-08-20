@@ -920,3 +920,83 @@
 }
 
 .help-pane > h2:first-child { margin-top: 0; }
+
+/* ------------------------------------------------------------------ *
+ * The link indicator
+ *
+ * A pill in the app bar rather than a panel, because the answer it carries is
+ * one word — is anything else on this show — and because on a machine with no
+ * link server it should read as a piece of status and not as a broken feature.
+ * ------------------------------------------------------------------ */
+
+.link-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-dim);
+}
+
+.link-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex: none;
+}
+
+.link-pill[data-link='linked'] { color: var(--text); }
+.link-pill[data-link='linked'] .link-dot {
+  background: var(--good);
+  /* Faint halo: at a glance across a dark room this is the difference between
+     "a dot" and "a lit dot". */
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent);
+}
+.link-pill[data-link='connecting'] .link-dot { background: var(--warn); animation: link-pulse 1.4s ease-in-out infinite; }
+.link-pill[data-link='checking'] .link-dot { background: var(--text-faint); animation: link-pulse 1.4s ease-in-out infinite; }
+
+@keyframes link-pulse {
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link-pill .link-dot { animation: none; }
+}
+
+.link-body { max-width: 46em; }
+.link-body h3 { margin-top: 16px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+
+.link-command {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent-2);
+}
+
+.link-urls { display: grid; gap: 8px; }
+
+.link-url {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.link-url-what { color: var(--text-faint); font-size: 11px; }
+
+.link-url code {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--accent);
+  /* Long enough to wrap on a narrow dialog, and worth wrapping rather than
+     truncating — it is meant to be read out loud and typed into a phone. */
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.link-peers { margin-top: 6px; }

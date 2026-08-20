@@ -6,9 +6,14 @@
  * scene B at wall-clock time T over F seconds", not as a stream of interpolated
  * values. Every tab then computes the same blend from the same three numbers,
  * so a crossfade stays in step across projectors without any per-frame traffic.
+ *
+ * Time T is read from `now()` rather than `Date.now()`, so "the same three
+ * numbers" survives the projectors being on two different machines. See
+ * core/time.js.
  */
 
 import { clamp, lerp } from './math.js';
+import { now } from './time.js';
 
 /** Capture the current live state of every layer as a scene snapshot. */
 export function captureScene(project) {
@@ -84,11 +89,11 @@ export function sceneDrift(project, sceneId) {
 }
 
 /** Blend factor for the running transition, 0 = fully previous, 1 = fully active. */
-export function transitionProgress(show, now = Date.now()) {
+export function transitionProgress(show, at = now()) {
   if (!show?.sceneChangeAt) return 1;
   const fade = Math.max(0, show.fade ?? 0);
   if (fade <= 0) return 1;
-  return clamp((now - show.sceneChangeAt) / 1000 / fade, 0, 1);
+  return clamp((at - show.sceneChangeAt) / 1000 / fade, 0, 1);
 }
 
 function blendLayerState(from, to, f) {
@@ -124,7 +129,7 @@ function blendLayerState(from, to, f) {
  * control tab's inspector keeps showing the authored values while the render
  * shows the blended ones.
  */
-export function effectiveLayers(project, now = Date.now()) {
+export function effectiveLayers(project, at = now()) {
   const show = project.show || {};
   const scenes = new Map((project.scenes || []).map((s) => [s.id, s]));
   const active = scenes.get(show.activeScene);
@@ -132,7 +137,7 @@ export function effectiveLayers(project, now = Date.now()) {
 
   if (!active) return project.layers;
 
-  const f = transitionProgress(show, now);
+  const f = transitionProgress(show, at);
   const out = [];
 
   for (const layer of project.layers) {
@@ -169,7 +174,7 @@ export function activateScene(project, sceneId, { fade } = {}) {
   show.previousScene = show.activeScene || null;
   show.activeScene = sceneId;
   show.fade = fade ?? scene.fade ?? 0;
-  show.sceneChangeAt = Date.now();
+  show.sceneChangeAt = now();
   return show;
 }
 
@@ -180,7 +185,7 @@ export function activateScene(project, sceneId, { fade } = {}) {
  * broadcast result rather than each running their own timer, so they can't drift
  * onto different scenes.
  */
-export function tickPlaylist(project, now = Date.now()) {
+export function tickPlaylist(project, at = now()) {
   const show = project.show;
   if (!show?.running || !show.playlist?.length) return false;
 
@@ -188,14 +193,14 @@ export function tickPlaylist(project, now = Date.now()) {
   if (!entries.length) return false;
 
   if (!show.playlistStartedAt) {
-    show.playlistStartedAt = now;
+    show.playlistStartedAt = at;
     show.playlistIndex = 0;
     activateScene(project, entries[0].sceneId, { fade: entries[0].fade });
     return true;
   }
 
   const current = entries[Math.min(show.playlistIndex ?? 0, entries.length - 1)];
-  const elapsed = (now - show.playlistStartedAt) / 1000;
+  const elapsed = (at - show.playlistStartedAt) / 1000;
   if (elapsed < (current.duration ?? 30)) return false;
 
   let nextIndex = (show.playlistIndex ?? 0) + 1;
@@ -214,7 +219,7 @@ export function tickPlaylist(project, now = Date.now()) {
   }
 
   show.playlistIndex = nextIndex;
-  show.playlistStartedAt = now;
+  show.playlistStartedAt = at;
   activateScene(project, entries[nextIndex].sceneId, { fade: entries[nextIndex].fade });
   return true;
 }

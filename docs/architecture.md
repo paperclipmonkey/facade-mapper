@@ -5,11 +5,14 @@ No build step. Plain ES modules, served exactly as they sit in the repository.
 ```
 index.html          control tab
 projector.html      output tab, one per projector
+remote.html         phone or second-laptop remote
+server.mjs          optional: static files + the cross-device link
 js/core/            project model, storage, cross-tab bus, maths, clock, modulation
 js/effects/         effect registry and the built-in library
 js/render/          world renderer (2D), projective warp and post-processing (WebGL)
 js/control/         camera, calibration, motion, sound, triggers, UI
 js/projector/       the output tab
+js/remote/          the remote
 docs/               this
 test/               plain Node tests, no dependencies, plus a browser benchmark
 ```
@@ -90,6 +93,36 @@ Projector tabs derive show time from the wall clock plus the broadcast transport
 state, rather than counting their own frames, so a tab that drops frames or is
 reopened mid-show stays in step with the others.
 
+## Off this machine
+
+`BroadcastChannel` is same-origin *and* same-browser, so a phone or a second
+computer needs a wire. [`server.mjs`](../server.mjs) is a static file server with
+a hand-written WebSocket relay on it, and [`js/core/link.js`](../js/core/link.js)
+is a *transport* rather than a second bus: it mirrors what a tab posts onto the
+socket and feeds what arrives back in through `bus.receive`. No handler anywhere
+knows which side of the wire a message came from.
+
+Three details carry the design:
+
+- **It asks first.** A tab probes `/link/info` once. On GitHub Pages nothing
+  answers and it stays quiet, rather than retrying a socket all evening.
+- **Subscriptions.** Each connection says which message types it wants. A
+  remote asks for `SHOW` and `CLOCK`, so the whole-project broadcast — which
+  goes out a dozen times a second while a slider moves — never reaches a phone.
+  Messages are also not sent back to the device they came from, which already
+  had them over BroadcastChannel.
+- **One clock.** Two machines disagree about the time by however long it has
+  been since either checked, and show time is a subtraction from a shared wall
+  clock. Every device measures its offset from the server the way NTP does and
+  routes every cross-tab stamp through [`js/core/time.js`](../js/core/time.js).
+  Unlinked, the offset is zero and nothing about the single-machine case
+  changes. See [more than one device](multi-device.md).
+
+The remote holds no project. The control tab publishes a small digest of what
+the show is doing and accepts a fixed list of verbs back, each delegating to the
+function its own button calls — so the control tab remains the only place the
+project is edited, and there is nothing to reconcile.
+
 ## Determinism
 
 Effects are seeded per (layer, shape) pairing rather than globally, so the same
@@ -104,7 +137,10 @@ holds media and the traced camera still, because they are too big for
 `localStorage` and because it is shared across tabs, so projector tabs read the
 same files without them being sent over the bus.
 
-Nothing leaves the machine.
+Nothing leaves the machine, and nothing leaves the network: with the link
+running, the project crosses to whatever devices you joined to it, over your own
+wifi, and no further. Media stays put even then — it is in IndexedDB on the
+machine it was imported to.
 
 ## Tests
 
@@ -117,6 +153,7 @@ node test/runtime.test.mjs     # motion detection, trigger gating, scheduling, g
 node test/collide.test.mjs     # heightfields, landing, slumping, shedding
 node test/obstacles.test.mjs   # facade collision, automatic edge blending
 node test/figures.test.mjs     # the drawn figures
+node test/link.test.mjs        # clock offset, WebSocket framing, the relay
 ```
 
 `geometry.test.mjs` includes an end-to-end calibration against a simulated

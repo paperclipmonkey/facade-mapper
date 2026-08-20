@@ -148,6 +148,9 @@ export function buildCommands(app, actions = {}) {
   doAction('Save the current look as a scene', actions.captureScene, { keywords: 'snapshot store cue' });
   doAction('Export this show to a file', actions.exportShow, { keywords: 'backup save json download' });
   doAction('Import a show from a file', actions.importShow, { keywords: 'restore load json' });
+  doAction('Put a phone or another computer on this show', actions.devices, {
+    keywords: 'remote phone link devices second laptop network wifi server address',
+  });
   doAction('Help', actions.help, { keywords: 'docs manual keys shortcuts' });
 
   /* --- panels --- */

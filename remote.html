@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- viewport-fit=cover so the blackout button can sit in the home-indicator
+         area on a phone rather than above a strip of black that does nothing. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Remote — Facade Mapper</title>
+    <meta name="description" content="Run a Facade Mapper show from a phone or a second laptop." />
+    <meta name="theme-color" content="#0c0e13" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎃</text></svg>" />
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/remote.css" />
+  </head>
+  <body class="remote-body">
+    <header class="remote-bar">
+      <span class="remote-dot" id="linkDot" data-link="checking" aria-hidden="true"></span>
+      <span class="remote-show" id="showName">Facade Mapper</span>
+      <span class="remote-time" id="showTime">00:00.0</span>
+    </header>
+
+    <p class="remote-notice" id="notice" role="status">Looking for the show…</p>
+
+    <main class="remote-main" id="main" hidden>
+      <button type="button" class="big blackout" id="btnBlackout">
+        <span class="big-label">Blackout</span>
+        <span class="big-sub" id="blackoutSub">everything off</span>
+      </button>
+
+      <section class="remote-section" id="scenesSection" hidden>
+        <h2>Scenes</h2>
+        <div class="grid" id="scenes"></div>
+      </section>
+
+      <section class="remote-section" id="triggersSection" hidden>
+        <h2>Triggers</h2>
+        <div class="grid" id="triggers"></div>
+      </section>
+
+      <section class="remote-section">
+        <h2>Transport</h2>
+        <div class="row">
+          <button type="button" class="big" id="btnPlay"><span class="big-label">▶</span></button>
+          <button type="button" class="big" id="btnStop"><span class="big-label">■</span></button>
+          <button type="button" class="big" id="btnRunShow"><span class="big-label">Run show</span></button>
+        </div>
+        <label class="fader">
+          <span class="fader-label">Master <output id="masterOut">100%</output></span>
+          <input type="range" id="master" min="0" max="1" step="0.01" value="1" aria-label="Master brightness" />
+        </label>
+      </section>
+
+      <details class="remote-more" id="more">
+        <summary>Effects, projectors and the link</summary>
+
+        <h2>Effects</h2>
+        <div class="list" id="layers"></div>
+
+        <h2>Projectors</h2>
+        <div class="list" id="projectors"></div>
+
+        <h2>This device</h2>
+        <p class="remote-note" id="linkNote"></p>
+      </details>
+    </main>
+
+    <div class="toast" id="toast" hidden></div>
+
+    <script type="module" src="js/remote/app.js"></script>
+  </body>
+</html>
