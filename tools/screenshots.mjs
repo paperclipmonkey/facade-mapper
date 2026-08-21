@@ -59,7 +59,6 @@ const HERO = {
   t: 30,
   file: 'demo-house.jpg',
   dir: path.join(root, 'docs', 'assets'),
-  w: 1760,
 };
 
 const SHOTS = [
@@ -128,7 +127,12 @@ async function main() {
       // simulation synchronously before the load event, and on a software
       // renderer that is a minute or two.
       await page.goto(url, { waitUntil: 'commit' });
-      await page.waitForFunction(() => window.__shot, null, { timeout: 180000 });
+      // Generous, and it has to be: the page runs the whole simulation up to
+      // `t` synchronously before it paints, so the wait scales with how far
+      // into the show the still is taken. Three minutes was enough for the
+      // thumbnails and not for a shot at half a minute of a twelve-layer show,
+      // which failed with nothing to show for the seven minutes before it.
+      await page.waitForFunction(() => window.__shot, null, { timeout: 600000 });
       const result = await page.evaluate(() => window.__shot);
 
       const file = path.join(shot.dir || outDir, shot.file || `${shot.preset}.jpg`);
