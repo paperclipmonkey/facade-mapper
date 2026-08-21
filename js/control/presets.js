@@ -142,6 +142,25 @@ const HALLOWEEN = () => [
       align: 'centre', animation: 'flicker', speed: 1.1, amount: 0.6, pathOffset: 0,
     },
   }),
+  /**
+   * Dead flowers in the pot, which is the cheapest scare in the library.
+   *
+   * Flowers has one slider from fresh to dead, and taken all the way it drops
+   * the heads, greys the stems and blows the petals down the wall. Nothing
+   * about it is a Halloween effect; it is the same plant everybody else's
+   * preset grows, left to die, and it reads instantly as a house nobody has
+   * looked after.
+   */
+  layer('flowers', {
+    name: 'Dead flowers in the pot',
+    tags: ['planter'],
+    needsTag: 'planter',
+    params: {
+      color: '#a8506f', color2: '#6d4460', centre: '#2b1420', stem: '#5a5642',
+      dry: '#8a6a42', count: 7, height: 0.85, size: 0.12, petals: 5, spread: 0.45,
+      leaves: 0.35, wind: 0.7, gust: 1.1, wilt: 0.85, fly: 1.4, seed: 13,
+    },
+  }),
   layer('lightning', {
     name: 'Storm',
     params: { temperature: 9000, rate: 5, flash: 0.5, bolt: true, thickness: 5, branches: 4, flickers: 3, duration: 0.5 },
@@ -210,6 +229,24 @@ const CHRISTMAS = () => [
   // carry `settle: 0`, which is not a parameter snow has, so it did nothing and
   // the effect ran with collision on regardless — the right look, arrived at by
   // accident. `buildUp` and `maxDepth` are what actually control it.
+  /**
+   * A red bunch in the pot, half dead and heavy with frost.
+   *
+   * Nothing flowers outdoors at Christmas, which is the point: `wilt` a little
+   * over halfway gives a bunch that is clearly past it, and the withered
+   * colour doing the work instead of the flower colour is what makes it read
+   * as December rather than as a summer border with snow drawn over it.
+   */
+  layer('flowers', {
+    name: 'Frosted bunch in the pot',
+    tags: ['planter'],
+    needsTag: 'planter',
+    params: {
+      color: '#c9364a', color2: '#e8e4dc', centre: '#ffe9a8', stem: '#3f5a43',
+      dry: '#8fa3a8', count: 8, height: 0.7, size: 0.1, petals: 6, spread: 0.5,
+      leaves: 0.55, wind: 0.3, gust: 0.5, wilt: 0.55, fly: 0.4, seed: 5,
+    },
+  }),
   layer('snow', {
     name: 'Snowfall',
     params: {
@@ -320,6 +357,16 @@ const BIRTHDAY = () => [
       wind: 12, string: 1.7, shine: 0.8, spread: 1, pop: 0,
     },
   }),
+  layer('flowers', {
+    name: 'Flowers in the pot',
+    tags: ['planter'],
+    needsTag: 'planter',
+    params: {
+      color: '#ff6f9c', color2: '#ffd166', centre: '#fff3c4', stem: '#4f8b3b',
+      dry: '#7d5a33', count: 9, height: 0.85, size: 0.11, petals: 6, spread: 0.45,
+      leaves: 0.7, wind: 0.6, gust: 0.8, wilt: 0, fly: 0.6, seed: 3,
+    },
+  }),
   layer('confetti', {
     name: 'Confetti',
     opacity: 0.85,
@@ -328,14 +375,23 @@ const BIRTHDAY = () => [
       fall: 110, wind: 26, flutter: 1.1, tumble: 1, level: 1,
     },
   }),
+  /**
+   * The name across the middle of the house, not curved over the porch.
+   *
+   * The arch is the right place for two or three words of atmosphere and the
+   * wrong place for the one thing this evening is actually about. `primary` is
+   * a flat panel of bare wall, so the lettering is square, level, several
+   * times taller, and readable from the pavement — which is the only place it
+   * will ever be read from. Put somebody's name in it.
+   */
   layer('text', {
-    name: 'Sign over the door',
-    tags: ['sign'],
-    needsTag: 'sign',
+    name: 'Name across the wall',
+    tags: ['primary'],
+    needsTag: 'primary',
     params: {
-      content: 'HAPPY BIRTHDAY', mode: 'path', font: 'rounded', weight: '900', size: 0.85,
-      tracking: 0.06, color: '#ffd166', stroke: '#ff3b6b', strokeWidth: 4, glow: 20,
-      align: 'centre', animation: 'wave', speed: 0.7, amount: 0.3, pathOffset: 0,
+      content: 'HAPPY BIRTHDAY', mode: 'box', font: 'rounded', weight: '900', size: 0.62,
+      tracking: 0.04, color: '#ffd166', stroke: '#ff3b6b', strokeWidth: 4, glow: 20,
+      align: 'centre', animation: 'wave', speed: 0.7, amount: 0.3,
     },
   }),
 ];
@@ -439,16 +495,28 @@ const NEW_YEAR = () => [
       pulse: true, flare: 8, flareColor: '#ffe9b0',
     },
   }),
+  /**
+   * The number goes on the wall; the clock stays on the door.
+   *
+   * These used to be stacked on the same two feet of woodwork — an analogue
+   * face on the door and the digits curved over the arch directly above it —
+   * which is a lot of counting in one place and leaves the rest of the house
+   * doing nothing. Split across the facade they read as one instrument: the
+   * face where a face belongs, and the figures big and level across the middle
+   * of the wall where a crowd in the road can actually read them.
+   *
+   * Sized against a panel rather than an arch. Text takes its size from the
+   * smaller dimension of the shape, and the panel is about two and a half
+   * times taller than the arch was, so the same number on the wall wants less
+   * than half the multiplier it wanted on the woodwork.
+   */
   layer('countdown', {
-    name: 'Countdown over the door',
-    tags: ['sign'],
-    needsTag: 'sign',
+    name: 'Countdown across the wall',
+    tags: ['primary'],
+    needsTag: 'primary',
     params: {
-      // Sized against the arch, which is a wide, *shallow* shape: text takes
-      // its size from the smaller dimension, so the number needs to be several
-      // times the height of the shape it is hung on to read from the road.
       target: '2027-01-01 00:00', prefix: '', expired: 'HAPPY NEW YEAR', units: 'auto',
-      font: 'mono', weight: '700', size: 1.25, color: '#ffe9b0', glow: 20,
+      font: 'mono', weight: '700', size: 0.72, color: '#ffe9b0', glow: 20,
       stroke: '#000000', strokeWidth: 2, tracking: 0.06, offsetY: 0, pulse: true,
     },
   }),
@@ -832,7 +900,7 @@ export const PRESETS = [
     name: 'Halloween starter',
     description:
       'Candlelit windows with something looking out, blood down the door, rot creeping over the brickwork, ground fog and a storm overhead.',
-    tagsUsed: ['window', 'door'],
+    tagsUsed: ['window', 'door', 'planter'],
     grade: 'haunted',
     build: HALLOWEEN,
   },
@@ -841,7 +909,7 @@ export const PRESETS = [
     name: 'Christmas starter',
     description:
       'Chasing lights along the roofline, warm windows behind frosted glass, icicles, a candy-cane door, snow and a Santa fly-past.',
-    tagsUsed: ['roof', 'window', 'door'],
+    tagsUsed: ['roof', 'window', 'door', 'planter'],
     grade: 'frost',
     build: CHRISTMAS,
   },
@@ -850,7 +918,7 @@ export const PRESETS = [
     name: 'Birthday',
     description:
       'Bunting along the roofline, a cake with lit candles on the door, balloons going up the front of the house and confetti over the lot.',
-    tagsUsed: ['roof', 'window', 'door'],
+    tagsUsed: ['roof', 'window', 'door', 'planter', 'primary'],
     grade: 'saturated',
     build: BIRTHDAY,
   },
@@ -868,7 +936,7 @@ export const PRESETS = [
     name: "New Year's Eve",
     description:
       'A working clock counting down to midnight on the door, the time over it, sparklers along the roofline, fireworks and confetti. Set the date on both counting layers.',
-    tagsUsed: ['roof', 'window', 'door'],
+    tagsUsed: ['roof', 'window', 'door', 'primary'],
     grade: 'saturated',
     build: NEW_YEAR,
   },

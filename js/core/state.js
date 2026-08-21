@@ -35,6 +35,26 @@ export const SHAPE_TAGS = [
   'trim',
   /** An open path meant to be written along — an arch over the door, a banner. */
   'sign',
+  /**
+   * The one flat area the show's headline goes on.
+   *
+   * `sign` is a *path* and text follows its curve, which is what you want over
+   * a porch and wrong for anything that has to be square to be read — a
+   * countdown, a clock face, a symbol. So this is the other kind: a blank
+   * rectangle of wall, picked once, that every preset can point its biggest
+   * thing at. Tag the best clear panel on your house and the starters will use
+   * it instead of hanging everything off the door.
+   */
+  'primary',
+  /**
+   * A pot, a window box, or a bed at the foot of the wall.
+   *
+   * Named for the thing rather than for the effect, like `window` and
+   * `chimney`, because what grows out of it is a choice: Flowers grows a bunch
+   * out of the bottom edge of whatever carries this tag, and Creeping Vine
+   * will happily start from one too.
+   */
+  'planter',
   'mask',
 ];
 

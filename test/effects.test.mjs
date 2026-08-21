@@ -95,6 +95,11 @@ function recordingContext() {
   return ctx;
 }
 
+/** Four corners, for the shapes below. */
+const rect = (x, y, w, h) => [
+  { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+];
+
 /** A shape as the renderer's geometry cache hands it over. */
 function geo(points, { closed = true, id = 's' } = {}) {
   return {
@@ -459,6 +464,88 @@ console.log('\n— rand() inside an expression binding —');
   ok('nor do two parameters of one layer',
     at('L1', 'branch', 3) !== at('L1', 'cling', 3),
     `${at('L1', 'branch', 3)} vs ${at('L1', 'cling', 3)}`);
+}
+
+/* ------------------------------------------------------------------ *
+ * The vine comes up, rather than arriving
+ * ------------------------------------------------------------------ */
+
+console.log('\n— creeping vine —');
+
+/**
+ * The vine accumulates into an offscreen canvas, so it needs one to exist.
+ * A recording context is enough: nothing here reads a pixel back, it only
+ * counts shoots.
+ */
+globalThis.document = {
+  createElement: () => ({ width: 1, height: 1, getContext: () => recordingContext() }),
+};
+
+{
+  /**
+   * Tip count is what the plant grows *to*, not what it starts with.
+   *
+   * The first simulation step used to find an empty tip list, want the full
+   * six, and push six — so adding the layer put six runners on the bottom edge
+   * of the wall in the same instant. Each carries a glow several times its own
+   * width, so six of them together on bare brick read as one thick bar of
+   * light and nothing about it read as growth.
+   */
+  const wall = geo(rect(100, 200, 1600, 750), { id: 'wall' });
+  const counts = [];
+  const marks = [0.1, 1.5, 4, 20];
+  let next = 0;
+
+  const effect = getEffect('vine');
+  const p = { ...defaultParams('vine') };
+  const state = {};
+  const base = {
+    p, stable: p, shape: wall, shapes: () => [], i: 0, n: 1,
+    dt: 1 / 60, beat: 0, beatPhase: 0, bpm: 120,
+    audio: { level: 0, low: 0, mid: 0, high: 0 },
+    world: { w: 1920, h: 1080 }, layer: { id: 'L1' }, state,
+    noise: defaultNoise, media: () => null, camera: () => null,
+    preview: false, share: new Map(), depth: null,
+  };
+  Object.assign(state, effect.init({ ...base, g: null, rng: makeRng('v'), t: 0, age: 0 }) || {});
+  for (let i = 1; i <= 20 * 60; i++) {
+    const t = i / 60;
+    effect.step({ ...base, g: null, t, age: t, rng: makeRng(`v:${i}`) });
+    if (next < marks.length && t >= marks[next]) {
+      counts.push(state.tips.filter((tip) => !tip.retiring).length);
+      next++;
+    }
+  }
+
+  ok('one shoot to begin with, not all of them', counts[0] === 1, `${counts[0]} at 0.1s`);
+  ok('and they arrive one at a time', counts[1] > counts[0] && counts[1] < p.tips,
+    `${counts[1]} at 1.5s of ${p.tips}`);
+  ok('reaching the full complement in the first few seconds', counts[2] >= 3,
+    `${counts[2]} at 4s`);
+  ok('and holding it', counts[3] >= p.tips - 1, `${counts[3]} at 20s of ${p.tips}`);
+}
+
+{
+  // A tab that joins an hour into the evening does not watch them emerge again.
+  const wall = geo(rect(100, 200, 1600, 750), { id: 'wall' });
+  const effect = getEffect('vine');
+  const p = { ...defaultParams('vine') };
+  const state = {};
+  const base = {
+    p, stable: p, shape: wall, shapes: () => [], i: 0, n: 1,
+    dt: 1 / 60, beat: 0, beatPhase: 0, bpm: 120,
+    audio: { level: 0, low: 0, mid: 0, high: 0 },
+    world: { w: 1920, h: 1080 }, layer: { id: 'L1' }, state,
+    noise: defaultNoise, media: () => null, camera: () => null,
+    preview: false, share: new Map(), depth: null,
+  };
+  Object.assign(state, effect.init({ ...base, g: null, rng: makeRng('v'), t: 0, age: 0 }) || {});
+  // One step to plant it, then jump the clock the way a catch-up does.
+  effect.step({ ...base, g: null, t: 1 / 60, age: 1 / 60, rng: makeRng('v:1') });
+  effect.step({ ...base, g: null, t: 3600, age: 3600, rng: makeRng('v:2') });
+  ok('a tab joining hours in has the full plant straight away',
+    state.tips.filter((tip) => !tip.retiring).length >= p.tips - 1,
+    `${state.tips.filter((tip) => !tip.retiring).length} shoots`);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');

@@ -23,6 +23,22 @@ A layer draws into the shapes it targets. Point it at specific shapes, or at a
 **tag** — `window`, `door`, `roof` — and it lights everything with that tag,
 including shapes you trace later.
 
+Two of the tags are worth tracing even though there is nothing on the house to
+trace *around*, and both are decisions rather than outlines:
+
+- **`primary`** is the one flat panel the show's headline goes on. `sign` is a
+  *path* and text follows its curve, which is right over a porch and wrong for
+  anything that has to be square to be read — a countdown, a clock, a symbol.
+  Find the largest clear rectangle of wall, usually the band between the
+  first-floor windows and the ground floor, and mark it. New Year's Eve puts
+  its figures there and leaves the clock face on the door; Birthday puts the
+  name there. It is the difference between a message hung off whatever happened
+  to be traced and one placed where you decided it should go.
+- **`planter`** is a pot, a window box, or a bed at the foot of the wall.
+  Flowers grows a bunch out of the bottom edge of it and Creeping Vine will
+  start from one. Trace the space the plant should *occupy*, not the pot —
+  the pot is a dark blob at night and the flowers are the point.
+
 A layer with no targets covers the whole frame. That is how snow, fog, bats and
 lightning work, and it is also the sensible fallback for the facade-aware
 effects below.
@@ -90,6 +106,15 @@ by default.
 | **Flowers** | A bunch growing out of the bottom edge of the shape and swaying, with one slider from fresh to dead and the petals blowing away. |
 | **Ditsy Flowers** | A small floral print over the whole wall, cut around the openings rather than hung over them. |
 | **Paisley** | Botehs in a half-drop repeat, with rosettes, fronds, tendrils, suns and dots packed in between them. |
+
+**How it comes up.** Growing tips is what the plant grows *to*, not what it
+starts with: one runner sets off, another every second or so after it, until
+the full complement is working. That matters more than it sounds. Each shoot
+carries a glow several times the vine's own width and they all start from the
+bottom edge, so six arriving in the same instant — which is what used to happen
+the moment you added the layer — read as one thick bar of light across the foot
+of the wall rather than as anything growing. A tab that joins the show an hour
+in skips the wind-up and has the whole plant immediately.
 
 **Keeping the vine alive.** Growth is permanent by construction — that is what
 makes a wall of ivy cost one `drawImage` a frame — so left alone it fills to its

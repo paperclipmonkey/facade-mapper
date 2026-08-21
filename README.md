@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/demo-house.jpg" alt="A traced facade with candlelit windows, cobwebs, blood down the door and ivy creeping around the frames" width="820" />
+  <img src="docs/assets/demo-house.jpg" alt="A house under snow: chasing lights along the roofline, icicles, frost creeping across the window glass, warm rooms behind it and a candy-cane doorway" width="820" />
 </p>
 
 Point a camera at the front of the house, let each projector find itself, trace
@@ -154,7 +154,9 @@ a keypress is one fireball rather than three.
 3. **Open a projector tab**, drag it to that projector's display, press
    <kbd>F</kbd>.
 4. **Align it with the camera**, after dark.
-5. **Trace** the windows, the door and the roofline, tagging as you go.
+5. **Trace** the windows, the door and the roofline, tagging as you go — and
+   mark the biggest clear panel of wall `primary`, which is where the starters
+   put anything that has to be read from the road.
 6. **Effects → Halloween starter** (or any of the others above), then take it
    apart.
 7. **Export.** That JSON file is your backup.
@@ -235,14 +237,19 @@ green.
 And `test/bench.html`, served over HTTP, benchmarks every effect on your own
 hardware.
 
-The pictures in this file are generated rather than taken — one frame of each
-demo, through the real renderer and the real colour grade. Regenerating them is
-the one thing in the repository that needs anything installed:
+Every picture in this file is generated rather than taken — the demos and the
+picture under the title are one frame each through the real renderer and the
+real colour grade, and the screenshot of the app is the real app, driven in a
+browser. Nothing here is drawn *for* the README, which is the point: a
+hand-taken screenshot goes out of date the day after it is taken and never says
+so. Regenerating them is the one thing in the repository that needs anything
+installed:
 
 ```bash
 npm i -D playwright && npx playwright install chromium
-node tools/screenshots.mjs             # all of them
+node tools/screenshots.mjs             # every demo, and the picture up top
 node tools/screenshots.mjs birthday    # just one
+node tools/appshots.mjs                # the control tab
 ```
 
 ## Licence

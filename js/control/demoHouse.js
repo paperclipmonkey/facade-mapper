@@ -70,6 +70,21 @@ const L = {
     { name: 'Bedroom window', x: 0.559, w: 0.147, y: 0.296, h: 0.126, cols: 3, rows: 1 },
   ],
 
+  /**
+   * The clear panel across the middle of the wall.
+   *
+   * Every facade has one and it is the first thing to look for when you trace
+   * your own: the largest rectangle of blank wall, which on a house like this
+   * is the band between the bedroom windows and the ground floor. It is where
+   * a name, a countdown or a message goes, and having it tagged means a preset
+   * can put its biggest thing somewhere that was chosen rather than somewhere
+   * that happened to be traced.
+   */
+  primary: { x: 0.305, w: 0.390, y: 0.428, h: 0.128 },
+
+  /** A pot on the wall beside the door, of the sort everybody has. */
+  planter: { x: 0.296, w: 0.064, y: 0.612, h: 0.186 },
+
   /** Flat-roofed side store, with its own little window and an open doorway. */
   store: { x: 0.055, w: 0.200, roof: 0.575, ground: 0.925 },
   storeWindow: { x: 0.100, w: 0.046, y: 0.652, h: 0.072 },
@@ -144,6 +159,18 @@ export function demoShapes() {
   );
 
   add(rect(L.door.x, L.door.top, L.door.w, L.ground - L.door.top), 'Front door', ['door']);
+
+  /**
+   * The feature panel, and the pot beside the door.
+   *
+   * Neither is a thing the camera can see — the panel is bare render and the
+   * pot is a dark blob — which is exactly why they are worth tracing. A show
+   * needs somewhere deliberate to put its headline and somewhere for a plant
+   * to grow out of, and on most houses both are places you have to *decide*
+   * rather than places with an outline.
+   */
+  add(rect(L.primary.x, L.primary.y, L.primary.w, L.primary.h), 'Feature panel', ['primary']);
+  add(rect(L.planter.x, L.planter.y, L.planter.w, L.planter.h), 'Wall pot', ['planter']);
 
   add(
     rect(L.storeWindow.x, L.storeWindow.y, L.storeWindow.w, L.storeWindow.h),
@@ -562,6 +589,61 @@ function store(g, rng, W, H) {
     { cols: 1, rows: 2, lit: 0 });
 }
 
+/**
+ * The pot on the wall beside the door.
+ *
+ * Painted dark and small, because that is what one looks like at night: a
+ * bracket, a bowl, and whatever is in it reduced to a silhouette. It matters
+ * that it is barely visible — the traced `planter` shape is deliberately much
+ * larger than the pot, because what you are marking is not the pot but the
+ * space above it that a plant will occupy.
+ */
+function planter(g, rng, W, H) {
+  const pot = L.planter;
+  const cx = (pot.x + pot.w * 0.5) * W;
+  const lip = (pot.y + pot.h) * H;
+  const potW = pot.w * 0.78 * W;
+  const potH = pot.h * 0.3 * H;
+
+  // Bracket: two lines back to the wall, which is what stops it floating.
+  g.strokeStyle = '#15171b';
+  g.lineWidth = Math.max(1, W * 0.0012);
+  g.beginPath();
+  g.moveTo(cx - potW * 0.42, lip);
+  g.lineTo(cx - potW * 0.42, lip + potH * 0.55);
+  g.moveTo(cx + potW * 0.42, lip);
+  g.lineTo(cx + potW * 0.42, lip + potH * 0.55);
+  g.stroke();
+
+  // The bowl, tapered, with a rim catching the little light there is.
+  const body = g.createLinearGradient(0, lip - potH, 0, lip + potH);
+  body.addColorStop(0, '#33363c');
+  body.addColorStop(1, '#191b1f');
+  g.fillStyle = body;
+  g.beginPath();
+  g.moveTo(cx - potW * 0.5, lip - potH * 0.35);
+  g.lineTo(cx + potW * 0.5, lip - potH * 0.35);
+  g.lineTo(cx + potW * 0.34, lip + potH * 0.65);
+  g.lineTo(cx - potW * 0.34, lip + potH * 0.65);
+  g.closePath();
+  g.fill();
+
+  g.fillStyle = '#4a4f57';
+  g.fillRect(cx - potW * 0.54, lip - potH * 0.45, potW * 1.08, potH * 0.16);
+
+  // Something already growing in it, as a dark clump. The Flowers effect draws
+  // over this, and having *something* there stops the pot reading as empty in
+  // the daylight photograph somebody traces against.
+  g.fillStyle = '#1d2a1e';
+  for (let i = 0; i < 7; i++) {
+    const u = (i + 0.5) / 7;
+    const h = potH * (0.5 + rng() * 0.9);
+    g.beginPath();
+    g.ellipse(cx + (u - 0.5) * potW * 0.8, lip - potH * 0.5 - h * 0.4, potW * 0.12, h * 0.5, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+}
+
 /** The neighbour's half, past the party wall. Never lit; that is the point. */
 function neighbour(g, rng, W, H) {
   render_(
@@ -618,6 +700,7 @@ export function renderDemoFacade(W = 1600, H = Math.round(1600 / DEMO_ASPECT)) {
   }
   bay(g, rng, W, H);
   door(g, rng, W, H);
+  planter(g, rng, W, H);
   finish(g, rng, W, H);
 
   return canvas;
