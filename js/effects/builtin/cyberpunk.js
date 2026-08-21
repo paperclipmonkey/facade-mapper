@@ -406,7 +406,14 @@ const hologram = {
       const rate = 0.6 + ((c * 37) % 11) / 11;
       for (let r = -1; r < rows; r++) {
         const y = bbox.y + frac((r * step + scroll * rate) / (rows * step)) * (rows * step) - step;
-        const ch = chars[(r + c * 3 + Math.floor(scroll / (step * 4))) % chars.length];
+        /**
+         * Wrapped the long way round, because `%` in JavaScript keeps the sign
+         * of its left operand: scrolling *downwards* makes the index negative,
+         * `chars[-1]` is undefined, and the panel silently loses glyphs rather
+         * than showing the same lettering running backwards.
+         */
+        const slot = r + c * 3 + Math.floor(scroll / (step * 4));
+        const ch = chars[((slot % chars.length) + chars.length) % chars.length];
         if (!ch || !ch.trim()) continue;
 
         /**
@@ -451,9 +458,13 @@ const hologram = {
      * lettering scrolls *behind* a fixed comb, which is what your eye reads as
      * "this is being displayed on something" rather than "this is painted on".
      */
-    if (p.scanlines > 0) {
+    if (p.scanlines > 0 && level > 0) {
       g.globalCompositeOperation = 'source-over';
-      g.fillStyle = rgba('#000000', 0.35);
+      // Scaled by Brightness like everything else here. These are the one part
+      // of the effect that *subtracts*, so at zero they have to go: a layer
+      // turned down to nothing that still paints black bands across the
+      // brickwork is not off, it is a mask.
+      g.fillStyle = rgba('#000000', 0.35 * Math.min(1, level));
       const gap = Math.max(2, p.scanlines);
       for (let y = bbox.y; y < bbox.y + bbox.h; y += gap * 2) {
         g.fillRect(bbox.x, y, bbox.w, gap);

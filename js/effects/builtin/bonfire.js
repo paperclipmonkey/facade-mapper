@@ -118,7 +118,17 @@ const bonfire = {
     };
 
     if (state.count !== target) {
-      while (state.embers.length < target) state.embers.push(spawn({ age: rng() * 2 }));
+      while (state.embers.length < target) {
+        /**
+         * Staggered on the first fill, and it has to be done *after* `spawn`
+         * rather than by handing it an age: spawn assigns `age = 0` along with
+         * everything else, so a seeded age passed in was silently discarded and
+         * the whole first population lifted off the fire in one sheet.
+         */
+        const born = spawn({});
+        born.age = rng() * born.life;
+        state.embers.push(born);
+      }
       state.embers.length = target;
       state.count = target;
     }
@@ -401,7 +411,7 @@ const catherineWheel = {
     { key: 'size', type: 'range', label: 'Spark size', default: 3.5, min: 1, max: 20, step: 0.5 },
   ],
   init() {
-    return { sparks: [], angle: 0, lit: 0, cycle: -1 };
+    return { sparks: [], angle: 0, lit: 0, cycle: -1, age: 0, owed: 0 };
   },
   /**
    * Spin, and the sparks that come off it.
@@ -411,7 +421,7 @@ const catherineWheel = {
    * left — so the two have to advance together, one step at a time, in the same
    * order in every tab.
    */
-  step({ p, shape, t, dt, rng, state }) {
+  step({ p, shape, age: layerAge, dt, rng, state }) {
     const { bbox } = shape;
     const R = Math.min(bbox.w, bbox.h) * 0.5 * clamp(p.radius, 0.05, 1);
     if (R < 2) return;
@@ -422,17 +432,36 @@ const catherineWheel = {
      * `repeat` of zero means one burn and then nothing, which is the shape a
      * trigger wants. Anything else loops, which is what an ambient layer wants,
      * and both come out of the same clock rather than out of a state machine.
+     *
+     * The clock is the layer's **age** and not show time, which matters
+     * entirely for the one-shot case: `age` is seconds since the layer was
+     * switched on, so a wheel fired from a trigger at nine in the evening
+     * starts from rest, whereas show time had it burning out three hours
+     * earlier and drawing nothing for the rest of the night. For a layer that
+     * has simply been on since the show started the two are the same number,
+     * so the looping case is unchanged.
      */
     const period = p.repeat > 0 ? p.duration + p.repeat : Infinity;
-    const cycle = period === Infinity ? 0 : Math.floor(t / period);
-    const age = period === Infinity ? t : t - cycle * period;
+    const cycle = period === Infinity ? 0 : Math.floor(layerAge / period);
+    const age = period === Infinity ? layerAge : layerAge - cycle * period;
     const burning = age < p.duration;
 
-    if (state.cycle !== cycle) {
+    /**
+     * A retrigger, which from in here is the age going backwards.
+     *
+     * Necessary on top of the cycle check because a one-shot has no cycles to
+     * count: `repeat` of zero pins `cycle` at zero forever, so firing the same
+     * trigger twice would otherwise pick the wheel up mid-spin with the last
+     * burn's sparks still in the air.
+     */
+    if (state.cycle !== cycle || age < (state.age ?? 0)) {
       state.cycle = cycle;
       state.angle = 0;
       state.lit = 0;
+      state.owed = 0;
+      state.sparks.length = 0;
     }
+    state.age = age;
 
     // Thrust builds as the fuse takes hold, and the last fifth is the wheel
     // running down: a firework that stops dead reads as a video ending.

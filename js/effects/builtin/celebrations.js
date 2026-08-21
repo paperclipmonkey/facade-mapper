@@ -242,7 +242,15 @@ const cake = {
   },
 };
 
-/** Smoke off a candle that has just gone out. Two seconds of curl, then air. */
+/**
+ * Smoke off a candle that is out.
+ *
+ * Drawn for as long as it is unlit rather than for a couple of seconds after
+ * the moment it went out, and that is a deliberate trade: knowing when it went
+ * out means remembering, remembering means fixed-rate state, and this effect is
+ * otherwise a pure function of show time that any tab can join halfway through.
+ * A wisp that persists is a candle that is still smoking; it costs one stroke.
+ */
 function drawWisp(g, x, top, candleH, bbox, t, i, noise) {
   const h = candleH * 1.6;
   g.save();
@@ -833,7 +841,11 @@ const meteors = {
       const hy = ry + dirY * headAt;
 
       if (age <= flight && bright > 0.01) {
-        const tail = Math.min(headAt - from, span * 0.45) + reach * 0.02;
+        // Never longer than the distance actually travelled: the fixed padding
+        // that softens the tail used to be added *after* the clamp, so a meteor
+        // caught in its first frames had a streak reaching back past where it
+        // appeared and, with the radiant in frame, straight through it.
+        const tail = Math.min(headAt - from, span * 0.45 + reach * 0.02);
         const tx = hx - dirX * tail;
         const ty = hy - dirY * tail;
         const scale = fireball ? 2.4 : 1;

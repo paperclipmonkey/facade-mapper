@@ -138,6 +138,35 @@ for (const preset of [...PRESETS, { id: null, name: 'the fallback' }]) {
   ok(`${preset.name} has at least one`, list.length > 0, `${list.length}`);
 }
 
+/**
+ * And the wiring actually installs the preset's own set.
+ *
+ * The loop above validates the specifications; this one validates that they
+ * reach the project. Without it, a regression that ignored `presetId` would
+ * leave every `?demo=…` wired to the fallback bursts — bats out of the door
+ * under a meteor shower — with every test above still green.
+ */
+for (const preset of PRESETS) {
+  const project = createProject('t');
+  project.shapes = [{ ...shape, id: 'door', tags: ['door'] }];
+  const added = addDemoBursts(project, preset.id);
+  const want = burstsFor(preset.id);
+
+  ok(`${preset.name} installs its own one-shots`,
+    added.length === want.length
+    && added.every((a, i) => a.key === want[i].key && a.name === want[i].name),
+    added.map((a) => `${a.key}:${a.name}`).join(', '));
+
+  const effects = project.layers.filter((l) => l.enabled === false).map((l) => l.effect);
+  ok(`${preset.name} installs the effects they name`,
+    want.every((b) => effects.includes(b.effect)),
+    effects.join(', '));
+
+  ok(`${preset.name} gives each of them a scene and a trigger`,
+    project.scenes.length === want.length && project.triggers.length === want.length,
+    `${project.scenes.length} scenes, ${project.triggers.length} triggers`);
+}
+
 console.log('\n— the chain from key to burst —');
 
 {

@@ -399,14 +399,25 @@ const rocket = {
 
     /* --- Lift --- */
 
+    /**
+     * The climb, capped so it always leaves room for the break.
+     *
+     * Lift and Lasts are independent sliders and nothing stops the first
+     * exceeding the second — at which point the shell is still rising when its
+     * time runs out, and the effect draws a trail going up and nothing else.
+     * That is not a shell that failed to burst, it is a shell that looks
+     * broken, so the lift gets at most a third of the run.
+     */
+    const lift = Math.min(p.lift, p.duration * 0.34);
+
     // Decelerating all the way up, because it is: the motor burns for a moment
     // and the rest of the climb is coasting against gravity. A shell that rises
     // at a constant speed reads as a bubble going up a tube.
-    const climb = clamp(age / p.lift, 0, 1);
+    const climb = clamp(age / lift, 0, 1);
     const eased = 1 - (1 - climb) ** 2;
-    const apex = { x: from.x + p.drift * p.lift * eased, y: from.y - p.height * eased };
+    const apex = { x: from.x + p.drift * lift * eased, y: from.y - p.height * eased };
 
-    if (age < p.lift) {
+    if (age < lift) {
       const grad = g.createLinearGradient(from.x, apex.y + 90, apex.x, apex.y);
       grad.addColorStop(0, rgba(blackbodyCss(1400), 0));
       grad.addColorStop(1, rgba(blackbodyCss(2600), 0.9));
@@ -423,8 +434,8 @@ const rocket = {
 
     /* --- Break --- */
 
-    const burst = age - p.lift;
-    const span = Math.max(0.2, p.duration - p.lift);
+    const burst = age - lift;
+    const span = Math.max(0.2, p.duration - lift);
     const f = clamp(burst / span, 0, 1);
     const stars = Math.round(clamp(p.stars, 8, 400));
 
@@ -537,8 +548,16 @@ const confettiCannon = {
     const aim = (p.aim * Math.PI) / 180;
     const k = Math.max(0.05, p.drag);
     const terminal = p.gravity / k;
-    // How far a body launched at v0 has travelled by now, with drag ~ -k v.
-    const travel = (v0) => (v0 / k) * (1 - Math.exp(-k * age));
+    /**
+     * How far a body launched at v0 has travelled in `elapsed`, with drag ~ -k v.
+     *
+     * `elapsed` is a parameter rather than the enclosing `age` because the
+     * pieces leave the barrel staggered: closing over `age` made the horizontal
+     * position count from the shot and the vertical one from the piece's own
+     * launch, so a delayed piece appeared already displaced sideways — very
+     * visible at the muzzle speeds the presets use.
+     */
+    const travel = (v0, elapsed) => (v0 / k) * (1 - Math.exp(-k * elapsed));
 
     g.save();
     for (let i = 0; i < Math.round(clamp(p.count, 10, 600)); i++) {
@@ -553,9 +572,9 @@ const confettiCannon = {
       const life = age - delay;
       if (life <= 0) continue;
 
-      const x = bbox.cx + travel(Math.cos(a) * v);
+      const x = bbox.cx + travel(Math.cos(a) * v, life);
       // Vertical is the same decay plus the terminal fall it settles into.
-      const y = bbox.cy + travel(Math.sin(a) * v) + terminal * (life - (1 - Math.exp(-k * life)) / k);
+      const y = bbox.cy + travel(Math.sin(a) * v, life) + terminal * (life - (1 - Math.exp(-k * life)) / k);
 
       const turn = spin + rate * p.tumble * life * 4;
       const facing = Math.cos(turn);

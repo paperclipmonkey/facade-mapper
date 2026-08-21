@@ -279,6 +279,40 @@ console.log('\n— catherine wheel —');
     `lit ${state.lit}, ${state.sparks.length} sparks left`);
 }
 
+
+{
+  /**
+   * The wheel as a one-shot, which is how the Bonfire Night demo fires it from
+   * a key. Its cycle runs off the layer's *age*, so a wheel switched on three
+   * hours into the evening starts from rest — keyed on show time it would have
+   * burned out in the first ten seconds of the night and drawn nothing ever
+   * after, which is exactly what it used to do.
+   */
+  const shape = makeShape(box(400, 300, 400, 400));
+  const effect = getEffect('catherine-wheel');
+  const p = { ...defaultParams('catherine-wheel'), repeat: 0 };
+  const state = effect.init();
+  const base = {
+    p, stable: p, shape, shapes: () => [], dt: 1 / 60, state,
+    noise: defaultNoise, rng: makeRng('w'), i: 0, n: 1,
+    audio: { level: 0, low: 0, mid: 0, high: 0 }, world: { w: 1920, h: 1080 },
+    layer: {}, media: () => null, share: new Map(),
+  };
+  // Three hours into the show, a layer that has just been switched on.
+  const showTime = 3 * 3600;
+  for (let i = 1; i <= 120; i++) {
+    effect.step({ ...base, g: null, t: showTime + i / 60, age: i / 60 });
+  }
+  ok('a wheel fired hours into the show still lights', state.lit > 0 && state.sparks.length > 0,
+    `lit ${state.lit.toFixed(2)}, ${state.sparks.length} sparks`);
+
+  // And firing it again starts it over rather than picking it up mid-spin.
+  const spinning = state.angle;
+  effect.step({ ...base, g: null, t: showTime + 3, age: 1 / 60 });
+  ok('and firing it again starts it from rest', state.angle < spinning && state.sparks.length === 0,
+    `${state.angle.toFixed(3)} rad`);
+}
+
 /* ------------------------------------------------------------------ *
  * Balloons and confetti — which way is up
  * ------------------------------------------------------------------ */

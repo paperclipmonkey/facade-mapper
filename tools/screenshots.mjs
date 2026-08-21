@@ -60,14 +60,20 @@ async function main() {
 
   await mkdir(outDir, { recursive: true });
   const server = await serve();
+
   // SwiftShader rather than a real GPU: headless Chromium has no display, and
   // without this the bloom pass silently does nothing and every still comes out
-  // flat. Slow, and it does not matter — this renders six frames of six shows.
-  const browser = await chromium.launch({
-    args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
-  });
-
+  // flat. Slow, and it does not matter — this renders seven frames of seven
+  // shows.
+  //
+  // Inside the try, so that the documented failure — Chromium not installed —
+  // does not leave the helper server running after the process gives up.
+  let browser = null;
   try {
+    browser = await chromium.launch({
+      args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+    });
+
     for (const shot of shots) {
       const page = await browser.newPage({ viewport: { width: W, height: H } });
       page.on('console', (msg) => {
@@ -91,7 +97,7 @@ async function main() {
       await page.close();
     }
   } finally {
-    await browser.close();
+    await browser?.close();
     server.stop();
   }
 }

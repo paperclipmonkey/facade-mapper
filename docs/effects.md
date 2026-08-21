@@ -517,12 +517,13 @@ are for: both are per-draw-call full-layer compositing operations, and a sign
 with twenty glyphs would pay for twenty of them a frame. See
 [performance](performance.md).
 
+This is a starter preset like the rest, with its own demo:
+[night city](https://paperclipmonkey.github.io/facade-mapper/?demo=cyberpunk).
+
 **Where to point it.** A chimney is a tall narrow rectangle standing above the
 roofline, which is the shape and the position of every vertical sign in every
 one of these films — it is the best thing on an ordinary British house for this
-and it is not obvious until you try it. The
-[demo](https://paperclipmonkey.github.io/facade-mapper/?demo=cyberpunk) puts one
-there.
+and it is not obvious until you try it. The demo puts one there.
 
 **Japanese lettering needs a Japanese font.** Current macOS, Windows and Android
 all have one; a bare Linux box may not, and there is no webfont to fall back on
