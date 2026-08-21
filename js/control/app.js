@@ -2157,7 +2157,7 @@ app.loadDemoHouse = async (presetId = 'halloween') => {
   }
 
   applyPreset(project, presetId);
-  const bursts = addDemoBursts(project);
+  const bursts = addDemoBursts(project, presetId);
 
   app.project = project;
   setCurrentProjectId(project.id);

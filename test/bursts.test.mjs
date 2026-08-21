@@ -14,7 +14,7 @@ import { getEffect, defaultParams } from '../js/effects/registry.js';
 import { boundingBox, buildPathSampler, makeRng } from '../js/core/math.js';
 import { defaultNoise } from '../js/core/noise.js';
 import { createProject } from '../js/core/state.js';
-import { addDemoBursts, DEMO_BURSTS } from '../js/control/presets.js';
+import { addDemoBursts, burstsFor, DEMO_BURSTS, PRESETS } from '../js/control/presets.js';
 import { effectiveLayers, activateScene } from '../js/core/scenes.js';
 import { RESERVED_KEYS } from '../js/core/state.js';
 
@@ -88,6 +88,54 @@ for (const id of ['bat-burst', 'shockwave', 'spark-burst']) {
    */
   const after = drawAt(effect, p, p.duration * 0.25, state, rng);
   ok(`${id} plays again when the clock restarts`, after > 0, `${after} operations`);
+}
+
+
+/* ------------------------------------------------------------------ *
+ * Every demo's own one-shots
+ *
+ * Each preset gets bursts that belong to the show it is running — bats on
+ * Halloween, a rocket on New Year's Eve — and every one of those is a pile of
+ * literal parameters aimed at an effect, with nothing at runtime to complain if
+ * a key in it does not exist. Exactly the failure the preset tests exist for,
+ * one layer down: the burst looks configured, reads as configured, and plays
+ * with every one of its settings on the default.
+ * ------------------------------------------------------------------ */
+
+console.log('\n— one-shots per demo —');
+
+for (const preset of [...PRESETS, { id: null, name: 'the fallback' }]) {
+  const list = burstsFor(preset.id);
+  const problems = [];
+  const keys = new Set();
+
+  for (const spec of list) {
+    const effect = getEffect(spec.effect);
+    if (!effect) {
+      problems.push(`${spec.name}: no such effect ${spec.effect}`);
+      continue;
+    }
+    const known = new Set(effect.params.map((p) => p.key));
+    for (const key of Object.keys(spec.params || {})) {
+      if (!known.has(key)) problems.push(`${spec.name}: ${spec.effect} has no ${key}`);
+    }
+    if (!spec.key) problems.push(`${spec.name}: no key`);
+    if (RESERVED_KEYS[spec.key]) problems.push(`${spec.name}: ${spec.key} is ${RESERVED_KEYS[spec.key]}`);
+    if (keys.has(spec.key)) problems.push(`${spec.name}: ${spec.key} used twice`);
+    keys.add(spec.key);
+    // A burst pointed at nothing covers the whole frame, which for these
+    // effects means erupting out of the middle of the house.
+    if (!spec.tags?.length) problems.push(`${spec.name}: no target tag`);
+    // The hold has to outlast the burst, or the scene restores the show
+    // part-way through and the thing is cut off.
+    const duration = spec.params?.duration;
+    if (duration && spec.hold < duration) {
+      problems.push(`${spec.name}: held for ${spec.hold}s but lasts ${duration}s`);
+    }
+  }
+
+  ok(`${preset.name} has one-shots that work`, problems.length === 0, problems.join('; '));
+  ok(`${preset.name} has at least one`, list.length > 0, `${list.length}`);
 }
 
 console.log('\n— the chain from key to burst —');

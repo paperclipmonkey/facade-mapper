@@ -20,7 +20,7 @@
  * anybody wants — these are effects that want a target.
  */
 
-import { rgba, clamp, TAU, mixHex } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, mixHex, makeRng } from '../../core/math.js';
 import { glow, blackbodyCss } from '../lib.js';
 
 /** Shared by everything here: fade in fast, hold, fade out over the last third. */
@@ -326,4 +326,254 @@ const sparkBurst = {
   },
 };
 
-export default [batBurst, shockwave, sparkBurst];
+
+/* ------------------------------------------------------------------ *
+ * Rocket
+ * ------------------------------------------------------------------ */
+
+/**
+ * The colours a firework star actually comes in.
+ *
+ * Not a palette somebody liked: these are the metal salts. Strontium burns red,
+ * barium green, copper blue, sodium yellow, and the white is magnesium burning
+ * hot enough to be off the top of the visible curve. It matters here because
+ * the *blue* is the tell — copper is the hardest colour to make and the dimmest
+ * to burn, so a blue shell on a wall wants to be paler and weaker than the red
+ * next to it, and a palette that treats them as equals looks like a screensaver.
+ */
+const STAR_COLOURS = {
+  strontium: '#ff3b4d',
+  barium: '#7dff8a',
+  copper: '#5aa8ff',
+  sodium: '#ffd166',
+  magnesium: '#ffffff',
+};
+
+const SHELL_TYPES = ['peony', 'willow', 'palm', 'crossette'];
+
+const rocket = {
+  id: 'rocket',
+  name: 'Rocket',
+  category: 'celebration',
+  scope: 'shape',
+  description:
+    'One shell, launched from the shape: it lifts on a plume, hangs, and breaks. Plays once each time the layer is switched on, so put it on a trigger and point it at the roofline.',
+  params: [
+    { key: 'shell', type: 'select', label: 'Shell', default: 'peony', options: SHELL_TYPES },
+    { key: 'star', type: 'select', label: 'Star', default: 'strontium', options: [...Object.keys(STAR_COLOURS), 'single'] },
+    { key: 'color', type: 'color', label: 'Single colour', default: '#ffd166' },
+    { key: 'duration', type: 'range', label: 'Lasts (s)', default: 4.5, min: 1, max: 20, step: 0.1 },
+    { key: 'lift', type: 'range', label: 'Lift (s)', default: 1.1, min: 0.2, max: 5, step: 0.05 },
+    { key: 'height', type: 'range', label: 'Apogee', default: 900, min: 100, max: 3000, step: 25 },
+    { key: 'drift', type: 'range', label: 'Drift', default: 120, min: -800, max: 800, step: 10 },
+    { key: 'stars', type: 'range', label: 'Stars', default: 90, min: 8, max: 400, step: 1 },
+    { key: 'power', type: 'range', label: 'Burst size', default: 520, min: 50, max: 2500, step: 10 },
+    { key: 'gravity', type: 'range', label: 'Gravity', default: 260, min: 0, max: 2000, step: 10 },
+    { key: 'size', type: 'range', label: 'Star size', default: 4, min: 1, max: 20, step: 0.5 },
+    { key: 'flash', type: 'range', label: 'Report', default: 1, min: 0, max: 3, step: 0.05 },
+    { key: 'seed', type: 'range', label: 'Shell number', default: 1, min: 1, max: 99, step: 1 },
+  ],
+  init() {
+    return {};
+  },
+  /**
+   * No `step`, and no particles.
+   *
+   * A shell is fully determined by the moment it was fired: every star is the
+   * same star it was going to be, on a ballistic path from the same point. So
+   * the whole thing is a function of `age`, seeded off the shell number — which
+   * means a projector tab that joins the show a second after the trigger fired
+   * draws the burst already half open, in the right place, rather than starting
+   * it again from the ground.
+   */
+  draw({ g, p, shape, age }) {
+    if (age < 0 || age > p.duration) return;
+    const { bbox } = shape;
+    const from = { x: bbox.cx, y: bbox.cy };
+    const rng = makeRng(`rocket:${p.seed}:${p.shell}`);
+    const tint = p.star === 'single' ? p.color : (STAR_COLOURS[p.star] || STAR_COLOURS.strontium);
+
+    g.save();
+    g.globalCompositeOperation = 'lighter';
+    g.lineCap = 'round';
+
+    /* --- Lift --- */
+
+    // Decelerating all the way up, because it is: the motor burns for a moment
+    // and the rest of the climb is coasting against gravity. A shell that rises
+    // at a constant speed reads as a bubble going up a tube.
+    const climb = clamp(age / p.lift, 0, 1);
+    const eased = 1 - (1 - climb) ** 2;
+    const apex = { x: from.x + p.drift * p.lift * eased, y: from.y - p.height * eased };
+
+    if (age < p.lift) {
+      const grad = g.createLinearGradient(from.x, apex.y + 90, apex.x, apex.y);
+      grad.addColorStop(0, rgba(blackbodyCss(1400), 0));
+      grad.addColorStop(1, rgba(blackbodyCss(2600), 0.9));
+      g.strokeStyle = grad;
+      g.lineWidth = 4;
+      g.beginPath();
+      g.moveTo(apex.x - p.drift * 0.06, apex.y + 90);
+      g.lineTo(apex.x, apex.y);
+      g.stroke();
+      glow(g, apex.x, apex.y, 40, blackbodyCss(2600), 0.5);
+      g.restore();
+      return;
+    }
+
+    /* --- Break --- */
+
+    const burst = age - p.lift;
+    const span = Math.max(0.2, p.duration - p.lift);
+    const f = clamp(burst / span, 0, 1);
+    const stars = Math.round(clamp(p.stars, 8, 400));
+
+    // The report: the flash you see before you hear it, over in a fifth of a
+    // second and responsible for most of the impression that something exploded.
+    if (p.flash > 0 && f < 0.14) {
+      const punch = 1 - f / 0.14;
+      glow(g, apex.x, apex.y, p.power * 1.2, '#ffffff', 0.8 * p.flash * punch * punch);
+    }
+
+    for (let s = 0; s < stars; s++) {
+      /**
+       * An even sphere, seen flat.
+       *
+       * Angles spread evenly with a little jitter and speeds varied, so the
+       * shell reads as a filled ball rather than as a ring — a burst where
+       * every star has the same speed is a circle, and a real one is a
+       * chrysanthemum because the stars you see edge-on are moving across your
+       * view slower than the ones coming at you.
+       */
+      const angle = (s / stars) * TAU + rng() * 0.3;
+      let speed = 0.45 + rng() * 0.55;
+      let drag = 1;
+      let droop = 1;
+
+      if (p.shell === 'willow') {
+        // Willow stars are heavy charcoal: they slow quickly and fall in long
+        // golden strands, which is why a willow hangs and a peony does not.
+        drag = 0.55;
+        droop = 3.2;
+      } else if (p.shell === 'palm') {
+        // A palm is a handful of thick comets, not a sphere.
+        speed = s % 7 === 0 ? 1 : 0.15;
+        droop = 2;
+      }
+
+      const reach = p.power * speed * drag * (1 - (1 - f) ** 2.2) * 1.3;
+      let x = apex.x + Math.cos(angle) * reach;
+      let y = apex.y + Math.sin(angle) * reach + p.gravity * droop * burst * burst * 0.5 * 0.02;
+
+      if (p.shell === 'crossette' && f > 0.45) {
+        // Crossette stars split once, and each piece flies off at right angles
+        // to where it was going. It is the one shell that changes shape halfway.
+        const split = (f - 0.45) / 0.55;
+        const side = s % 2 === 0 ? 1 : -1;
+        x += Math.cos(angle + side * Math.PI / 2) * p.power * 0.25 * split;
+        y += Math.sin(angle + side * Math.PI / 2) * p.power * 0.25 * split;
+      }
+
+      // Stars burn out rather than fade out: the colour goes down the blackbody
+      // curve as the composition is used up, so the last of a red shell is a
+      // deep ember and the last of a white one is orange.
+      const kelvin = lerp(3200, 900, f);
+      const colour = f < 0.3 ? tint : blackbodyCss(kelvin);
+      const bright = (1 - f) ** 1.6 * (0.55 + 0.45 * Math.sin(burst * 26 + s));
+      if (bright <= 0.01) continue;
+
+      g.fillStyle = rgba(colour, bright);
+      g.beginPath();
+      g.arc(x, y, Math.max(0.6, p.size * (1 - f * 0.5)), 0, TAU);
+      g.fill();
+    }
+
+    g.restore();
+  },
+};
+
+/* ------------------------------------------------------------------ *
+ * Confetti cannon
+ * ------------------------------------------------------------------ */
+
+const CANNON_COLOURS = ['#ff3b6b', '#ffd166', '#4cc2ff', '#8aff80', '#c77dff', '#ff8a3d'];
+
+const confettiCannon = {
+  id: 'confetti-cannon',
+  name: 'Confetti Cannon',
+  category: 'celebration',
+  scope: 'shape',
+  description:
+    'A cone of paper fired out of the shape, tumbling as it goes and drifting down. Plays once each time the layer is switched on — point it at the door and put it on the bell.',
+  params: [
+    { key: 'count', type: 'range', label: 'Pieces', default: 160, min: 10, max: 600, step: 10 },
+    { key: 'duration', type: 'range', label: 'Lasts (s)', default: 5, min: 0.5, max: 20, step: 0.1 },
+    { key: 'speed', type: 'range', label: 'Muzzle speed', default: 1100, min: 100, max: 4000, step: 25 },
+    { key: 'aim', type: 'range', label: 'Aim (degrees)', default: -90, min: -180, max: 180, step: 5 },
+    { key: 'spread', type: 'range', label: 'Spread', default: 0.16, min: 0.02, max: 1, step: 0.01 },
+    { key: 'gravity', type: 'range', label: 'Gravity', default: 420, min: 0, max: 2000, step: 10 },
+    { key: 'drag', type: 'range', label: 'Air drag', default: 1.6, min: 0, max: 6, step: 0.05 },
+    { key: 'size', type: 'range', label: 'Size', default: 18, min: 3, max: 90, step: 1 },
+    { key: 'tumble', type: 'range', label: 'Tumble', default: 1, min: 0, max: 4, step: 0.05 },
+    { key: 'streamers', type: 'range', label: 'Streamers', default: 0.3, min: 0, max: 1, step: 0.01 },
+    { key: 'seed', type: 'range', label: 'Charge', default: 1, min: 1, max: 99, step: 1 },
+  ],
+  init() {
+    return {};
+  },
+  /**
+   * Also stateless, and for the same reason as the rocket — but the physics is
+   * the opposite one. A confetti cannon is the clearest demonstration of drag
+   * there is: the paper leaves the barrel at the speed of a thrown ball and is
+   * down to a drift within a metre, because a scrap of paper has an enormous
+   * area for its mass. Modelled as exponential decay towards terminal velocity,
+   * which is the closed form of exactly that, so no integration is needed and
+   * every tab agrees without remembering anything.
+   */
+  draw({ g, p, shape, age }) {
+    if (age < 0 || age > p.duration) return;
+    const { bbox } = shape;
+    const rng = makeRng(`cannon:${p.seed}`);
+    const aim = (p.aim * Math.PI) / 180;
+    const k = Math.max(0.05, p.drag);
+    const terminal = p.gravity / k;
+    // How far a body launched at v0 has travelled by now, with drag ~ -k v.
+    const travel = (v0) => (v0 / k) * (1 - Math.exp(-k * age));
+
+    g.save();
+    for (let i = 0; i < Math.round(clamp(p.count, 10, 600)); i++) {
+      const a = aim + (rng() - 0.5) * Math.PI * p.spread * 2;
+      const v = p.speed * (0.4 + rng() * 0.9);
+      const colour = CANNON_COLOURS[Math.floor(rng() * CANNON_COLOURS.length)];
+      const streamer = rng() < p.streamers;
+      const size = p.size * (0.6 + rng() * 0.8);
+      const spin = rng() * TAU;
+      const rate = (0.8 + rng() * 2.4) * (rng() < 0.5 ? -1 : 1);
+      const delay = rng() * 0.08;
+      const life = age - delay;
+      if (life <= 0) continue;
+
+      const x = bbox.cx + travel(Math.cos(a) * v);
+      // Vertical is the same decay plus the terminal fall it settles into.
+      const y = bbox.cy + travel(Math.sin(a) * v) + terminal * (life - (1 - Math.exp(-k * life)) / k);
+
+      const turn = spin + rate * p.tumble * life * 4;
+      const facing = Math.cos(turn);
+      const w = Math.max(0.6, Math.abs(facing) * size * (streamer ? 0.3 : 1));
+      const fade = clamp((p.duration - age) / (p.duration * 0.25), 0, 1);
+
+      g.save();
+      g.translate(x, y);
+      g.rotate(a + Math.sin(life * 3 + spin) * 0.5);
+      g.globalAlpha = fade;
+      g.fillStyle = facing >= 0 ? colour : mixHex(colour, '#000000', 0.45);
+      if (streamer) g.fillRect(-w * 0.5, -size * 1.6, w, size * 3.2);
+      else g.fillRect(-w * 0.5, -size * 0.35, w, size * 0.7);
+      g.restore();
+    }
+    g.globalAlpha = 1;
+    g.restore();
+  },
+};
+
+export default [batBurst, shockwave, sparkBurst, rocket, confettiCannon];

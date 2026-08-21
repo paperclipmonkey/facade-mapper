@@ -71,6 +71,9 @@ jobs:
       - name: One-shot burst tests
         run: node test/bursts.test.mjs
 
+      - name: Celebration and cyberpunk effect tests
+        run: node test/celebrations.test.mjs
+
       - name: Depth scan pipeline tests
         run: node test/depth.test.mjs
 

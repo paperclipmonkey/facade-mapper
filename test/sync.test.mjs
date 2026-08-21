@@ -260,17 +260,18 @@ console.log('— every effect, at four frame rates —\n');
 /**
  * Effects that read the wall clock rather than the show clock.
  *
- * A countdown to Hallowe'en is counting down to a real moment, so `Date.now()`
- * is the right thing for it to read — and it means two runs of this harness,
- * milliseconds apart, are legitimately counting down to slightly different
- * numbers. There is nothing here to hold still, so comparing two runs of it
- * measures the harness rather than the effect.
+ * A countdown to Hallowe'en is counting down to a real moment, and a clock on
+ * the front of the house is showing one, so `Date.now()` is the right thing for
+ * both of them to read — and it means two runs of this harness, milliseconds
+ * apart, are legitimately drawing slightly different numbers and a second hand
+ * a hundredth of a degree further round. There is nothing here to hold still,
+ * so comparing two runs of either measures the harness rather than the effect.
  *
  * Worth stating rather than quietly skipping: these do differ very slightly
  * between tabs, by however far apart the two tabs read the clock. That is
  * sub-frame and it is what a countdown is supposed to do.
  */
-const WALL_CLOCK = new Set(['countdown']);
+const WALL_CLOCK = new Set(['countdown', 'clock-face']);
 
 const skipped = [];
 for (const effect of listEffects().sort((a, b) => a.id.localeCompare(b.id))) {
