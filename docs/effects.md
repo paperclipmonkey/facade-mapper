@@ -38,9 +38,15 @@ Click an effect to select it, <kbd>Ctrl</kbd>-click (or <kbd>Cmd</kbd>-click) to
 add one to the selection, <kbd>Shift</kbd>-click to take a range —
 the conventions of any file list. <kbd>Backspace</kbd> deletes everything
 selected, and the inspector offers **Enable all** and **Bypass all** for the
-group. **Clear all** empties the list in one go, which is what you want when
-swapping a Halloween look for a Christmas one. <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts
-any of it back.
+group. **Clear all** empties the list in one go. <kbd>Ctrl</kbd>+<kbd>Z</kbd>
+puts any of it back.
+
+You do not need **Clear all** to swap one look for another, though. A starter
+preset *replaces* what is lit rather than adding to it: the layers already on
+the house are switched off, not deleted, and the scene that preset saves is
+that look on its own. So applying Halloween and then Christmas leaves you with
+both in the project, one scene each, and the two hotkeys genuinely switch
+between them.
 
 Selecting a *shape* is the other way in. The inspector lists what is currently
 lighting it, adds a new effect straight onto it from the gallery, or points one

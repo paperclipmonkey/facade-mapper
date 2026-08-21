@@ -922,6 +922,22 @@ export function applyPreset(project, presetId) {
   layers.forEach((l, i) => {
     l.order = maxOrder + 1 + i;
   });
+  /**
+   * A preset is a look, not an addition to one.
+   *
+   * Anything already lit is switched off first. Not deleted — switched off:
+   * whatever was there is still in the layer list, and if it came from a
+   * preset of its own it is also captured in that preset's scene, one keypress
+   * away. Undo puts it all back.
+   *
+   * This is the other half of "switching scenes changes the show". Applying
+   * Christmas on top of Halloween used to leave both running at once, and the
+   * scene it saved therefore recorded *both* as on — so the Halloween scene
+   * and the Christmas scene described the same wall, and the hotkeys had
+   * nothing to switch between. A starter has to start from somewhere.
+   */
+  const replaced = project.layers.filter((l) => l.enabled !== false).length;
+  for (const existing of project.layers) existing.enabled = false;
   project.layers.push(...layers);
 
   // Each preset carries a grade, because half of what makes these looks work is
@@ -938,11 +954,14 @@ export function applyPreset(project, presetId) {
     name: preset.name.replace(' starter', ''),
     hotkey: nextFreeHotkey(project),
     fade: 1.2,
+    // Captured *after* the switch-off above, so the scene is this look alone —
+    // its own layers on, everything that was there before it off.
     state: captureScene(project),
+    full: true,
   });
   project.scenes.push(scene);
 
-  return { preset, added: layers.length, missing, scene, look: look?.name ?? null };
+  return { preset, added: layers.length, missing, replaced, scene, look: look?.name ?? null };
 }
 
 function nextFreeHotkey(project) {

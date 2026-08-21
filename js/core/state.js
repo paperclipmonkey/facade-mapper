@@ -139,6 +139,24 @@ export function createScene(overrides = {}) {
     hotkey: null,
     /** Crossfade seconds when switching to this scene. */
     fade: 0.6,
+    /**
+     * Does this scene describe the whole show, or only part of it?
+     *
+     * The two kinds behave differently and have to, so it is recorded rather
+     * than guessed. A scene captured from the current look — "Save current as
+     * scene", or the one a starter preset saves — describes *every* layer, and
+     * is therefore authoritative: a layer it does not mention did not exist
+     * when it was saved, so it is not part of that look and is switched off.
+     *
+     * A scene built by hand to name one layer — the one-shots on X, G and F —
+     * is the opposite. It speaks only for the layer it names, and everything
+     * else carries on exactly as it was, which is what makes a burst something
+     * you can fire in the middle of anything.
+     *
+     * Without the distinction the two are indistinguishable from their
+     * contents, and whichever rule you pick breaks the other one.
+     */
+    full: false,
     /** layerId -> { enabled, opacity, params } overrides. */
     state: {},
     ...overrides,
@@ -354,11 +372,23 @@ export function migrateProject(raw) {
     bindings: { ...(l.bindings || {}) },
   }));
 
-  p.scenes = (Array.isArray(raw.scenes) ? raw.scenes : []).map((s) => ({
-    ...createScene(),
-    ...s,
-    state: { ...(s.state || {}) },
-  }));
+  p.scenes = (Array.isArray(raw.scenes) ? raw.scenes : []).map((s) => {
+    const scene = { ...createScene(), ...s, state: { ...(s.state || {}) } };
+    /**
+     * Shows saved before scenes recorded which kind they were.
+     *
+     * Inferred from the shape of the thing, which is unambiguous in the
+     * direction that matters: a hand-built one-shot names exactly one layer,
+     * and a captured look names every layer in the project. So more than one
+     * entry means captured. The only case this gets wrong is a look captured
+     * from a show with a single layer in it, which is then treated as partial
+     * — and a partial scene behaves exactly as scenes did before this existed,
+     * so that misreading costs nothing and the dangerous misreading cannot
+     * happen at all.
+     */
+    if (s.full === undefined) scene.full = Object.keys(scene.state).length > 1;
+    return scene;
+  });
 
   p.triggers = (Array.isArray(raw.triggers) ? raw.triggers : []).map((t) => ({
     ...createTrigger(),
