@@ -1,12 +1,14 @@
 # The effect library
 
-Around sixty effects, and a **Browse…** button on every layer that renders all
-of them live, on a shape like the one you are pointing at. Pick by eye; this
-file is for the ideas behind them.
+Around seventy-five effects, and a **Browse…** button on every layer that
+renders all of them live, on a shape like the one you are pointing at. Pick by
+eye; this file is for the ideas behind them.
 
 - [Targeting](#targeting)
 - [Effects that know where the windows are](#effects-that-know-where-the-windows-are)
 - [Effects that happen once](#effects-that-happen-once)
+- [The rest of the year](#the-rest-of-the-year)
+- [Night city](#night-city)
 - [Paths and animation](#paths-and-animation)
 - [Drawing for a projector](#drawing-for-a-projector)
 - [The look](#the-look)
@@ -352,6 +354,8 @@ entirely in the timing.
 | **Bat Burst** | A swarm pours out of the shape and scatters across the house. |
 | **Shockwave** | Rings of light race outwards and fade. The cheapest way to make a house react to something. |
 | **Spark Burst** | A shower of embers thrown out, falling and burning out — blackbody-coloured, so they cool as they go. |
+| **Rocket** | One shell: it lifts on a plume, hangs, and breaks. Peony, willow, palm or crossette, and the star colours are the metal salts rather than a palette somebody liked. |
+| **Confetti Cannon** | A cone of paper out of the shape, tumbling and settling into a drift. |
 
 They play once over their **Lasts** and then draw nothing. The origin is the
 middle of whatever shape you point them at, so aim one at the door and things
@@ -373,7 +377,9 @@ would quietly revert everything else with it; a scene that names one layer
 leaves the rest alone, because a layer a scene says nothing about keeps its
 authored state.
 
-The demo house ships with three, on **X**, **G** and **F**. Those keys avoid the
+Each demo house ships with its own, on **X**, **G** and **F** — bats and a knock
+at the door on Halloween, a rocket and a confetti cannon on New Year's Eve, a
+wheel and a collapsing log on Bonfire Night. Those keys avoid the
 ones the editor already uses — the first draft used **B** for bats, which is
 Blackout, so pressing it blacked the show out and never reached the trigger at
 all. It looked configured and did nothing. The trigger inspector now says so if
@@ -381,6 +387,150 @@ you pick one of those.
 
 Anything that can type can press a key, which includes a doorbell wired to a USB
 button.
+
+
+## The rest of the year
+
+Halloween and Christmas are the two nights everybody already projects onto a
+house. They are not the only ones, and the four below each ask the library for
+something it did not previously have.
+
+Each is a starter preset, and each has a demo you can open without any hardware
+at all:
+[birthday](https://paperclipmonkey.github.io/facade-mapper/?demo=birthday) ·
+[Perseids](https://paperclipmonkey.github.io/facade-mapper/?demo=perseids) ·
+[New Year's Eve](https://paperclipmonkey.github.io/facade-mapper/?demo=new-year) ·
+[Bonfire Night](https://paperclipmonkey.github.io/facade-mapper/?demo=bonfire-night).
+
+### Birthdays
+
+| | |
+| --- | --- |
+| **Birthday Cake** | Tiers, icing that drips, and candles that burn down over the evening. |
+| **Balloons** | Helium balloons rising, swaying, on strings. |
+| **Bunting** | Triangular flags along a path, sagging between the ends and lifting in a travelling gust. |
+| **Confetti** | Paper falling over the whole house, flashing as it turns edge-on. |
+
+The cake is the one effect in the library that can be *interacted with* without
+any hardware: **How many are lit** is a normal parameter, so bind it to the
+microphone and blowing at the house puts the candles out. The starter preset
+does exactly that, through an expression binding — `clamp(1 - level * 2.2, 0, 1)`
+— and it degrades correctly on a machine with no microphone, where the audio
+bands read zero, the expression returns one, and every candle stays lit.
+
+Two details worth knowing about, because both are what stop the effects looking
+generated. Candles shorten as a function of show time rather than of anything
+remembered, so a projector tab opened at ten o'clock draws the same stubs as the
+one that has been running since six. And balloons rock as they climb at a rate
+that depends on their size, because a rising balloon sheds vortices off
+alternate sides and a big one does it more slowly than a small one — without it,
+a screenful of balloons reads as a screenful of bubbles.
+
+### The Perseids
+
+| | |
+| --- | --- |
+| **Meteor Shower** | Meteors radiating from a point, with fireballs and lingering trains. |
+
+The whole effect is one idea: everything in a shower comes from the **radiant**,
+and how long a meteor looks depends on how far from it you see it. A meteor near
+the radiant is coming almost straight at you and hardly moves; the same rock
+ninety degrees away crosses half the sky. Getting that backwards — or leaving it
+out — is what makes drawn meteor showers read as fireworks.
+
+The colour is the other half, and it is the one place in this library where
+colour is deliberately *not* blackbody. Embers and sparks are thermal emitters
+and cool down the curve; a meteor is a millimetre of rock being stripped atom by
+atom at eighty kilometres up, and what you see is line emission — the green so
+many Perseids show is neutral magnesium at 518 nm, the yellow is sodium at 589.
+No hot body ever glows those colours, which is exactly why a shower drawn with a
+fire palette looks wrong without anybody being able to say why.
+
+The bright ones leave a **train**: a wake of ionised air that hangs for seconds
+after the meteor has gone and visibly shears as the wind at that altitude pulls
+it apart. It is the detail people who have actually lain in a field watching a
+shower recognise.
+
+The preset also runs a second, much slower shower with its radiant somewhere
+else entirely. Those are **sporadics** — on any night there are meteors that
+belong to no shower at all, and during a peak they are the ones that catch you
+out. Leaving them out is the kind of tidiness that makes a sky look generated.
+
+### New Year's Eve
+
+| | |
+| --- | --- |
+| **Clock Face** | A working clock, counting down to a moment, that flares when it arrives. |
+| **Countdown** | The number, in text, on a sign over the door. |
+
+Both read the **wall clock** rather than show time, through the link — so they
+do not pause when the transport does, they are right whatever time the show was
+started, and a second machine driving its own projectors agrees to the
+millisecond. The hands show the true time even through the last minute, and that
+is deliberate: half the street is holding a phone showing the same time, and a
+house that disagrees with it is a house with a broken clock on it.
+
+Set the date on both counting layers on the night. It is a text field rather
+than anything clever, and it wants changing once a year.
+
+### Bonfire Night
+
+| | |
+| --- | --- |
+| **Bonfire** | A built pyre with a flame column, embers on the thermal, smoke, firelight on the wall, and optionally a guy who burns down over the evening. |
+| **Catherine Wheel** | A wheel that spins up, throws sparks and burns out. Relights on a timer, or once when triggered. |
+| **Sparkler** | A sparkler head running round a path, throwing forked iron sparks and leaving the after-image you get writing your name with one. |
+
+The wheel is the one to look closely at. Sparks leave it **tangentially** — a
+spark on the rim is travelling along the rim at ωR, and when the casing lets go
+it carries straight on at ninety degrees to the spoke. Sparks that fly outwards
+along the spoke give you a sea urchin; tangential ones give you the curved,
+lopsided wheel everybody has actually stood in front of. There is a test for it.
+
+The sparkler's forks are not decoration either: the wire is coated in iron
+filings, each filing burns from the outside in, and when the molten shell fails
+the trapped gas blows it apart — which is why the sparks divide *partway along
+their flight* rather than at the wire.
+
+## Night city
+
+Blade Runner and everything downstream of it. It is worth noticing how little of
+that look is science fiction: it is a wet street at night lit entirely by
+signage, and a projector pointed at a house is already most of the way there.
+
+| | |
+| --- | --- |
+| **Neon Tube** | A glass tube bent round the shape — halo, white-hot core, mains buzz, a dead section, and the stutter a cold tube makes when it strikes. |
+| **Neon Sign** | Lettering as tube, stacked vertically and framed like signage bolted to a wall. |
+| **Hologram** | An advert over the brickwork: scrolling lettering, scanlines, colour fringing and the occasional tear. |
+
+Three things make neon read as neon rather than as a coloured line. It is drawn
+as concentric strokes — widest and faintest first, then a core that is nearly
+white, because a real tube's core saturates your eye. It **strikes**: a cold
+tube stutters, catches, drops out and catches again over about a third of a
+second, and a sign that simply sits there lit is the thing that reads as a
+graphic. And it throws light on the wall around it, which is what stops a
+projected sign floating in front of the building instead of being bolted to it.
+
+None of it uses `shadowBlur` or `filter`, though a glow is exactly what those
+are for: both are per-draw-call full-layer compositing operations, and a sign
+with twenty glyphs would pay for twenty of them a frame. See
+[performance](performance.md).
+
+This is a starter preset like the rest, with its own demo:
+[night city](https://paperclipmonkey.github.io/facade-mapper/?demo=cyberpunk).
+
+**Where to point it.** A chimney is a tall narrow rectangle standing above the
+roofline, which is the shape and the position of every vertical sign in every
+one of these films — it is the best thing on an ordinary British house for this
+and it is not obvious until you try it. The demo puts one there.
+
+**Japanese lettering needs a Japanese font.** Current macOS, Windows and Android
+all have one; a bare Linux box may not, and there is no webfont to fall back on
+because the app ships none at all — it has to keep working on a static host with
+no network. Boxes instead of glyphs means the machine, not the effect: install
+Noto Sans CJK, or type something else into the field, which works perfectly
+well.
 
 ## Paths and animation
 

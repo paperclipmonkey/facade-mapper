@@ -495,9 +495,11 @@ export const HELP_SECTIONS = [
   wired to a USB button.
 </p>
 <p>
-  The demo house ships with three one-shots: <kbd>X</kbd> bats out of the door, <kbd>G</kbd> something
-  knocks, <kbd>F</kbd> sparks off the roof. Each is a bypassed layer, a scene that switches only that
-  layer on, and a key trigger pointed at the scene — copy the pattern for your own.
+  Each demo house ships with one to three one-shots on <kbd>X</kbd>, <kbd>G</kbd> and <kbd>F</kbd>,
+  chosen to suit the night it is: bats out of the door on Halloween, a rocket over the roof and
+  confetti out of the door on New Year's Eve, a catherine wheel and a collapsing log on Bonfire
+  Night. Each is a bypassed layer, a scene that switches only that layer on, and a key trigger
+  pointed at the scene — copy the pattern for your own.
 </p>
 `,
   },

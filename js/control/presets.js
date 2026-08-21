@@ -248,6 +248,441 @@ const CHRISTMAS = () => [
   }),
 ];
 
+
+/**
+ * Birthdays.
+ *
+ * The one occasion here that is about a person rather than a date, which
+ * changes what the house should do: everything points at the front door,
+ * because that is where they will be standing when they see it. The cake goes
+ * *on* the door for the same reason a cake goes in front of somebody at a
+ * table — it is theirs, and it is at their height.
+ */
+const BIRTHDAY = () => [
+  layer('wash', {
+    name: 'Party night',
+    params: { color: '#1b0a2e', color2: '#2d0b3d', blend: 0.45, level: 0.3, vignette: 0.35 },
+  }),
+  layer('bunting', {
+    name: 'Bunting along the roofline',
+    // The roofline only. The other `trim` shapes on a house are the bay plinth
+    // and the arch over the door — bunting on the first hangs off the bottom of
+    // the building, and on the second it is drawn straight through the sign.
+    tags: ['roof'],
+    params: {
+      palette: 'party', color: '#ff3b6b', shape: 'triangle', spacing: 58, width: 52,
+      drop: 70, sag: 40, wind: 0.7, speed: 0.6, cord: 0.3, level: 1,
+    },
+  }),
+  // Warm rooms behind the front: somebody is in, and the party is inside.
+  layer('fill', {
+    name: 'Warm rooms',
+    tags: ['window'],
+    blend: 'lighter',
+    opacity: 0.5,
+    stagger: 0.8,
+    params: { color: '#ffd08a', color2: '#5a2a00', gradient: 'radial', level: 0.8, softness: 0.45 },
+  }),
+  layer('fairy-lights', {
+    name: 'Lights round the windows',
+    tags: ['window'],
+    stagger: 0.5,
+    params: { pattern: 'twinkle', palette: 'multi', spacing: 40, size: 8, glow: 2.2, speed: 0.6, level: 0.9, wire: 0.1 },
+  }),
+  /**
+   * The cake, on the door.
+   *
+   * "How many are lit" is bound to the microphone, inverted through an
+   * expression: the louder the room, the fewer candles are burning. Stand in
+   * front of the house and blow, and they go out — which is the one piece of
+   * audience participation in the whole library that needs no hardware beyond
+   * the laptop's own microphone. With no microphone the audio bands read zero,
+   * so the expression returns 1 and every candle stays lit; the effect degrades
+   * to exactly what it would have been without the binding.
+   */
+  layer('cake', {
+    name: 'Cake on the door',
+    tags: ['door'],
+    // Not full brightness: a projector adds light to whatever is already there,
+    // and a white cake at full level on a pale door is a white rectangle.
+    opacity: 0.85,
+    params: {
+      tiers: 2, icing: '#ffdcea', sponge: '#c9873f', trim: '#ff4d88', drips: 0.75,
+      candles: 8, palette: 'party', color: '#ff3b6b', lit: 1, flameTemp: 1850,
+      flicker: 0.7, burn: 40, glow: 0.9,
+    },
+    bindings: { lit: { type: 'expr', code: 'clamp(1 - level * 2.2, 0, 1)' } },
+  }),
+  layer('balloons', {
+    name: 'Balloons going up',
+    params: {
+      palette: 'party', color: '#ff3b6b', count: 16, size: 78, speed: 85, sway: 1,
+      wind: 12, string: 1.7, shine: 0.8, spread: 1, pop: 0,
+    },
+  }),
+  layer('confetti', {
+    name: 'Confetti',
+    opacity: 0.85,
+    params: {
+      palette: 'party', color: '#ffd166', kind: 'both', count: 200, size: 15,
+      fall: 110, wind: 26, flutter: 1.1, tumble: 1, level: 1,
+    },
+  }),
+  layer('text', {
+    name: 'Sign over the door',
+    tags: ['sign'],
+    needsTag: 'sign',
+    params: {
+      content: 'HAPPY BIRTHDAY', mode: 'path', font: 'rounded', weight: '900', size: 0.85,
+      tracking: 0.06, color: '#ffd166', stroke: '#ff3b6b', strokeWidth: 4, glow: 20,
+      align: 'centre', animation: 'wave', speed: 0.7, amount: 0.3, pathOffset: 0,
+    },
+  }),
+];
+
+/**
+ * The Perseids.
+ *
+ * The odd one out, and the reason it is worth having: this is the only preset
+ * in the library where the house is *not* the show. The meteors are, and the
+ * job of everything else is to get out of their way — a dark facade, one
+ * landing light on, and a sky that is only just brighter than the wall. Turn
+ * the brightness up and you have lost, because what you are competing with is
+ * the actual sky behind it.
+ */
+const PERSEIDS = () => [
+  layer('plasma', {
+    name: 'Night sky',
+    params: { colorA: '#03081c', colorB: '#071634', colorC: '#0a0a28', scale: 1.6, speed: 0.03, level: 0.3, resolution: 24, contrast: 1.15 },
+  }),
+  layer('stars', {
+    name: 'Stars',
+    opacity: 0.8,
+    // Shooting stars off: the Meteor Shower layer below is doing that job
+    // properly, and two systems of them disagree about where the radiant is.
+    params: { color: '#ffffff', count: 150, size: 6, twinkle: 0.8, spikes: false, shooting: 0 },
+  }),
+  layer('meteors', {
+    name: 'Perseids',
+    params: {
+      radiantX: 0.18, radiantY: -0.12, rate: 140, tint: 'perseid', speed: 1.1,
+      length: 1.3, width: 3.5, fireballs: 3, train: 7, showRadiant: false, level: 1.1,
+    },
+  }),
+  /**
+   * Sporadics.
+   *
+   * A second shower, with its radiant somewhere else entirely and a rate of a
+   * few an hour. Real: on any night of the year there are meteors that belong
+   * to no shower at all, and during a peak they are the ones that catch you out
+   * because they arrive from the wrong direction. Leaving them out is the sort
+   * of tidiness that makes a sky look generated.
+   */
+  layer('meteors', {
+    name: 'Sporadics',
+    opacity: 0.8,
+    params: {
+      radiantX: 1.1, radiantY: 0.7, rate: 20, tint: 'iron', speed: 0.8,
+      length: 1, width: 2.8, fireballs: 0.6, train: 3, showRadiant: false, level: 0.9,
+    },
+  }),
+  layer('fill', {
+    name: 'One light left on',
+    tags: ['window'],
+    blend: 'lighter',
+    opacity: 0.22,
+    stagger: 1.6,
+    params: { color: '#ffcf8a', color2: '#1a0f00', gradient: 'radial', level: 0.5, softness: 0.5 },
+  }),
+  layer('text', {
+    name: 'Sign over the door',
+    tags: ['sign'],
+    needsTag: 'sign',
+    params: {
+      content: 'LOOK UP', mode: 'path', font: 'mono', weight: '600', size: 0.7,
+      tracking: 0.22, color: '#9dffc4', stroke: '#000000', strokeWidth: 2, glow: 12,
+      align: 'centre', animation: 'fade', speed: 0.25, amount: 0.4, pathOffset: 0,
+    },
+  }),
+];
+
+/**
+ * New Year's Eve.
+ *
+ * Built round one instant. Everything here is either counting towards midnight
+ * or celebrating it, and the two things that carry the count — the clock on the
+ * door and the countdown over it — read the *wall* clock rather than show time,
+ * so they are right whatever time the show was started and agree with every
+ * phone in the street.
+ *
+ * The target date wants changing each year, which is why it is a text field on
+ * two layers rather than something clever: on the night, you set it once.
+ */
+const NEW_YEAR = () => [
+  layer('wash', {
+    name: 'Midnight',
+    params: { color: '#04091f', color2: '#0a1a3a', blend: 0.5, level: 0.3, vignette: 0.4 },
+  }),
+  layer('fireworks', {
+    name: 'Fireworks over the house',
+    params: {
+      palette: 'multi', color: '#ffd166', rate: 52, sparks: 110, power: 0.38,
+      gravity: 0.28, life: 2.2, trail: true, level: 1,
+    },
+  }),
+  layer('clock-face', {
+    name: 'Clock on the door',
+    tags: ['door'],
+    params: {
+      target: '2027-01-01 00:00', face: '#0a1430', rim: '#ffd166', hands: '#ffffff',
+      numerals: 'roman', size: 0.94, thickness: 0.05, second: 'tick', glow: 1.1,
+      pulse: true, flare: 8, flareColor: '#ffe9b0',
+    },
+  }),
+  layer('countdown', {
+    name: 'Countdown over the door',
+    tags: ['sign'],
+    needsTag: 'sign',
+    params: {
+      // Sized against the arch, which is a wide, *shallow* shape: text takes
+      // its size from the smaller dimension, so the number needs to be several
+      // times the height of the shape it is hung on to read from the road.
+      target: '2027-01-01 00:00', prefix: '', expired: 'HAPPY NEW YEAR', units: 'auto',
+      font: 'mono', weight: '700', size: 1.25, color: '#ffe9b0', glow: 20,
+      stroke: '#000000', strokeWidth: 2, tracking: 0.06, offsetY: 0, pulse: true,
+    },
+  }),
+  layer('sparkler', {
+    name: 'Sparklers along the roofline',
+    tags: ['roof'],
+    params: {
+      count: 2, speed: 0.13, hotTemp: 3200, coolTemp: 1400, rate: 220, life: 0.45,
+      throw: 260, gravity: 240, fork: 0.7, head: 14, trail: 0.8, size: 2.8,
+    },
+  }),
+  layer('fill', {
+    name: 'Warm rooms',
+    tags: ['window'],
+    blend: 'lighter',
+    opacity: 0.45,
+    stagger: 0.9,
+    params: { color: '#ffcf8a', color2: '#5a2a00', gradient: 'radial', level: 0.8, softness: 0.4 },
+  }),
+  layer('confetti', {
+    name: 'Confetti',
+    opacity: 0.8,
+    params: {
+      palette: 'gold', color: '#ffd166', kind: 'both', count: 240, size: 14,
+      fall: 130, wind: 30, flutter: 1.2, tumble: 1.2, level: 1,
+    },
+  }),
+];
+
+/**
+ * Bonfire Night.
+ *
+ * The one night this application was arguably invented for, and the one where
+ * restraint matters most: a real bonfire is the brightest thing for a street in
+ * every direction, so the fire has to dominate and everything else has to sit
+ * underneath it. Hence one wheel rather than four, fireworks at a low rate, and
+ * a wash cold enough that the firelight has something to be warm against.
+ */
+const BONFIRE_NIGHT = () => [
+  layer('wash', {
+    name: 'Cold November',
+    params: { color: '#070a14', color2: '#101826', blend: 0.5, level: 0.28, vignette: 0.45 },
+  }),
+  layer('fog', {
+    name: 'Smoke across the garden',
+    softness: 6,
+    params: { color: '#8a8f98', density: 0.2, scale: 2.6, speed: 0.05, swirl: 0.5, height: 0.4 },
+  }),
+  /**
+   * The fire, in the doorway.
+   *
+   * The obvious target is the front wall, and it is wrong twice over: this
+   * house has *two* shapes tagged `wall` — the front and the side store — so a
+   * fire aimed at the tag lights two of them, complete with two guys. And a
+   * fire spread across the whole front of a building reads as a building on
+   * fire rather than as a bonfire in front of one. The doorway is a tall
+   * opening at ground level with the fire's own light spilling out of it, which
+   * is exactly the shape of the thing.
+   */
+  layer('bonfire', {
+    name: 'The bonfire',
+    tags: ['door'],
+    params: {
+      coreTemp: 1950, tipTemp: 1000, height: 0.95, width: 0.8, speed: 1, turbulence: 0.75,
+      detail: 64, logs: 12, logColor: '#2a1a12', embers: 130, smoke: 0.7, spill: 1.3,
+      guy: true, burn: 300, seed: 3,
+    },
+  }),
+  layer('embers', {
+    name: 'Embers over the garden',
+    opacity: 0.75,
+    params: { hotTemp: 2000, coolTemp: 1000, count: 60, rise: 34, drift: 20, turbulence: 26, size: 5, twinkle: 0.6, opacity: 0.7 },
+  }),
+  // Wheels pinned to the windows, staggered so they do not all light at once —
+  // half the pleasure of a wheel is watching it wind up while another one dies.
+  layer('catherine-wheel', {
+    name: 'Wheels on the windows',
+    tags: ['window'],
+    stagger: 3.5,
+    params: {
+      radius: 0.42, nozzles: 2, hotTemp: 3000, coolTemp: 1100, tint: '#ffe9b0',
+      sparks: 150, speed: 520, life: 0.7, gravity: 520, spin: 3.2, spinUp: 1.4,
+      duration: 9, repeat: 12, size: 3.2,
+    },
+  }),
+  layer('sparkler', {
+    name: 'Sparkler along the gutter',
+    tags: ['roof'],
+    params: {
+      count: 1, speed: 0.12, hotTemp: 3200, coolTemp: 1400, rate: 190, life: 0.42,
+      throw: 240, gravity: 260, fork: 0.75, head: 12, trail: 0.7, size: 2.6,
+    },
+  }),
+  layer('fireworks', {
+    name: 'Fireworks over the rooftops',
+    opacity: 0.9,
+    params: {
+      palette: 'warm', color: '#ffd166', rate: 34, sparks: 90, power: 0.32,
+      gravity: 0.3, life: 2.2, trail: true, level: 0.9,
+    },
+  }),
+  layer('text', {
+    name: 'Sign over the door',
+    tags: ['sign'],
+    needsTag: 'sign',
+    params: {
+      // Seventeen characters on an arch that is four hundred pixels wide: any
+      // bigger and the ends of it climb off the end of the path.
+      content: 'REMEMBER REMEMBER', mode: 'path', font: 'serif', weight: '700', size: 0.6,
+      tracking: 0.05, color: '#ffb347', stroke: '#1a0500', strokeWidth: 4, glow: 18,
+      /**
+       * Breathing rather than guttering.
+       *
+       * `flicker` is the obvious animation for a sign over a fire and it is
+       * the wrong one: it takes a glyph's alpha to near zero and back — which
+       * is the point of it on a bad neon tube — and it ignores Animation
+       * amount entirely, so there is no dialling it down. On lettering
+       * somebody has to *read*, from the pavement, at night, it reads as
+       * missing letters rather than as atmosphere.
+       */
+      align: 'centre', animation: 'fade', speed: 0.4, amount: 0.4, pathOffset: 0,
+    },
+  }),
+];
+
+
+/**
+ * Night city.
+ *
+ * The look is Blade Runner and everything downstream of it, and the thing worth
+ * noticing is how little of it is science fiction: it is a wet street at night
+ * with too much signage, and a projector on a house is already most of the way
+ * there. What makes it work is the *absence* of white light. Nothing here is
+ * lit; every surface takes its colour from something advertising at it, so the
+ * wash is nearly black and the neon does all the work.
+ *
+ * Two gases, and only two, used consistently — magenta for the openings and
+ * cyan for everything structural. Neon signage in real cities is a riot of
+ * colour and it reads as a riot; a pair of complementary gases reads as a
+ * *place*.
+ */
+const CYBERPUNK = () => [
+  layer('wash', {
+    name: 'Wet night',
+    params: { color: '#05060f', color2: '#120a2a', blend: 0.55, level: 0.3, vignette: 0.5 },
+  }),
+  // The hologram goes on before the neon: it is behind everything, on the wall,
+  // and the tubes have to read as being in front of it.
+  layer('hologram', {
+    name: 'Advert on the wall',
+    tags: ['wall'],
+    opacity: 0.7,
+    params: {
+      text: '新東京 · 電脳 · 未来 · 記憶', color: '#05d9e8', fringe: '#ff2a6d', size: 0.12,
+      columns: 4, speed: 34, scanlines: 4, split: 4, glitch: 0.5, haze: 0.35, level: 1,
+    },
+  }),
+  layer('runes', {
+    name: 'Code in the windows',
+    tags: ['window'],
+    opacity: 0.55,
+    stagger: 1.3,
+    params: {
+      color: '#05d9e8', head: '#eafcff', alphabet: 'アイウエオカキクケコサシスセソタチツテト0123456789',
+      columns: 8, speed: 7, tail: 10, churn: 8, level: 1,
+    },
+  }),
+  layer('neon', {
+    name: 'Tubes round the windows',
+    tags: ['window'],
+    stagger: 0.7,
+    params: {
+      color: '#05d9e8', core: '#eafcff', width: 7, inset: 0, color2: '#ff2a6d',
+      flicker: 0.3, buzz: 1, dead: 0, chase: 0, spill: 0.5, level: 1,
+    },
+  }),
+  layer('neon', {
+    name: 'Tube round the door',
+    tags: ['door'],
+    params: {
+      color: '#ff2a6d', core: '#fff0f6', width: 10, inset: 7, color2: '#05d9e8',
+      flicker: 0.45, buzz: 1.2, dead: 0, chase: 0, spill: 0.9, level: 1,
+    },
+  }),
+  layer('neon', {
+    name: 'Strip along the gutter',
+    tags: ['roof', 'trim'],
+    params: {
+      color: '#c400ff', core: '#f7e6ff', width: 6, inset: 0, color2: '#05d9e8',
+      flicker: 0.15, buzz: 0.8, dead: 0, chase: 0.12, spill: 0.4, level: 0.9,
+    },
+  }),
+  /**
+   * The sign on the chimney.
+   *
+   * A chimney is a tall narrow rectangle standing above the roofline, which is
+   * exactly the shape and exactly the position of every vertical sign in every
+   * one of these films. It is the single best thing on an ordinary British
+   * house for this, and it is not obvious until you try it.
+   */
+  layer('neon-sign', {
+    name: 'Sign on the chimney',
+    tags: ['chimney'],
+    params: {
+      text: '電脳', orientation: 'down', color: '#ff2a6d', core: '#fff0f6', size: 0.78,
+      weight: '700', spacing: 1.08, frame: 0.5, frameColor: '#05d9e8', flicker: 0.5,
+      buzz: 1, broken: 0, subtitle: '', spill: 0.9, level: 1,
+    },
+  }),
+  layer('neon-sign', {
+    name: 'Sign over the door',
+    tags: ['sign'],
+    needsTag: 'sign',
+    params: {
+      text: '不夜城', orientation: 'across', color: '#05d9e8', core: '#eafcff', size: 0.9,
+      weight: '700', spacing: 1.3, frame: 0, frameColor: '#ff2a6d', flicker: 0.35,
+      buzz: 1, broken: 0.3, subtitle: 'OPEN ALL NIGHT', spill: 0.6, level: 1,
+    },
+  }),
+  layer('rain', {
+    name: 'Rain',
+    params: {
+      color: '#9fd6ff', count: 700, speed: 1150, angle: 14, length: 60, width: 1.4,
+      depth: 0.8, opacity: 0.35, splash: 0.6, gust: 0.5,
+    },
+  }),
+  layer('fog', {
+    name: 'Steam off the street',
+    softness: 6,
+    opacity: 0.7,
+    params: { color: '#4a6f8c', density: 0.24, scale: 2.8, speed: 0.05, swirl: 0.7, height: 0.42 },
+  }),
+];
+
 export const PRESETS = [
   {
     id: 'halloween',
@@ -266,6 +701,51 @@ export const PRESETS = [
     tagsUsed: ['roof', 'window', 'door'],
     grade: 'frost',
     build: CHRISTMAS,
+  },
+  {
+    id: 'birthday',
+    name: 'Birthday',
+    description:
+      'Bunting along the roofline, a cake with lit candles on the door, balloons going up the front of the house and confetti over the lot.',
+    tagsUsed: ['roof', 'window', 'door'],
+    grade: 'saturated',
+    build: BIRTHDAY,
+  },
+  {
+    id: 'perseids',
+    name: 'Perseid night',
+    description:
+      'A dark house under a meteor shower: Perseids streaking away from a radiant off the top corner, fireballs leaving trains, and a few sporadics from the wrong direction.',
+    tagsUsed: ['window'],
+    grade: 'frost',
+    build: PERSEIDS,
+  },
+  {
+    id: 'new-year',
+    name: "New Year's Eve",
+    description:
+      'A working clock counting down to midnight on the door, the time over it, sparklers along the roofline, fireworks and confetti. Set the date on both counting layers.',
+    tagsUsed: ['roof', 'window', 'door'],
+    grade: 'saturated',
+    build: NEW_YEAR,
+  },
+  {
+    id: 'cyberpunk',
+    name: 'Night city',
+    description:
+      'Neon tube round every opening, a Japanese sign on the chimney, a holographic advert over the brickwork, code in the windows and rain through the lot.',
+    tagsUsed: ['window', 'door', 'chimney', 'wall'],
+    grade: 'saturated',
+    build: CYBERPUNK,
+  },
+  {
+    id: 'bonfire-night',
+    name: 'Bonfire Night',
+    description:
+      'A pyre burning in the doorway with a guy on top, catherine wheels pinned to the windows, a sparkler along the gutter and fireworks over the rooftops.',
+    tagsUsed: ['door', 'window', 'roof'],
+    grade: 'ember',
+    build: BONFIRE_NIGHT,
   },
 ];
 
@@ -384,6 +864,164 @@ export const DEMO_BURSTS = [
 ];
 
 /**
+ * The one-shots each demo ships with.
+ *
+ * Keyed by preset, because a burst is only interactive if it belongs to what is
+ * already on the wall: bats out of the door are the right answer on Halloween
+ * and a non-sequitur under a meteor shower. Anything without an entry falls
+ * back to the list above, which is also what a project that names no preset at
+ * all gets.
+ *
+ * The keys repeat across presets on purpose — only one preset's bursts are ever
+ * added to a project, so X is always "the big one" and the toast that tells you
+ * which keys to press stays short.
+ */
+const PRESET_BURSTS = {
+  birthday: [
+    {
+      key: 'x',
+      name: 'Confetti out of the door',
+      effect: 'confetti-cannon',
+      tags: ['door'],
+      hold: 5.5,
+      params: {
+        count: 200, duration: 5, speed: 1200, aim: -90, spread: 0.2,
+        gravity: 420, drag: 1.6, size: 18, tumble: 1, streamers: 0.35, seed: 1,
+      },
+    },
+    {
+      key: 'f',
+      name: 'A rocket for the birthday',
+      effect: 'rocket',
+      tags: ['roof'],
+      hold: 5,
+      params: {
+        shell: 'peony', star: 'magnesium', color: '#ffd166', duration: 4.5, lift: 1.1,
+        height: 820, drift: 90, stars: 100, power: 520, gravity: 260, size: 4,
+        flash: 1.1, seed: 7,
+      },
+    },
+  ],
+  perseids: [
+    {
+      /**
+       * A fireball, and the only burst here that is a *smaller* thing than the
+       * layer it interrupts. Under a shower running at forty an hour, the event
+       * worth pressing a key for is the one meteor in a thousand that comes in
+       * slowly, breaks up, and lights the garden.
+       */
+      key: 'x',
+      name: 'A fireball breaks up',
+      effect: 'spark-burst',
+      tags: ['roof'],
+      hold: 3.5,
+      params: {
+        hotTemp: 4600, coolTemp: 1400, count: 70, duration: 2.8, speed: 620,
+        spread: 0.16, aim: 25, gravity: 90, size: 6, trail: 0.9,
+      },
+    },
+  ],
+  'new-year': [
+    {
+      key: 'x',
+      name: 'Rocket over the roof',
+      effect: 'rocket',
+      tags: ['roof'],
+      hold: 6,
+      params: {
+        shell: 'crossette', star: 'copper', color: '#ffd166', duration: 5, lift: 1.2,
+        height: 980, drift: 140, stars: 120, power: 600, gravity: 240, size: 4.5,
+        flash: 1.3, seed: 3,
+      },
+    },
+    {
+      key: 'g',
+      name: 'Confetti out of the door',
+      effect: 'confetti-cannon',
+      tags: ['door'],
+      hold: 5.5,
+      params: {
+        count: 220, duration: 5, speed: 1300, aim: -90, spread: 0.22,
+        gravity: 420, drag: 1.7, size: 16, tumble: 1.2, streamers: 0.4, seed: 2,
+      },
+    },
+  ],
+  cyberpunk: [
+    {
+      /**
+       * The power going out and coming back, which is the one event this look
+       * has: every tube on the house drops out, a wave crosses the front, and
+       * the signs strike again. Aimed at the door because that is where the
+       * pulse should look like it came from.
+       */
+      key: 'x',
+      name: 'Something takes the power out',
+      effect: 'shockwave',
+      tags: ['door'],
+      hold: 2.4,
+      params: {
+        color: '#05d9e8', color2: '#ff2a6d', rings: 4, duration: 2,
+        reach: 2000, width: 22, flash: 1.6, gap: 0.09,
+      },
+    },
+    {
+      key: 'g',
+      name: 'A transformer blows',
+      effect: 'spark-burst',
+      tags: ['roof'],
+      hold: 3,
+      params: {
+        hotTemp: 6500, coolTemp: 2000, count: 130, duration: 2.4, speed: 900,
+        spread: 0.6, aim: -90, gravity: 1100, size: 5, trail: 0.8,
+      },
+    },
+  ],
+  'bonfire-night': [
+    {
+      key: 'x',
+      name: 'Rocket over the rooftops',
+      effect: 'rocket',
+      tags: ['roof'],
+      hold: 7,
+      params: {
+        shell: 'willow', star: 'sodium', color: '#ffd166', duration: 6, lift: 1.3,
+        height: 1050, drift: 120, stars: 110, power: 560, gravity: 300, size: 4,
+        flash: 1.4, seed: 5,
+      },
+    },
+    {
+      key: 'g',
+      name: 'A wheel goes off',
+      effect: 'catherine-wheel',
+      tags: ['wall'],
+      hold: 11,
+      params: {
+        radius: 0.16, nozzles: 3, hotTemp: 3200, coolTemp: 1100, tint: '#ffe9b0',
+        sparks: 420, speed: 700, life: 0.85, gravity: 520, spin: 4, spinUp: 1.2,
+        // Relights after nothing: fired by hand, it should burn once and stop.
+        duration: 9, repeat: 0, size: 3.5,
+      },
+    },
+    {
+      key: 'f',
+      name: 'A log collapses',
+      effect: 'spark-burst',
+      tags: ['door'],
+      hold: 3,
+      params: {
+        hotTemp: 2600, coolTemp: 1000, count: 140, duration: 2.4, speed: 520,
+        spread: 0.45, aim: -90, gravity: 620, size: 6, trail: 0.6,
+      },
+    },
+  ],
+};
+
+/** The one-shots a given demo gets. See `PRESET_BURSTS`. */
+export function burstsFor(presetId) {
+  return PRESET_BURSTS[presetId] || DEMO_BURSTS;
+}
+
+/**
  * Add the one-shots to a project, wired to their keys.
  *
  * Scenes here are built by hand rather than captured, and deliberately name
@@ -392,11 +1030,11 @@ export const DEMO_BURSTS = [
  * happened to be at that instant and a hand-built one leaves everything else
  * alone. Fire it in the middle of anything and only the burst changes.
  */
-export function addDemoBursts(project) {
+export function addDemoBursts(project, presetId = null) {
   let order = project.layers.reduce((max, l) => Math.max(max, l.order || 0), 0);
   const added = [];
 
-  for (const spec of DEMO_BURSTS) {
+  for (const spec of burstsFor(presetId)) {
     const layer = createLayer(spec.effect, {
       name: spec.name,
       targetTags: spec.tags,

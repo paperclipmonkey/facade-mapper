@@ -23,6 +23,9 @@ import facade from './builtin/facade.js';
 import brickwork from './builtin/brickwork.js';
 import floral from './builtin/floral.js';
 import bursts from './builtin/bursts.js';
+import celebrations from './builtin/celebrations.js';
+import bonfire from './builtin/bonfire.js';
+import cyberpunk from './builtin/cyberpunk.js';
 
 export const CATEGORIES = [
   'basic',
@@ -32,13 +35,17 @@ export const CATEGORIES = [
   'atmosphere',
   'halloween',
   'christmas',
+  /** Birthdays, New Year, the Perseids, Bonfire Night. */
+  'celebration',
+  /** Neon, signage and holograms. */
+  'cyberpunk',
   'text',
   'media',
   'custom',
 ];
 
 const builtins = new Map();
-for (const list of [basic, paths, facade, brickwork, floral, bursts, atmosphere, halloween, christmas, creatures, text, mediaEffects]) {
+for (const list of [basic, paths, facade, brickwork, floral, bursts, atmosphere, halloween, christmas, celebrations, bonfire, cyberpunk, creatures, text, mediaEffects]) {
   for (const def of list) builtins.set(def.id, normaliseEffect(def, true));
 }
 

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Facade Mapper — demo still</title>
+    <style>
+      html, body { margin: 0; background: #05070c; }
+      canvas { display: block; width: 100%; height: auto; }
+    </style>
+  </head>
+  <body>
+    <!--
+      One frame of one demo, drawn the way a projector would draw it.
+
+      This exists to make the pictures in the README, and it is deliberately the
+      *real* path rather than a mock-up of it: the demo facade as the backdrop,
+      the actual preset applied to the actual traced shapes, the actual world
+      renderer, and the actual bloom and colour grade through the same WebGL
+      shader a projector tab uses. The only thing missing is the projector's
+      warp, which is replaced by an identity mesh — there is no wall here to be
+      off-axis to.
+
+      The light is composited onto the house with 'lighter', because that is
+      what a projector does: it adds light to a surface, it cannot subtract any.
+      A screenshot taken with the effects drawn *over* the facade would show
+      black where a real projection shows brickwork.
+
+        tools/screenshots.mjs drives this. Query string:
+          ?preset=birthday&t=8&w=1600&h=900
+    -->
+    <canvas id="out"></canvas>
+
+    <script type="module">
+      import { createProject } from '../js/core/state.js';
+      import { demoShapes, renderDemoFacade, DEMO_ASPECT } from '../js/control/demoHouse.js';
+      import { applyPreset } from '../js/control/presets.js';
+      import { createWorldRenderer } from '../js/render/worldRenderer.js';
+      import { createWarpRenderer } from '../js/render/warp.js';
+
+      const q = new URLSearchParams(location.search);
+      const preset = q.get('preset') || 'halloween';
+      // How far into the show the still is taken. Effects that accumulate —
+      // snow settling, a guy burning, a wheel spinning up — look like nothing
+      // at all in their first second, so a still at t=0 libels half of them.
+      const seconds = Number(q.get('t') || 8);
+      const W = Number(q.get('w') || 1600);
+      const H = Number(q.get('h') || Math.round(W / DEMO_ASPECT));
+      // Frames per simulated second. The renderer runs the fixed-rate part of
+      // every effect itself, catching up whatever it is owed each frame, so
+      // this only has to be often enough to stay inside the free catch-up
+      // allowance of sixty steps a frame.
+      const FPS = Number(q.get('fps') || 12);
+
+      const out = document.getElementById('out');
+      out.width = W;
+      out.height = H;
+      const g = out.getContext('2d');
+
+      const project = createProject('shot');
+      project.worldAspect = DEMO_ASPECT;
+      project.shapes = demoShapes();
+      applyPreset(project, preset);
+
+      const facade = renderDemoFacade(W, H);
+
+      const world = document.createElement('canvas');
+      world.width = W;
+      world.height = H;
+      const worldCtx = world.getContext('2d');
+      const renderer = createWorldRenderer({});
+
+      const lit = document.createElement('canvas');
+      lit.width = W;
+      lit.height = H;
+      // preserveDrawingBuffer, or reading the canvas back after the draw gets
+      // you a cleared buffer on most drivers.
+      const warp = createWarpRenderer(lit, { preserveDrawingBuffer: true });
+      // Identity: the full world rectangle mapped straight onto the canvas.
+      warp.buildMesh({ H: null, region: { x: 0, y: 0, w: 1, h: 1 }, mesh: null });
+
+      const dt = 1 / FPS;
+      for (let t = 0; t <= seconds + 1e-6; t += dt) {
+        renderer.render(worldCtx, {
+          project,
+          time: { t, dt, beat: t * 2, beatPhase: (t * 2) % 1, bpm: 120 },
+          // No microphone in a headless browser, and that is the case worth
+          // photographing anyway: a binding on an audio band should degrade to
+          // its base value rather than to nothing.
+          audio: { level: 0, low: 0, mid: 0, high: 0 },
+          region: { x: 0, y: 0, w: 1, h: 1 },
+          pixelSize: { w: W, h: H },
+          preview: false,
+        });
+      }
+
+      warp.draw(world, {
+        feather: { top: 0, right: 0, bottom: 0, left: 0 },
+        gamma: 1.8,
+        brightness: 1,
+        grade: project.settings?.grade,
+      });
+
+      g.drawImage(facade, 0, 0, W, H);
+      g.globalCompositeOperation = 'lighter';
+      g.drawImage(lit, 0, 0, W, H);
+      g.globalCompositeOperation = 'source-over';
+
+      window.__shot = {
+        preset,
+        seconds,
+        layers: project.layers.length,
+        jpeg: out.toDataURL('image/jpeg', 0.86),
+      };
+    </script>
+  </body>
+</html>
