@@ -26,6 +26,7 @@ import bursts from './builtin/bursts.js';
 import celebrations from './builtin/celebrations.js';
 import bonfire from './builtin/bonfire.js';
 import cyberpunk from './builtin/cyberpunk.js';
+import underwater from './builtin/underwater.js';
 
 export const CATEGORIES = [
   'basic',
@@ -39,13 +40,15 @@ export const CATEGORIES = [
   'celebration',
   /** Neon, signage and holograms. */
   'cyberpunk',
+  /** The house under water: shafts, kelp, a shoal, jellyfish. */
+  'underwater',
   'text',
   'media',
   'custom',
 ];
 
 const builtins = new Map();
-for (const list of [basic, paths, facade, brickwork, floral, bursts, atmosphere, halloween, christmas, celebrations, bonfire, cyberpunk, creatures, text, mediaEffects]) {
+for (const list of [basic, paths, facade, brickwork, floral, bursts, atmosphere, halloween, christmas, celebrations, bonfire, cyberpunk, underwater, creatures, text, mediaEffects]) {
   for (const def of list) builtins.set(def.id, normaliseEffect(def, true));
 }
 

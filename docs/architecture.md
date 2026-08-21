@@ -154,7 +154,22 @@ node test/collide.test.mjs     # heightfields, landing, slumping, shedding
 node test/obstacles.test.mjs   # facade collision, automatic edge blending
 node test/figures.test.mjs     # the drawn figures
 node test/link.test.mjs        # clock offset, WebSocket framing, the relay
+node test/underwater.test.mjs  # absorption, wave dispersion, buoyancy, shoaling
+node test/robustness.test.mjs  # every effect against every degenerate shape
 ```
+
+[`robustness.test.mjs`](../test/robustness.test.mjs) is the one that is not
+about any effect in particular. It runs all eighty-odd of them over every shape
+a project can actually contain — including the ones nobody meant to draw, like a
+polygon whose points have all been dragged onto each other — and holds them to
+the handful of rules that apply to every effect: no throwing, nothing non-finite
+reaching the canvas, no `Math.random()`, no per-particle `filter` or
+`shadowBlur`, no allocating a canvas once warm, and the same drawing calls from
+two runs at the same show time. Each of those is a rule that was previously
+enforced by the author remembering it, and each has a failure mode that is
+invisible until it is on a wall. The NaN one is the worst: a canvas given NaN
+draws nothing at all and says nothing, so the layer simply vanishes while the
+list goes on reporting it as running.
 
 `geometry.test.mjs` includes an end-to-end calibration against a simulated
 projector and camera. The motion tests are worth reading if you plan to rely on

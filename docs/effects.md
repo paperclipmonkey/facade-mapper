@@ -1,6 +1,6 @@
 # The effect library
 
-Around seventy-five effects, and a **Browse…** button on every layer that
+Over eighty effects, and a **Browse…** button on every layer that
 renders all of them live, on a shape like the one you are pointing at. Pick by
 eye; this file is for the ideas behind them.
 
@@ -9,6 +9,7 @@ eye; this file is for the ideas behind them.
 - [Effects that happen once](#effects-that-happen-once)
 - [The rest of the year](#the-rest-of-the-year)
 - [Night city](#night-city)
+- [Under the sea](#under-the-sea)
 - [Paths and animation](#paths-and-animation)
 - [Drawing for a projector](#drawing-for-a-projector)
 - [The look](#the-look)
@@ -531,6 +532,93 @@ because the app ships none at all — it has to keep working on a static host wi
 no network. Boxes instead of glyphs means the machine, not the effect: install
 Noto Sans CJK, or type something else into the field, which works perfectly
 well.
+
+## Under the sea
+
+Not a night of the year, and the only look here that changes what the building
+*is* rather than what is on it. Everything else in this file decorates a facade;
+this one puts it fourteen metres down.
+
+| | |
+| --- | --- |
+| **Waterline** | The surface crossing the house, the water below it absorbed towards blue, and the light of the surface dancing on the wall above the line. |
+| **Shafts from the Surface** | Sunlight coming down in beams, swaying with the swell, reddening out of existence as it goes deeper. |
+| **Shoal** | Fish working their way across the wall, steering round the windows and the door. |
+| **Kelp** | Weed rooted along the bottom edge of a shape, thrashing at the tip and still at the holdfast. |
+| **Bubbles** | Rising out of the brickwork, zigzagging, swelling, and collecting under any sill they meet. |
+| **Jellyfish** | Bells pulsing up the wall, trailing tentacles that follow where the bell has been. |
+
+All six take the same three parameters — **Surface at**, **Metres top to
+bottom** and **Murkiness** — and that is not repetition, it is the mechanism.
+They are what makes six independent effects agree about one body of water. Set
+the surface once and the shafts arrive at the height the waterline is drawn at,
+the kelp sways hardest where the shafts are brightest, and a jellyfish at the
+eaves is tinted for the depth it is actually at. Change one layer's and the look
+comes apart in a way that is hard to point at and easy to feel.
+
+**The colour is absorption, not a tint.** This is the part worth understanding,
+because it is why the look survives being stared at. Water absorbs red about
+thirty times faster than blue: ten metres of it removes ninety-five per cent of
+the red in a beam of white light and about a tenth of the blue. So depth is a
+*spectral* effect, not a brightness one — warm things lose their colour with
+distance while blue-green things barely change, and you can read how far away
+something is from its hue alone.
+
+That matters more on a house than it does in a photograph, because a projector
+cannot make anything darker. Depth done as a dimmer switch has nowhere to go on
+a wall that is already as dark as it gets; depth done as `fx.waterAbsorb` is
+still legible at the bottom of the frame, where there is no red left in anything
+and the wall has gone deep blue. See
+[writing your own effects](writing-effects.md#the-fx-namespace).
+
+**The surface obeys the dispersion relation.** Three wave components, each with
+ω² = gk — so the long swell genuinely outruns the short chop and the pattern
+never repeats itself. Pick three frequencies by eye instead and they lock into a
+repeating comb within a second, which reads as corduroy. It costs one square
+root and it is the difference between water and a graphic.
+
+**And wave motion dies off exponentially with depth**, at e^(−kz): essentially
+gone half a wavelength down. That single term is why the kelp thrashes at the
+tip and does not stir at the holdfast, and why a frond drawn with a uniform sine
+wave up its length — which is what everyone draws first — reads as a flag. The
+plants also lean on a slow, depth-uniform **Current**, because a tidal stream is
+not a wave and does not care how deep you are; between the two, the whole plant
+is alive and only the top of it is whipping.
+
+**Bubbles are not balls with the gravity turned round.** Above about a
+millimetre and a half across, a rising bubble sheds vortices off alternate sides
+and zigzags — more slowly the bigger it is — which is why a stream of them from
+one crack arrives at the surface spread over a metre. They also *swell*: the
+absolute pressure on a bubble ten metres down is twice what it is at the
+surface, so by Boyle's law it has half the volume, and the radius grows by the
+cube root of the ratio on the way up. And they are drawn as a **rim**, not a
+disc: under water a bubble is a lens of air with nothing in the middle of it, so
+what you see is a bright ring and a hard highlight. Drawn filled, it is a pearl.
+
+**A jellyfish's tentacles are its own history.** The bell's position is a closed
+form of show time rather than an integration, which buys two things: a projector
+tab opened at eleven o'clock has nothing to catch up on, and the position can be
+asked for at times other than now. So a tentacle point is simply *where the bell
+was* a moment ago — it curls through the surges by itself, lags on the fast part
+of the stroke and gathers back under the bell as it coasts, and none of that is
+drawn. The stroke it is following is deliberately asymmetric: the bell squeezes
+shut in a quarter of the cycle and refills over the other three, and all of the
+thrust is in the squeeze. Make the halves equal and you get a balloon on a
+spring.
+
+**Fish flash when they bank**, not when they are fast. A fish's flank is a
+mirror; swimming straight it faces sideways and throws the light away from you,
+and rolling into a turn it presents that mirror to the surface for a fraction of
+a second. That silver flicker running through a shoal as it changes direction is
+the most recognisable thing a shoal does, and it comes out of one term keyed to
+the turn rate.
+
+Point Shoal, Kelp and Bubbles at the shape tagged `wall` and tell them the
+windows are solid, exactly as with the [facade effects](#effects-that-know-where-the-windows-are)
+above. Waterline, Shafts and Jellyfish want the whole frame.
+
+This is a starter preset like the rest, with its own demo:
+[under the sea](https://paperclipmonkey.github.io/facade-mapper/?demo=sunken).
 
 ## Paths and animation
 

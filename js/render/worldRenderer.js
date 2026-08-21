@@ -292,8 +292,6 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
   const reportedErrors = new Set();
   /** Values effects publish for each other. See `share` in the draw context. */
   const share = new Map();
-  /** `show.sceneChangeAt` as of the last frame, to spot a scene being re-fired. */
-  let lastSceneAt = null;
   /**
    * Layers that were catching up or fading in on the last frame.
    *
@@ -464,7 +462,6 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
      * evening accumulating.
      */
     const sceneAt = project.show?.sceneChangeAt ?? null;
-    lastSceneAt = sceneAt;
     const active = (project.scenes || []).find((s) => s.id === project.show?.activeScene);
     const sceneEnables = new Set(
       Object.entries(active?.state || {})
@@ -719,7 +716,6 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
           inst.enabledAt = enabledAt;
           inst.step = 0;
         }
-        inst.lastSeen = generation;
         ctx.age = Math.max(0, t - inst.enabledAt);
 
         if (!inst.initialised) {

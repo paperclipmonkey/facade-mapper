@@ -40,6 +40,9 @@ const SHOTS = [
   { preset: 'new-year', t: 10, clock: '2026-12-31T23:59:52' },
   { preset: 'bonfire-night', t: 22 },
   { preset: 'cyberpunk', t: 13 },
+  // Long enough for the weed to be laid over, a jellyfish to have climbed past
+  // the eaves, and the marine snow to have reached the bottom of the frame.
+  { preset: 'sunken', t: 18 },
 ];
 
 const W = 1600;
@@ -63,8 +66,7 @@ async function main() {
 
   // SwiftShader rather than a real GPU: headless Chromium has no display, and
   // without this the bloom pass silently does nothing and every still comes out
-  // flat. Slow, and it does not matter — this renders seven frames of seven
-  // shows.
+  // flat. Slow, and it does not matter — this renders one frame of each show.
   //
   // Inside the try, so that the documented failure — Chromium not installed —
   // does not leave the helper server running after the process gives up.

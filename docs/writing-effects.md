@@ -111,6 +111,14 @@ convenience. Source: [`js/effects/lib.js`](../js/effects/lib.js).
 `rampAt`, `luminance`, `srgbToLinear`, `linearToSrgb`. Reach for
 `blackbodyCss(kelvin)` whenever something is hot.
 
+**Colour through a medium** — `waterAbsorb(hex, metres, turbidity)` and
+`waterTransmission(metres, turbidity)`. Water absorbs red about thirty times
+faster than blue, so `waterAbsorb('#ffffff', 10)` is cyan and at thirty metres
+it is a deep blue — depth you can read off the colour rather than only off the
+brightness. Which matters more than it sounds on a projector, where you cannot
+make the wall any darker. `waterTransmission` is the same thing as three bare
+multipliers, for a per-pixel loop that should not be building hex strings.
+
 **Density fields** — `createField`, `ensureField`, `curlNoise`. For anything
 volumetric.
 

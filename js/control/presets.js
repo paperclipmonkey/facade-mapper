@@ -683,6 +683,149 @@ const CYBERPUNK = () => [
   }),
 ];
 
+/**
+ * The house goes under.
+ *
+ * The only preset here that is not a night of the year, and it earns its place
+ * because it is the one that changes what the building *is* rather than what is
+ * on it. Everything else in this file decorates a facade; this one puts it
+ * fourteen metres down.
+ *
+ * The order the layers go on in is the order the light actually arrives in, and
+ * it is not negotiable. The water body first, because it is the medium and
+ * everything else is seen through it. Then the shafts coming down through the
+ * surface, then the caustics they throw onto the brickwork, then the things
+ * living in it — weed on the wall, a shoal off it, jellyfish drifting up past
+ * the roof. Bubbles last, because they are the nearest thing to the camera.
+ *
+ * Every layer shares the same three numbers — surface at 0.045 down the frame,
+ * fourteen metres of water to the bottom of it, murkiness 1.4 — and that is
+ * what makes it read as one body of water rather than six effects that happen
+ * to be blue. Change them in one layer and it stops working, which is worth
+ * knowing before you start: they are a *scene* setting that happens to live on
+ * each effect.
+ *
+ * The surface is deliberately inside the frame, just below the top, rather than
+ * off the top of it. It costs a little of the sky and it buys the single thing
+ * that makes the whole look land — you can see the underside of the surface,
+ * with the light breaking on it and the glints running along the waves, and
+ * once the eye has found the surface it knows exactly what is going on
+ * everywhere below it.
+ */
+const SUNKEN = () => [
+  // Surface, depth and murkiness, repeated on every layer because they are
+  // per-effect parameters. Kept in one object so they cannot drift apart.
+  ...(() => {
+    const water = { surface: 0.045, metres: 14, turbidity: 1.4 };
+    return [
+      layer('waterline', {
+        name: 'The water',
+        params: {
+          ...water, color: '#dff2ff', body: 0.55, wave: 26, wavelength: 6,
+          tide: 0.022, tidePeriod: 48, glint: 0.9, spill: 0.55, level: 0.9,
+        },
+      }),
+      layer('godrays', {
+        name: 'Shafts through the surface',
+        opacity: 0.9,
+        params: {
+          ...water, color: '#eaf7ff', shafts: 13, tilt: -11, spread: 34,
+          width: 0.05, sway: 0.7, swell: 7, shimmer: 0.75, haze: 0.4, intensity: 1,
+        },
+      }),
+      /**
+       * Caustics on the brickwork, and only on the brickwork.
+       *
+       * The dancing light belongs on a surface. Run over the whole frame it
+       * lands on the sky as well, which is water, and water does not have
+       * caustics on it — it *makes* them. Pointed at the wall it is the
+       * strongest single cue in the look, because it is the thing everybody has
+       * stood next to a swimming pool and watched.
+       */
+      layer('caustics', {
+        name: 'Caustics on the wall',
+        tags: ['wall'],
+        needsTag: 'wall',
+        opacity: 0.55,
+        params: {
+          color: '#8fe4ff', color2: '#031c33', scale: 3.6, speed: 0.22,
+          sharpness: 5.4, level: 0.7, resolution: 64,
+        },
+      }),
+      // Windows read as glass by being *dimmer* and greener than the render
+      // around them, which is what a pane of glass with a flooded room behind
+      // it looks like. A bright window would read as a lit house.
+      layer('fill', {
+        name: 'Water behind the glass',
+        tags: ['window'],
+        needsTag: 'window',
+        opacity: 0.55,
+        params: { color: '#0d5f6e', color2: '#04202f', gradient: 'vertical', level: 0.9, softness: 0.6, inset: 0.02 },
+      }),
+      layer('kelp', {
+        name: 'Weed up the front',
+        tags: ['wall'],
+        needsTag: 'wall',
+        params: {
+          ...water, color: '#2f6b45', tip: '#96cf5e', fronds: 11, height: 0.55,
+          thickness: 7, blades: 1, sway: 0.4, current: 0.4, wavelength: 9,
+          bladders: 0.6, level: 0.9,
+        },
+      }),
+      layer('shoal', {
+        name: 'A shoal off the wall',
+        tags: ['wall'],
+        needsTag: 'wall',
+        params: {
+          ...water, color: '#2c6f8c', belly: '#e2f7ff', count: 46, size: 26,
+          speed: 175, cohesion: 0.8, alignment: 1.1, separation: 1, wander: 0.65,
+          obstacles: 'window, door', startle: 0.3, flash: 1.2,
+        },
+      }),
+      layer('jellyfish', {
+        name: 'Jellyfish going up',
+        opacity: 0.85,
+        params: {
+          ...water, color: '#a6dcff', rim: '#ff7ad9', count: 5, size: 78,
+          pulse: 2.6, thrust: 1, rise: 22, drift: 12, tentacles: 12,
+          trail: 1.8, glow: 1.1, level: 1,
+        },
+      }),
+      /**
+       * Marine snow, which is Snow with the temperature taken out of it.
+       *
+       * Detritus falling out of the water column, and it does the same job here
+       * as dust in a beam of light: it is what the shafts have to catch. It
+       * settles on the ledges too, which is not a liberty — it is the one thing
+       * that genuinely accumulates on a wreck.
+       */
+      layer('snow', {
+        name: 'Marine snow',
+        opacity: 0.42,
+        params: {
+          color: '#cfeaf5', count: 260, speed: 22, wind: 9, gust: 0.8, size: 4,
+          depth: 0.85, blur: 0.8, flutter: 1.4, collide: true, colliderTag: '',
+          // A thin film on the ledges rather than a drift. Silt on a wreck is a
+          // dusting; anything deeper reads as snow, which is the one thing it
+          // must not, and the slabs that shed off a deep pile read as dashes.
+          buildUp: 0.3, maxDepth: 5, shed: 0.35,
+        },
+      }),
+      layer('bubbles', {
+        name: 'Bubbles off the brickwork',
+        tags: ['wall'],
+        needsTag: 'wall',
+        params: {
+          ...water, color: '#e4f8ff', vents: 6, rate: 11, size: 9, variation: 0.75,
+          rise: 155, wobble: 1.1, expand: 1.2, spread: 0.07,
+          obstacles: 'window, door', level: 1,
+        },
+      }),
+    ];
+  })(),
+];
+
+
 export const PRESETS = [
   {
     id: 'halloween',
@@ -737,6 +880,15 @@ export const PRESETS = [
     tagsUsed: ['window', 'door', 'chimney', 'wall'],
     grade: 'saturated',
     build: CYBERPUNK,
+  },
+  {
+    id: 'sunken',
+    name: 'Under the sea',
+    description:
+      'The house fourteen metres down: the surface across the top of the frame with shafts coming through it, caustics on the brickwork, weed up the front, a shoal that keeps off the windows, jellyfish going past the roof and bubbles off the wall.',
+    tagsUsed: ['wall', 'window'],
+    grade: 'deep',
+    build: SUNKEN,
   },
   {
     id: 'bonfire-night',
@@ -973,6 +1125,59 @@ const PRESET_BURSTS = {
       params: {
         hotTemp: 6500, coolTemp: 2000, count: 130, duration: 2.4, speed: 900,
         spread: 0.6, aim: -90, gravity: 1100, size: 5, trail: 0.8,
+      },
+    },
+  ],
+  sunken: [
+    {
+      /**
+       * A gout of bubbles out of the doorway, which is Spark Burst with the
+       * gravity turned round.
+       *
+       * Nothing about that effect is specifically fire — it throws particles
+       * out of a shape, colours them off the blackbody curve and lets them
+       * cool. Ask it for nine thousand Kelvin and it hands back blue-white;
+       * ask it for negative gravity and they rise. Which is a bubble.
+       */
+      key: 'x',
+      name: 'Something breathes out',
+      effect: 'spark-burst',
+      tags: ['door'],
+      hold: 5,
+      params: {
+        /**
+         * Nine thousand Kelvin is off the top of the blackbody curve, where the
+         * colour stops being flame and becomes the blue-white of a lightning
+         * channel — which, dimmed and rounded, is a bubble.
+         *
+         * The gravity is the other half of it, and it is small on purpose. A
+         * bubble reaches its terminal velocity within a few centimetres and
+         * then holds it, so the honest shape is nearly constant speed; the
+         * gentle negative here is the small acceleration a real bubble does
+         * get as it swells on the way up. Turn it up and they fly off the
+         * roof like sparks in reverse, which is what it looks like.
+         */
+        hotTemp: 9000, coolTemp: 4500, count: 150, duration: 4.5, speed: 170,
+        spread: 0.3, aim: -90, gravity: -110, size: 11, trail: 0.15,
+      },
+    },
+    {
+      /**
+       * A pressure wave down the front of the house, from something large
+       * going over the roof that you never see.
+       *
+       * Aimed at the roofline rather than at the door on purpose: the thing
+       * worth suggesting under water is scale, and scale is a wave arriving
+       * from above and off the top of the picture.
+       */
+      key: 'g',
+      name: 'Something big goes past',
+      effect: 'shockwave',
+      tags: ['roof'],
+      hold: 4,
+      params: {
+        color: '#a8f0ff', color2: '#0b4a72', rings: 3, duration: 3.4,
+        reach: 2600, width: 60, flash: 0.5, gap: 0.22,
       },
     },
   ],
