@@ -59,8 +59,20 @@
         </label>
       </section>
 
+      <section class="remote-section">
+        <h2>Sound</h2>
+        <button type="button" class="big" id="btnSound">
+          <span class="big-label">Sound</span>
+          <span class="big-sub">silent — press to turn it on</span>
+        </button>
+        <label class="fader">
+          <span class="fader-label">Volume <output id="soundMasterOut">70%</output></span>
+          <input type="range" id="soundMaster" min="0" max="1" step="0.01" value="0.7" aria-label="Overall sound volume" />
+        </label>
+      </section>
+
       <details class="remote-more" id="more">
-        <summary>Effects, projectors and the link</summary>
+        <summary>Effects, their volumes, projectors and the link</summary>
 
         <h2>Effects</h2>
         <div class="list" id="layers"></div>

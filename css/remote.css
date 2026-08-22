@@ -326,3 +326,27 @@
 
 /* How far down the page the drawing panel starts: the header, plus the tabs. */
 body { --remote-chrome: 96px; }
+
+/* ------------------------------------------------------------------ *
+ * Per-layer volume
+ *
+ * A fader under the layer it belongs to, indented so the pair reads as one
+ * thing. Outside the row rather than inside, because the row is a button and a
+ * slider inside a button cannot be dragged without switching the layer off.
+ * ------------------------------------------------------------------ */
+
+.sound-fader {
+  margin: -2px 0 10px 34px;
+  opacity: 0.75;
+}
+
+/* Lit while this layer is the one actually making its voice — two layers
+   sharing a voice play once, at the louder of them, and knowing which is which
+   saves pushing a slider that does nothing. */
+.sound-fader.playing {
+  opacity: 1;
+}
+
+.sound-fader.playing .fader-label {
+  color: var(--good);
+}

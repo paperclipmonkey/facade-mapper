@@ -66,7 +66,10 @@ let draggingMaster = false;
 const sceneNodes = new Map();
 const triggerNodes = new Map();
 const layerNodes = new Map();
+const soundNodes = new Map();
 const projectorNodes = new Map();
+/** Sliders under a thumb, so an arriving digest does not fight the finger. */
+const draggingSound = new Set();
 
 /* ------------------------------------------------------------------ *
  * Talking to the show
@@ -144,6 +147,7 @@ function build(digest) {
   sceneNodes.clear();
   triggerNodes.clear();
   layerNodes.clear();
+  soundNodes.clear();
   projectorNodes.clear();
 
   const scenes = $('scenes');
@@ -194,6 +198,39 @@ function build(digest) {
     });
     layerNodes.set(layer.id, row);
     layers.appendChild(row);
+
+    /**
+     * And its volume, for the layers that make a noise.
+     *
+     * Outside the row rather than inside it, because the row is a button and a
+     * slider inside a button is a slider you cannot drag without switching the
+     * layer off. Only for layers with a voice — a fader that does nothing is
+     * worse than no fader.
+     */
+    if (!layer.voice) continue;
+    const fader = document.createElement('label');
+    fader.className = 'fader sound-fader';
+    const label = document.createElement('span');
+    label.className = 'fader-label';
+    label.textContent = layer.voiceName || 'Sound';
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = '0';
+    slider.max = '1';
+    slider.step = '0.01';
+    slider.value = String(layer.soundLevel ?? 1);
+    slider.setAttribute('aria-label', `${layer.name} volume`);
+    slider.addEventListener('input', () => {
+      draggingSound.add(layer.id);
+      act('layer-sound', { id: layer.id, value: Number(slider.value) });
+    });
+    for (const event of ['pointerup', 'pointercancel', 'change', 'blur']) {
+      slider.addEventListener(event, () => draggingSound.delete(layer.id));
+    }
+    fader.append(label, slider);
+    fader.slider = slider;
+    soundNodes.set(layer.id, fader);
+    layers.appendChild(fader);
   }
 
   const projectors = $('projectors');
@@ -255,6 +292,24 @@ function paint() {
     row.classList.toggle('on', layer.enabled);
     row.pip.classList.toggle('on', layer.enabled);
     row.note.textContent = layer.solo ? 'solo' : '';
+
+    const fader = soundNodes.get(layer.id);
+    if (!fader || draggingSound.has(layer.id)) continue;
+    fader.slider.value = String(layer.soundLevel ?? 1);
+    // Lit while this layer is the one actually making its voice: two layers
+    // sharing a voice play once, at the louder of the two, and knowing which
+    // is which saves a lot of pushing sliders that do nothing.
+    fader.classList.toggle('playing', (show.sound?.playing || []).includes(layer.voice));
+  }
+
+  const soundOn = !!show.sound?.on;
+  $('btnSound').classList.toggle('on', soundOn);
+  $('btnSound').querySelector('.big-sub').textContent = soundOn
+    ? 'the house is making a noise'
+    : 'silent — press to turn it on';
+  if (!draggingSoundMaster) {
+    $('soundMaster').value = show.sound?.master ?? 0.7;
+    $('soundMasterOut').textContent = `${Math.round((show.sound?.master ?? 0.7) * 100)}%`;
   }
 
   for (const projector of show.projectors || []) {
@@ -462,6 +517,32 @@ $('btnRunShow').addEventListener('click', () => act('run-show'));
  * the result of until you let go is not a brightness control. Each message is a
  * few dozen bytes, and the control tab rate-limits what it does with them.
  */
+/**
+ * Sound, and how loud.
+ *
+ * Turning it on from here rather than only at the laptop is the point: whether
+ * the water is too loud is a question you can only answer standing in front of
+ * the house.
+ */
+$('btnSound').addEventListener('click', () => {
+  act('sound');
+  expect({ sound: { ...(show?.sound || {}), on: !show?.sound?.on } });
+});
+
+let draggingSoundMaster = false;
+const soundMaster = $('soundMaster');
+soundMaster.addEventListener('input', () => {
+  draggingSoundMaster = true;
+  const value = Number(soundMaster.value);
+  $('soundMasterOut').textContent = `${Math.round(value * 100)}%`;
+  act('sound-master', { value });
+});
+for (const event of ['pointerup', 'pointercancel', 'change', 'blur']) {
+  soundMaster.addEventListener(event, () => {
+    draggingSoundMaster = false;
+  });
+}
+
 const master = $('master');
 master.addEventListener('input', () => {
   draggingMaster = true;
