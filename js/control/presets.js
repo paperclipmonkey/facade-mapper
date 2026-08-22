@@ -865,8 +865,8 @@ const SUNKEN = () => [
         opacity: 0.95,
         params: {
           ...water, anchor: 'frame', color: '#2b4756', belly: '#eaf6fd',
-          count: 4, length: 2.6, speed: 190, leap: 0.9, between: 1.7,
-          dive: 0.5, together: 0.75, strouhal: 0.3, spray: 1.1, level: 1,
+          count: 4, length: 2.6, speed: 190, leap: 0.75, between: 3.2,
+          dive: 1.4, together: 0.75, strouhal: 0.3, spray: 1.1, level: 1,
         },
       }),
       layer('jellyfish', {
