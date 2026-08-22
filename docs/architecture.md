@@ -6,7 +6,7 @@ No build step. Plain ES modules, served exactly as they sit in the repository.
 index.html          control tab
 projector.html      output tab, one per projector
 remote.html         phone or second-laptop remote
-draw.html           tablet drawing surface
+draw.html           redirect to remote.html#draw, for links already in the wild
 server.mjs          optional: static files + the cross-device link
 js/core/            project model, storage, cross-tab bus, maths, clock, modulation
 js/effects/         effect registry and the built-in library
@@ -167,6 +167,7 @@ node test/underwater.test.mjs  # absorption, wave dispersion, buoyancy, shoaling
 node test/drawing.test.mjs     # live drawing: strokes, undo, late joiners
 node test/robustness.test.mjs  # every effect against every degenerate shape
 node test/renderer.test.mjs    # the simulation clock, catch-up and the transport
+node test/soundscape.test.mjs  # which layer sounds like what, and the mixer
 ```
 
 [`robustness.test.mjs`](../test/robustness.test.mjs) is the one that is not

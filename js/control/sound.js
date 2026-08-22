@@ -91,5 +91,15 @@ export function createSoundPlayer({ onError } = {}) {
     }
   }
 
-  return { play, stopAll, warm, forget: (id) => buffers.delete(id), get context() { return context; } };
+  return {
+    play,
+    stopAll,
+    warm,
+    forget: (id) => buffers.delete(id),
+    /** Make the context without playing anything, so the ambience can share it. */
+    ensureContext,
+    get context() {
+      return context;
+    },
+  };
 }

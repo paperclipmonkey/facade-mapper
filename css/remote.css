@@ -272,3 +272,81 @@
   /* Twenty effects is a long scroll on a phone and a waste of a laptop. */
   .remote-more .list { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 }
+
+
+/* ------------------------------------------------------------------ *
+ * Control or Draw
+ *
+ * Two things this device is, and the row that picks between them. Kept to the
+ * width of a thumb and out from under the top of the screen, because the hand
+ * holding a tablet in the dark is not the hand that is aiming.
+ * ------------------------------------------------------------------ */
+
+.remote-tabs {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 8px;
+  padding: 8px 12px 4px;
+}
+
+.remote-tabs[hidden] { display: none; }
+
+.tab {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  border-radius: var(--radius);
+  padding: 12px 10px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  position: relative;
+}
+
+.tab.on {
+  background: color-mix(in srgb, var(--accent) 20%, var(--bg-raised));
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* A quiet mark saying there is somewhere to draw, so "is this set up?" does
+   not need the tab opening to answer. */
+.tab.ready::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--good);
+}
+
+/* How far down the page the drawing panel starts: the header, plus the tabs. */
+body { --remote-chrome: 96px; }
+
+/* ------------------------------------------------------------------ *
+ * Per-layer volume
+ *
+ * A fader under the layer it belongs to, indented so the pair reads as one
+ * thing. Outside the row rather than inside, because the row is a button and a
+ * slider inside a button cannot be dragged without switching the layer off.
+ * ------------------------------------------------------------------ */
+
+.sound-fader {
+  margin: -2px 0 10px 34px;
+  opacity: 0.75;
+}
+
+/* Lit while this layer is the one actually making its voice — two layers
+   sharing a voice play once, at the louder of them, and knowing which is which
+   saves pushing a slider that does nothing. */
+.sound-fader.playing {
+  opacity: 1;
+}
+
+.sound-fader.playing .fader-label {
+  color: var(--good);
+}

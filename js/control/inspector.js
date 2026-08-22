@@ -11,6 +11,7 @@ import { SHAPE_TAGS, RESERVED_KEYS } from '../core/state.js';
 import { getEffect, listByCategory, defaultParams } from '../effects/registry.js';
 import { openEffectPicker } from './effectPicker.js';
 import { layerIssues } from './diagnostics.js';
+import { voiceForLayer, VOICES, VOICE_OPTIONS } from '../core/soundscape.js';
 import { POINT_PAIRS_NEEDED } from './calibration.js';
 import { checkReachable, fireWebhook } from './webhooks.js';
 
@@ -466,6 +467,56 @@ function renderLayer(container, app, id) {
   });
   blendRow.append(el('div', { class: 'param-control' }, [blendSelect]), el('span'));
   container.appendChild(blendRow);
+
+  /**
+   * What this layer sounds like.
+   *
+   * `Automatic` is the effect's own voice — see `VOICE_FOR_EFFECT` in
+   * core/soundscape.js — which is what makes a preset arrive with sound on it
+   * already. The list is here rather than only on the remote because choosing
+   * a voice is authoring and belongs where the rest of the authoring is; the
+   * *level* is on both, because that is a thing you set standing outside.
+   */
+  const sounding = getEffect(layer.effect);
+  const auto = voiceForLayer({ ...layer, sound: 'auto' }, sounding);
+  const soundRow = el('div', { class: 'param-row' }, [el('label', { text: 'Sound' })]);
+  const soundSelect = el('select');
+  soundSelect.appendChild(
+    el('option', {
+      value: 'auto',
+      text: auto ? `Automatic — ${VOICES.get(auto)?.name}` : 'Automatic — silent',
+      selected: (layer.sound ?? 'auto') === 'auto',
+    })
+  );
+  soundSelect.appendChild(el('option', { value: 'none', text: 'Silent', selected: layer.sound === 'none' }));
+  for (const voice of VOICE_OPTIONS) {
+    soundSelect.appendChild(
+      el('option', { value: voice.id, text: voice.name, selected: layer.sound === voice.id })
+    );
+  }
+  soundSelect.addEventListener('change', () => {
+    app.pushUndo();
+    layer.sound = soundSelect.value;
+    app.commit();
+  });
+  soundRow.append(el('div', { class: 'param-control' }, [soundSelect]), el('span'));
+  container.appendChild(soundRow);
+
+  if (voiceForLayer(layer, sounding)) {
+    container.appendChild(
+      paramRow(
+        { key: 'soundLevel', type: 'range', label: 'Volume', min: 0, max: 1, step: 0.01, default: 1 },
+        layer.soundLevel ?? 1,
+        null,
+        {
+          onChange: (value) => {
+            layer.soundLevel = value;
+            app.commitLive();
+          },
+        }
+      )
+    );
+  }
 
   container.appendChild(
     paramRow(

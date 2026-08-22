@@ -342,6 +342,37 @@ if (typeof WebSocket === 'undefined') {
   );
 
   /**
+   * Asking for more, and then for less again.
+   *
+   * The remote and the drawing pad are one page now, and they want different
+   * things off the wire: buttons need a digest, a pencil needs the shapes, and
+   * the shapes are a few hundred kilobytes broadcast a dozen times a second
+   * while somebody drags a slider at the laptop. Choosing once at startup means
+   * either a phone that cannot draw or a phone that pays for drawing it never
+   * does — so it re-announces with a wider list when the pad opens and a
+   * narrower one when it closes, and the server keeps one subscription per
+   * connection and replaces it on every hello.
+   */
+  phone.inbox.length = 0;
+  phone.send(JSON.stringify({ type: 'link/hello', role: 'remote', device: 'phone', subscribe: ['show', 'clock', 'draw', 'project'] }));
+  await wait(80);
+  control.send(JSON.stringify({ type: 'project', payload: { shapes: [{ i: 1 }] }, device: 'laptop-hall' }));
+  await wait(120);
+  ok('a phone that opens the drawing pad starts getting the project',
+    typesFor(phone).includes('project'));
+
+  phone.inbox.length = 0;
+  phone.send(JSON.stringify({ type: 'link/hello', role: 'remote', device: 'phone', subscribe: ['show', 'clock', 'draw'] }));
+  await wait(80);
+  control.send(JSON.stringify({ type: 'project', payload: { shapes: [{ i: 2 }] }, device: 'laptop-hall' }));
+  control.send(JSON.stringify({ type: 'draw', payload: { kind: 'end' }, device: 'laptop-hall' }));
+  await wait(120);
+  ok('and stops again when it closes it',
+    !typesFor(phone).includes('project'), typesFor(phone).join(',') || 'nothing');
+  ok('while the ink keeps coming, so it can still answer for a drawing it holds',
+    typesFor(phone).includes('draw'));
+
+  /**
    * The requests that used to end the evening.
    *
    * `GET //` is a protocol-relative URL with no host and `new URL` throws on

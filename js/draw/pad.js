@@ -1,12 +1,12 @@
 /**
- * The drawing page.
+ * The drawing surface.
  *
  * An iPad in the garden, a pencil, and ink on the house while the pencil is
- * still moving. It is the same shape of thing as the remote — it holds no
- * project, it joins over the link, it sends small messages — except that what
- * it sends is drawing rather than button presses.
+ * still moving. It used to be its own page; it is now a panel the remote
+ * mounts, because carrying two addresses out to the garden and switching
+ * between them to turn a layer off is not one device, it is two.
  *
- * Three decisions worth knowing about:
+ * Four decisions worth knowing about:
  *
  * **It draws in the target shape's box.** A stroke is stored 0..1 across
  * whatever shape the layer points at, so the same drawing lands on the window
@@ -21,50 +21,48 @@
  * **It applies its own strokes locally before sending them.** The wire is a few
  * milliseconds over a garden, but a few milliseconds between the pencil and the
  * ink is the difference between drawing and operating a machine that draws.
+ *
+ * **It costs nothing while it is closed.** The shapes are the one thing here
+ * that needs the whole project, so the project is asked for when the surface
+ * opens and dropped when it closes — see `link.setSubscribe`. A phone that
+ * only ever presses scene buttons never receives a show.
  */
 
-import { createBus, MSG } from '../core/bus.js';
-import { createLink } from '../core/link.js';
+import { MSG } from '../core/bus.js';
 import { migrateProject, worldSize } from '../core/state.js';
 import { applyDrawMessage, drawingFor, snapshotOf, DRAW_SCALE, PRESSURE_SCALE } from '../core/drawing.js';
 import { now } from '../core/time.js';
 import { syncInk, surfaceIdFor } from '../effects/builtin/live.js';
 import { boundingBox } from '../core/math.js';
 
-const $ = (id) => document.getElementById(id);
+/** What the pad needs on the wire, on top of whatever its host already asks for. */
+export const DRAW_SUBSCRIPTIONS = [MSG.PROJECT, MSG.DRAW];
 
-const bus = createBus('draw');
-const link = createLink(bus, {
-  role: 'draw',
-  label: 'Drawing pad',
-  /**
-   * The project as well as the ink.
-   *
-   * The pad needs the shapes to know what it is drawing into — the outline to
-   * follow, the aspect to match, and the rest of the facade faintly behind it
-   * for orientation. Asking for the project is the plain way to get that, and
-   * it is dropped rather than queued when the link is behind, so a slider being
-   * dragged on the laptop cannot fill a tablet's socket with stale shows.
-   */
-  subscribe: [MSG.PROJECT, MSG.DRAW, MSG.CLOCK, MSG.SHOW],
-  // The dot in the corner is the only thing telling somebody in the garden
-  // whether what they are drawing is reaching the house. It has to follow the
-  // socket rather than only being set when a project happens to arrive.
-  onStatus: () => updateNotice(),
-});
+/**
+ * Mount a drawing surface inside `root`.
+ *
+ * `root` owns the canvas, the picker and the toolbar, and its box is the area
+ * the drawing is fitted into — so the host decides how much of the screen this
+ * gets and the pad measures rather than assuming the window.
+ */
+export function createDrawPad({ bus, link, root, base = [], toast = () => {}, onChange = () => {} }) {
+  const $ = (id) => root.querySelector(`[data-pad="${id}"]`);
 
-const canvas = $('pad');
-const g = canvas.getContext('2d', { alpha: false });
+  /** What to ask the server for while the pad is open: the host's list plus ours. */
+  const wanted = () => (base ? [...new Set([...base, ...DRAW_SUBSCRIPTIONS])] : null);
 
-let project = null;
-/** The layer being drawn into, and the shape its ink is mapped onto. */
-let layer = null;
-let target = null;
-/** Where the target's box sits on screen, in CSS pixels. */
-let view = { x: 0, y: 0, w: 1, h: 1 };
-const ink = {};
+  const canvas = $('pad');
+  const g = canvas.getContext('2d', { alpha: false });
 
-const tool = {
+  let project = null;
+  /** The layer being drawn into, and the shape its ink is mapped onto. */
+  let layer = null;
+  let target = null;
+  /** Where the target's box sits on screen, in CSS pixels. */
+  let view = { x: 0, y: 0, w: 1, h: 1 };
+  const ink = {};
+
+  const tool = {
   color: '#ff7a18',
   /**
    * Nib width as a percentage of the target shape's short edge.
@@ -84,33 +82,33 @@ const tool = {
    * finger should be able to.
    */
   pencilOnly: false,
-};
+  };
 
-/** The stroke in progress, and the points not yet sent. */
-let stroke = null;
-let pending = [];
-let dirty = true;
+  /** The stroke in progress, and the points not yet sent. */
+  let stroke = null;
+  let pending = [];
+  let dirty = true;
 
-const COLOURS = ['#ffffff', '#ff7a18', '#ff2d55', '#ffd60a', '#35d07f', '#4cc2ff', '#b06bff', '#ff8fd0'];
+  const COLOURS = ['#ffffff', '#ff7a18', '#ff2d55', '#ffd60a', '#35d07f', '#4cc2ff', '#b06bff', '#ff8fd0'];
 
-/* ------------------------------------------------------------------ *
- * Which layer, and which shape
- * ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------ *
+   * Which layer, and which shape
+   * ------------------------------------------------------------------ */
 
-function drawLayers() {
+  function drawLayers() {
   return (project?.layers || []).filter((l) => l.effect === 'live-draw');
-}
+  }
 
-/**
- * Pick a layer to draw into, keeping the one already chosen if it survives.
- *
- * The choice is remembered across reloads because a tablet in a coat pocket
- * locks itself, and coming back to the wrong layer halfway through a drawing
- * would be its own small disaster.
- */
-const REMEMBERED = 'facade-mapper/draw-layer';
+  /**
+   * Pick a layer to draw into, keeping the one already chosen if it survives.
+   *
+   * The choice is remembered across reloads because a tablet in a coat pocket
+   * locks itself, and coming back to the wrong layer halfway through a drawing
+   * would be its own small disaster.
+   */
+  const REMEMBERED = 'facade-mapper/draw-layer';
 
-function remember(key, value) {
+  function remember(key, value) {
   try {
     if (value === undefined) return localStorage.getItem(key);
     localStorage.setItem(key, value);
@@ -119,9 +117,9 @@ function remember(key, value) {
     // still works; it just forgets which layer you were on.
   }
   return null;
-}
+  }
 
-function chooseLayer() {
+  function chooseLayer() {
   const layers = drawLayers();
   const wanted = layer?.id || remember(REMEMBERED);
   layer = layers.find((l) => l.id === wanted) || layers[0] || null;
@@ -131,16 +129,16 @@ function chooseLayer() {
   }
   resolveTarget();
   renderPicker();
-}
+  }
 
-/**
- * The shape the ink is mapped onto.
- *
- * A layer with several targets paints the same drawing into all of them; the
- * first is the one worth showing an outline of. A layer with no targets covers
- * the whole frame, which is a perfectly good thing to draw on.
- */
-function resolveTarget() {
+  /**
+   * The shape the ink is mapped onto.
+   *
+   * A layer with several targets paints the same drawing into all of them; the
+   * first is the one worth showing an outline of. A layer with no targets covers
+   * the whole frame, which is a perfectly good thing to draw on.
+   */
+  function resolveTarget() {
   if (!project || !layer) {
     target = null;
     return;
@@ -183,9 +181,9 @@ function resolveTarget() {
     aspect: Math.max(0.05, (bbox.w * world.aspect) / Math.max(bbox.h, 1e-6)),
     count: wanted.length,
   };
-}
+  }
 
-function renderPicker() {
+  function renderPicker() {
   const picker = $('surfacePicker');
   const layers = drawLayers();
   picker.replaceChildren();
@@ -202,67 +200,67 @@ function renderPicker() {
       ? `${target.name} and ${target.count - 1} more`
       : target.name
     : '';
-}
+  }
 
-/* ------------------------------------------------------------------ *
- * Sending ink
- * ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------ *
+   * Sending ink
+   * ------------------------------------------------------------------ */
 
-function surfaceId() {
+  function surfaceId() {
   return layer ? surfaceIdFor(layer, layer.params) : null;
-}
+  }
 
-/**
- * Apply a message here and send it on.
- *
- * Locally first: `bus.post` deliberately does not deliver to the tab that sent
- * it, and waiting for the wire to tell us what we just drew would put the
- * round trip between the pencil and the ink.
- */
-function send(message) {
+  /**
+   * Apply a message here and send it on.
+   *
+   * Locally first: `bus.post` deliberately does not deliver to the tab that sent
+   * it, and waiting for the wire to tell us what we just drew would put the
+   * round trip between the pencil and the ink.
+   */
+  function send(message) {
   const id = surfaceId();
   if (!id) return;
   const full = { ...message, surface: id };
   applyDrawMessage(full);
   bus.post(MSG.DRAW, full);
   dirty = true;
-}
+  }
 
-function requestSnapshot() {
+  function requestSnapshot() {
   const id = surfaceId();
   if (id) bus.post(MSG.DRAW, { kind: 'request', surface: id });
-}
+  }
 
-/** Screen pixels to 0..1 in the target's box, quantised for the wire. */
-function toSurface(clientX, clientY) {
+  /** Screen pixels to 0..1 in the target's box, quantised for the wire. */
+  function toSurface(clientX, clientY) {
   return [
     Math.round(((clientX - view.x) / view.w) * DRAW_SCALE),
     Math.round(((clientY - view.y) / view.h) * DRAW_SCALE),
   ];
-}
+  }
 
-function pressureOf(event) {
+  function pressureOf(event) {
   // A finger reports 0 or a flat 0.5 depending on the browser; a pencil reports
   // what it is actually being leant on with. Treat the flat cases as a firm
   // press so a finger draws a solid line rather than a faint one.
   if (event.pointerType === 'pen' && event.pressure > 0) return event.pressure;
   return 0.62;
-}
+  }
 
-function accepts(event) {
+  function accepts(event) {
   if (event.pointerType === 'pen' || event.pointerType === 'mouse') return true;
   return !tool.pencilOnly;
-}
+  }
 
-/** Turn palm rejection on the first time a stylus touches the glass. */
-function noticePen() {
+  /** Turn palm rejection on the first time a stylus touches the glass. */
+  function noticePen() {
   if (tool.pencilOnly) return;
   tool.pencilOnly = true;
   $('btnPencilOnly').setAttribute('aria-pressed', 'true');
   toast('Pencil only — fingers and palms will not draw. Press Pencil to allow them.');
-}
+  }
 
-function beginStroke(event) {
+  function beginStroke(event) {
   const id = `st_${Math.random().toString(36).slice(2, 9)}${now().toString(36).slice(-4)}`;
   stroke = { id, pointerId: event.pointerId };
   pending = [];
@@ -276,59 +274,76 @@ function beginStroke(event) {
   });
   addPoint(event);
   document.body.classList.add('drawing');
-}
+  }
 
-function addPoint(event) {
+  function addPoint(event) {
   if (!stroke) return;
   const [x, y] = toSurface(event.clientX, event.clientY);
   pending.push(x, y, Math.round(Math.min(1, Math.max(0, pressureOf(event))) * PRESSURE_SCALE));
-}
+  }
 
-/**
- * Push whatever the pencil has produced since the last frame.
- *
- * Once per frame rather than per event: an Apple Pencil reports at up to 240 Hz
- * and each of those as its own message would be four times the packets for no
- * more drawing. The points themselves are all kept — `getCoalescedEvents` is
- * what makes a fast stroke a curve rather than a polygon.
- */
-function flush() {
+  /**
+   * Push whatever the pencil has produced since the last frame.
+   *
+   * Once per frame rather than per event: an Apple Pencil reports at up to 240 Hz
+   * and each of those as its own message would be four times the packets for no
+   * more drawing. The points themselves are all kept — `getCoalescedEvents` is
+   * what makes a fast stroke a curve rather than a polygon.
+   */
+  function flush() {
   if (!stroke || !pending.length) return;
   send({ kind: 'points', id: stroke.id, pts: pending });
   pending = [];
-}
+  }
 
-function endStroke() {
+  function endStroke() {
   if (!stroke) return;
   flush();
   send({ kind: 'end', id: stroke.id });
   stroke = null;
   document.body.classList.remove('drawing');
-}
+  }
 
-/* ------------------------------------------------------------------ *
- * Drawing it
- * ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------ *
+   * Drawing it
+   * ------------------------------------------------------------------ */
 
-function resize() {
+  /**
+   * The canvas is the size of the area the host gave us, not the size of the
+   * window.
+   *
+   * Which matters now that this is a panel rather than a page: it sits under a
+   * header and a row of tabs, and a canvas sized to the window would put the
+   * drawable box behind them and the ink a finger's width from the pencil.
+   */
+  function measure() {
+  const box = root.getBoundingClientRect();
+  return { x: box.left, y: box.top, w: Math.max(40, box.width), h: Math.max(40, box.height) };
+  }
+
+  function resize() {
+  const box = measure();
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const w = Math.round(window.innerWidth * dpr);
-  const h = Math.round(window.innerHeight * dpr);
+  const w = Math.round(box.w * dpr);
+  const h = Math.round(box.h * dpr);
   if (canvas.width !== w || canvas.height !== h) {
     canvas.width = w;
     canvas.height = h;
     dirty = true;
   }
+  canvas.style.width = `${box.w}px`;
+  canvas.style.height = `${box.h}px`;
   layoutView();
-}
+  }
 
-/** Fit the target's box into the screen, leaving room for the bars. */
-function layoutView() {
-  const margin = 16;
-  const top = 56;
-  const bottom = 84;
-  const availableW = Math.max(40, window.innerWidth - margin * 2);
-  const availableH = Math.max(40, window.innerHeight - top - bottom);
+  /** Fit the target's box into the panel, leaving room for the bars. */
+  function layoutView() {
+  const box = measure();
+  const margin = 14;
+  const top = 46;
+  const bottom = 92;
+  const availableW = Math.max(40, box.w - margin * 2);
+  const availableH = Math.max(40, box.h - top - bottom);
   const aspect = target?.aspect || 16 / 9;
 
   let w = availableW;
@@ -337,13 +352,19 @@ function layoutView() {
     h = availableH;
     w = h * aspect;
   }
-  view = { x: (window.innerWidth - w) / 2, y: top + (availableH - h) / 2, w, h };
+  // In page coordinates, because that is what a pointer event reports — the
+  // canvas is drawn in its own, so the two differ by the panel's own origin.
+  view = { x: box.x + (box.w - w) / 2, y: box.y + top + (availableH - h) / 2, w, h };
   updateNib();
   dirty = true;
-}
+  }
 
-function frame() {
-  requestAnimationFrame(frame);
+  let raf = 0;
+  let open = false;
+
+  function frame() {
+  raf = open ? requestAnimationFrame(frame) : 0;
+  if (!open) return;
   flush();
   // Where the drawable box ended up, for anybody debugging a tablet they
   // cannot attach an inspector to.
@@ -354,10 +375,11 @@ function frame() {
   if (!dirty) return;
   dirty = false;
 
-  const dpr = canvas.width / Math.max(1, window.innerWidth);
+  const box = measure();
+  const dpr = canvas.width / Math.max(1, box.w);
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.fillStyle = '#07080b';
-  g.fillRect(0, 0, window.innerWidth, window.innerHeight);
+  g.fillRect(0, 0, box.w, box.h);
 
   if (!target) return;
   drawGuides();
@@ -368,24 +390,32 @@ function frame() {
       glow: layer?.params?.glow ?? 0.7,
       fade: layer?.params?.fade ?? 0,
     });
-    if (buffer) g.drawImage(buffer, view.x, view.y, view.w, view.h);
+    const at = local(view);
+    if (buffer) g.drawImage(buffer, at.x, at.y, view.w, view.h);
   }
-}
+  }
 
-/**
- * The house, faintly, and the shape being drawn on.
- *
- * Without this a drawing surface is a black rectangle, and everything drawn on
- * it lands somewhere the person drawing did not expect. The other shapes are
- * positioned relative to the target's box, so a window drawn on has the door
- * and the roofline in the right places around it even though they are off the
- * edge of what can be drawn.
- */
-function drawGuides() {
+  /**
+   * The house, faintly, and the shape being drawn on.
+   *
+   * Without this a drawing surface is a black rectangle, and everything drawn on
+   * it lands somewhere the person drawing did not expect. The other shapes are
+   * positioned relative to the target's box, so a window drawn on has the door
+   * and the roofline in the right places around it even though they are off the
+   * edge of what can be drawn.
+   */
+  /** `view` is in page coordinates; the canvas draws in its own. */
+  function local(box) {
+  const at = measure();
+  return { x: box.x - at.x, y: box.y - at.y };
+  }
+
+  function drawGuides() {
   const { bbox } = target;
+  const origin = local(view);
   const toView = (pt) => ({
-    x: view.x + ((pt.x - bbox.x) / Math.max(bbox.w, 1e-6)) * view.w,
-    y: view.y + ((pt.y - bbox.y) / Math.max(bbox.h, 1e-6)) * view.h,
+    x: origin.x + ((pt.x - bbox.x) / Math.max(bbox.w, 1e-6)) * view.w,
+    y: origin.y + ((pt.y - bbox.y) / Math.max(bbox.h, 1e-6)) * view.h,
   });
 
   g.save();
@@ -407,11 +437,11 @@ function drawGuides() {
 
   // The drawable area, and its edge.
   g.fillStyle = 'rgba(255,255,255,0.028)';
-  g.fillRect(view.x, view.y, view.w, view.h);
+  g.fillRect(origin.x, origin.y, view.w, view.h);
   g.strokeStyle = 'rgba(255,122,24,0.5)';
   g.lineWidth = 1.5;
   g.setLineDash([6, 6]);
-  g.strokeRect(view.x, view.y, view.w, view.h);
+  g.strokeRect(origin.x, origin.y, view.w, view.h);
   g.setLineDash([]);
 
   if (target.points?.length && target.name !== 'the whole frame') {
@@ -426,13 +456,13 @@ function drawGuides() {
   }
 
   g.restore();
-}
+  }
 
-/* ------------------------------------------------------------------ *
- * Input
- * ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------ *
+   * Input
+   * ------------------------------------------------------------------ */
 
-canvas.addEventListener('pointerdown', (event) => {
+  canvas.addEventListener('pointerdown', (event) => {
   if (!layer || !target) return;
   if (event.pointerType === 'pen') noticePen();
   if (!accepts(event)) return;
@@ -446,9 +476,9 @@ canvas.addEventListener('pointerdown', (event) => {
     /* carry on */
   }
   beginStroke(event);
-});
+  });
 
-canvas.addEventListener('pointermove', (event) => {
+  canvas.addEventListener('pointermove', (event) => {
   if (!stroke || event.pointerId !== stroke.pointerId) return;
   event.preventDefault();
   /**
@@ -464,28 +494,28 @@ canvas.addEventListener('pointermove', (event) => {
   const coalesced = event.getCoalescedEvents?.();
   const samples = coalesced?.length ? coalesced : [event];
   for (const sample of samples) addPoint(sample);
-});
+  });
 
-for (const type of ['pointerup', 'pointercancel', 'pointerleave']) {
+  for (const type of ['pointerup', 'pointercancel', 'pointerleave']) {
   canvas.addEventListener(type, (event) => {
     if (!stroke || event.pointerId !== stroke.pointerId) return;
     if (type === 'pointerup') addPoint(event);
     endStroke();
   });
-}
+  }
 
-// A pencil that leaves the glass mid-stroke, or a tablet that loses the app.
-window.addEventListener('blur', endStroke);
-document.addEventListener('visibilitychange', () => {
+  // A pencil that leaves the glass mid-stroke, or a tablet that loses the app.
+  window.addEventListener('blur', endStroke);
+  document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') endStroke();
   else announce();
-});
+  });
 
-/* ------------------------------------------------------------------ *
- * Tools
- * ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------ *
+   * Tools
+   * ------------------------------------------------------------------ */
 
-function buildSwatches() {
+  function buildSwatches() {
   const host = $('swatches');
   host.replaceChildren();
   for (const colour of COLOURS) {
@@ -504,9 +534,9 @@ function buildSwatches() {
     });
     host.appendChild(button);
   }
-}
+  }
 
-function updateNib() {
+  function updateNib() {
   const nib = $('nib');
   // The width is a percentage of the drawable box's short edge, so this is the
   // real size of the line, not an illustration of it — clamped only where the
@@ -514,78 +544,66 @@ function updateNib() {
   const short = Math.min(view.w, view.h);
   nib.style.setProperty('--nib', `${Math.max(3, Math.min(26, (tool.width / 100) * short))}px`);
   nib.style.setProperty('--nib-color', tool.erase ? '#666' : tool.color);
-}
+  }
 
-$('width').addEventListener('input', (event) => {
+  $('width').addEventListener('input', (event) => {
   tool.width = Number(event.target.value);
   updateNib();
-});
+  });
 
-// The toast helper the remote has, for the one thing this page has to say.
-let toastTimer = null;
-function toast(message) {
-  const node = $('toast');
-  node.textContent = message;
-  node.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    node.hidden = true;
-  }, 4000);
-}
-
-$('btnErase').addEventListener('click', () => {
+  $('btnErase').addEventListener('click', () => {
   tool.erase = !tool.erase;
   $('btnErase').setAttribute('aria-pressed', String(tool.erase));
   updateNib();
-});
+  });
 
-$('btnUndo').addEventListener('click', () => send({ kind: 'undo' }));
+  $('btnUndo').addEventListener('click', () => send({ kind: 'undo' }));
 
-$('btnClear').addEventListener('click', () => {
+  $('btnClear').addEventListener('click', () => {
   const surface = drawingFor(surfaceId());
   if (!surface?.strokes.length) return;
   if (!confirm('Clear everything on this layer?')) return;
   send({ kind: 'clear' });
-});
+  });
 
-$('btnPencilOnly').addEventListener('click', () => {
+  $('btnPencilOnly').addEventListener('click', () => {
   tool.pencilOnly = !tool.pencilOnly;
   $('btnPencilOnly').setAttribute('aria-pressed', String(tool.pencilOnly));
-});
+  });
 
-$('surfacePicker').addEventListener('change', (event) => {
+  $('surfacePicker').addEventListener('change', (event) => {
   layer = drawLayers().find((l) => l.id === event.target.value) || layer;
   ink.key = '';
   chooseLayer();
-});
+  });
 
-/* ------------------------------------------------------------------ *
- * Wiring
- * ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------ *
+   * Wiring
+   * ------------------------------------------------------------------ */
 
-bus.on(MSG.PROJECT, (payload) => {
+  bus.on(MSG.PROJECT, (payload) => {
   project = migrateProject(payload);
   const had = layer?.id;
   chooseLayer();
   if (layer?.id !== had) ink.key = '';
   layoutView();
   updateNotice();
-});
+  });
 
-/**
- * Answering, as a fallback.
- *
- * The control tab is what normally tells a newly-opened projector what is
- * already drawn, because it holds a copy of everything. But it is also the tab
- * most likely to have been reloaded during the evening, and after that its copy
- * is empty — while this tablet, the thing that drew the picture, still has it.
- *
- * So: wait a beat, and answer only if nobody else did. One extra message on the
- * rare occasion it is needed, none at all the rest of the time.
- */
-const answering = new Map();
+  /**
+   * Answering, as a fallback.
+   *
+   * The control tab is what normally tells a newly-opened projector what is
+   * already drawn, because it holds a copy of everything. But it is also the tab
+   * most likely to have been reloaded during the evening, and after that its copy
+   * is empty — while this tablet, the thing that drew the picture, still has it.
+   *
+   * So: wait a beat, and answer only if nobody else did. One extra message on the
+   * rare occasion it is needed, none at all the rest of the time.
+   */
+  const answering = new Map();
 
-bus.on(MSG.DRAW, (payload) => {
+  bus.on(MSG.DRAW, (payload) => {
   if (!payload) return;
 
   if (payload.kind === 'request') {
@@ -607,12 +625,11 @@ bus.on(MSG.DRAW, (payload) => {
   }
 
   if (applyDrawMessage(payload)) dirty = true;
-});
+  });
 
-function updateNotice() {
+  function updateNotice() {
   const notice = $('notice');
   const status = link.status;
-  $('linkDot').dataset.link = status;
 
   let message = '';
   if (!project) {
@@ -636,45 +653,69 @@ function updateNotice() {
   $('btnAddLayer').hidden = !(project && !layer);
   $('head').hidden = !!message;
   $('bar').hidden = !!message;
-}
+  // The host puts a mark on the tab when there is somewhere to draw, so that
+  // the answer to "is this thing set up?" does not need the tab opening.
+  onChange({ ready: !!(project && layer), message });
+  }
 
-$('btnAddLayer').addEventListener('click', () => {
+  $('btnAddLayer').addEventListener('click', () => {
   bus.post(MSG.ACTION, { action: 'add-draw-layer' });
   $('noticeText').textContent = 'Asking the control tab for a drawing layer…';
   $('btnAddLayer').hidden = true;
-});
+  });
 
-let introduced = false;
-function announce() {
-  bus.post(MSG.HELLO, { role: 'draw', requestState: !introduced });
-  introduced = true;
-  requestSnapshot();
+  /* ------------------------------------------------------------------ *
+   * Opening and closing
+   * ------------------------------------------------------------------ */
+
+  const onResize = () => { if (open) resize(); };
+  window.addEventListener('resize', onResize);
+  window.addEventListener('orientationchange', () => setTimeout(onResize, 200));
+
+  buildSwatches();
+  updateNib();
+  updateNotice();
+
+  return {
+  /**
+   * Start drawing.
+   *
+   * Two things happen that do not happen while closed: the project is asked
+   * for — the shapes are the whole reason this needs one — and the frame loop
+   * starts. Both are undone on `close`, which is what keeps an all-in-one
+   * remote as cheap as the remote used to be for anybody not drawing.
+   */
+  open() {
+    if (open) return;
+    open = true;
+    root.hidden = false;
+    link.setSubscribe(wanted());
+    // The project is only broadcast when it changes, which may be minutes
+    // away, so ask rather than wait.
+    bus.post(MSG.HELLO, { role: 'remote', requestState: true });
+    requestSnapshot();
+    resize();
+    updateNotice();
+    if (!raf) raf = requestAnimationFrame(frame);
+  },
+
+  close() {
+    if (!open) return;
+    endStroke();
+    open = false;
+    root.hidden = true;
+    link.setSubscribe(base);
+  },
+
+  /** Re-fit after the host has changed the panel's size. */
+  resize: onResize,
+
+  /** For anything wanting to know whether the pad is up and usable. */
+  get isOpen() {
+    return open;
+  },
+  get ready() {
+    return !!(project && layer);
+  },
+  };
 }
-
-/**
- * Keep the screen on.
- *
- * A tablet that locks itself between strokes is not a drawing surface.
- */
-async function keepAwake() {
-  if (document.visibilityState !== 'visible') return;
-  try {
-    // Held deliberately: some implementations drop the lock when the sentinel
-    // is collected.
-    window.__wakeLock = await navigator.wakeLock?.request('screen');
-  } catch {
-    /* Denied, unsupported, or the battery is low. Not worth saying. */
-  }
-}
-
-window.addEventListener('resize', resize);
-window.addEventListener('orientationchange', () => setTimeout(resize, 200));
-
-buildSwatches();
-updateNib();
-resize();
-updateNotice();
-announce();
-setInterval(announce, 4000);
-keepAwake();
-requestAnimationFrame(frame);

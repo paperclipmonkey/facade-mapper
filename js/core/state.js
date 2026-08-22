@@ -138,6 +138,15 @@ export function createLayer(effectId, overrides = {}) {
     solo: false,
     opacity: 1,
     blend: 'source-over',
+    /**
+     * What this layer sounds like, and how loud.
+     *
+     * `auto` takes the voice the effect is mapped to — see `VOICE_FOR_EFFECT`
+     * in core/soundscape.js — which is what makes a preset arrive with sound
+     * already on it. `none` silences the layer, and a voice id forces one.
+     */
+    sound: 'auto',
+    soundLevel: 1,
     /** Effect parameter values, keyed by param id. */
     params: {},
     /** Per-param modulation. See core/modulators.js. */
@@ -320,6 +329,14 @@ export function createProject(name = 'Untitled show') {
       /** Mic-reactive effects read levels broadcast by the control tab. */
       audioEnabled: false,
       audioGain: 1,
+      /**
+       * The sound the show makes, which only the control tab plays: it is the
+       * machine with the speakers and the tab that is definitely running.
+       * Off until somebody asks, because no browser will make a noise before a
+       * gesture and a projector left in a garage should not start talking.
+       */
+      soundEnabled: false,
+      soundMaster: 0.7,
       /** Camera device id, remembered between sessions. */
       cameraId: null,
       /** A still is stored in IndexedDB for this project, to trace on. */

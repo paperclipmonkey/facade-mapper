@@ -102,6 +102,7 @@ import {
 } from './panels.js';
 import { createMotionDetector } from './motion.js';
 import { createSoundPlayer } from './sound.js';
+import { createSoundscape, planSoundscape, voiceForLayer, VOICES, VOICE_OPTIONS } from '../core/soundscape.js';
 import { createTriggerRuntime } from './triggers.js';
 import { scheduleWantsOn, describeSchedule } from './schedule.js';
 import { el, clear, toast, paramRow } from './ui.js';
@@ -158,6 +159,24 @@ app.link = link;
 linkState = link.state();
 
 const sound = createSoundPlayer({ onError: (m) => toast(m, 'bad') });
+
+/**
+ * The ambience, as opposed to the clips.
+ *
+ * `sound` above plays a file when a trigger fires — a scream, a door. This is
+ * the other half: a continuous, synthesised bed that follows whatever layers
+ * are on, so a flooded house laps and a web skitters without anybody cueing
+ * anything. Sharing the clip player's audio context because a browser gives a
+ * page a small number of them and there is no reason to spend two.
+ */
+const soundscape = createSoundscape({
+  createContext: () => {
+    sound.ensureContext();
+    return sound.context;
+  },
+});
+/** The plan last sent, so an unchanged frame does no work. */
+let soundKey = '';
 const motion = createMotionDetector();
 let triggerRuntime = null;
 /** Motion is measured a few times a second, not every frame — it costs a readback. */
@@ -2355,12 +2374,32 @@ function showDigest() {
         scene: scenes.find((s) => s.id === t.sceneId)?.name || '',
         armedAt: at + app.triggerArmedIn(t.id, t.cooldown) * 1000,
       })),
-    layers: (project.layers || []).map((l) => ({
-      id: l.id,
-      name: l.name || getEffect(l.effect)?.name || l.effect,
-      enabled: l.enabled !== false,
-      solo: !!l.solo,
-    })),
+    /**
+     * Layers, with what each one sounds like.
+     *
+     * `voice` is null for the many layers that make no noise, and the remote
+     * uses it to decide whether to draw a volume slider — a row of faders for
+     * silent layers is a row of controls that do nothing.
+     */
+    layers: (project.layers || []).map((l) => {
+      const effect = getEffect(l.effect);
+      const voice = voiceForLayer(l, effect);
+      return {
+        id: l.id,
+        name: l.name || effect?.name || l.effect,
+        enabled: l.enabled !== false,
+        solo: !!l.solo,
+        voice,
+        voiceName: voice ? VOICES.get(voice)?.name : '',
+        soundLevel: l.soundLevel ?? 1,
+      };
+    }),
+    sound: {
+      on: !!project.settings.soundEnabled,
+      master: project.settings.soundMaster ?? 0.7,
+      /** What is audible this second, so the phone can show it working. */
+      playing: soundscape.voices().map((v) => v.voice),
+    },
     playlist: {
       running: !!show.running,
       length: (show.playlist || []).length,
@@ -2510,6 +2549,36 @@ const REMOTE_ACTIONS = {
   identify: ({ id } = {}) => app.identifyProjector(id),
 
   /**
+   * The sound, from the garden.
+   *
+   * Which is where it belongs: whether the water is too loud is a question you
+   * can only answer standing in front of the house, and walking back inside to
+   * move a slider and back out to listen is how a mix ends up wrong.
+   */
+  sound: ({ on } = {}) => setSoundEnabled(on === undefined ? !app.project.settings.soundEnabled : !!on),
+
+  'sound-master': ({ value } = {}) => {
+    const level = Number(value);
+    if (!isFinite(level)) return;
+    app.project.settings.soundMaster = Math.max(0, Math.min(1, level));
+    $('soundMaster').value = app.project.settings.soundMaster;
+    soundscape.setMaster(app.project.settings.soundMaster);
+    soundKey = '';
+    app.commitLive();
+  },
+
+  'layer-sound': ({ id, value } = {}) => {
+    const layer = app.project.layers.find((l) => l.id === id);
+    if (!layer) return;
+    const level = Number(value);
+    if (!isFinite(level)) return;
+    layer.soundLevel = Math.max(0, Math.min(1, level));
+    soundKey = '';
+    app.commitLive();
+    refreshPanels();
+  },
+
+  /**
    * Somewhere to draw, asked for from the tablet holding the pencil.
    *
    * This is the one verb that adds anything to the project, and it is here
@@ -2623,12 +2692,8 @@ function renderLinkDialog() {
   body.appendChild(
     el('div', { class: 'link-urls' }, [
       el('div', { class: 'link-url' }, [
-        el('span', { class: 'link-url-what', text: 'Phone remote' }),
+        el('span', { class: 'link-url-what', text: 'Phone or tablet — run the show, and draw on it' }),
         el('code', { text: `${base}/remote.html${suffix}` }),
-      ]),
-      el('div', { class: 'link-url' }, [
-        el('span', { class: 'link-url-what', text: 'Tablet, to draw on the house' }),
-        el('code', { text: `${base}/draw.html${suffix}` }),
       ]),
       el('div', { class: 'link-url' }, [
         el('span', { class: 'link-url-what', text: 'Second laptop, driving a projector' }),
@@ -2709,6 +2774,73 @@ function runRemoteAction(payload) {
   }
   // Answer immediately rather than on the next tick, so a button on a phone
   // lights up when it is pressed instead of a quarter of a second later.
+  publishShowState(true);
+}
+
+/**
+ * Point the ambience at whatever is actually on the wall.
+ *
+ * Read off `effectiveLayers` rather than off the project, so a scene deciding
+ * what is on decides what you hear, and a crossfade fades the sound with the
+ * picture — the plan multiplies each layer's own level by its opacity, so that
+ * falls out rather than being wired up.
+ *
+ * Called every frame and does nothing on almost all of them: the plan is a
+ * short list of small objects, and a string of it is a cheaper comparison than
+ * anything the audio graph would do with a duplicate.
+ */
+/**
+ * What is audible right now, for anybody debugging a mix they can hear and
+ * cannot see — and for the tests, which drive the real page. The same reason
+ * the drawing pad publishes the box it laid out.
+ */
+window.__soundscape = () => ({
+  running: soundscape.running,
+  master: app.project.settings.soundMaster ?? 0.7,
+  voices: soundscape.voices(),
+});
+
+function syncSoundscape() {
+  if (!soundscape.running) return;
+  const settings = app.project.settings || {};
+  const muted = settings.blackout ? 0 : 1;
+  const plan = planSoundscape(effectiveLayers(app.project), getEffect, {
+    master: (settings.soundMaster ?? 0.7) * muted,
+  });
+  const key = plan.map((p) => `${p.voice}:${p.level.toFixed(3)}`).sort().join('|');
+  if (key === soundKey) return;
+  soundKey = key;
+  soundscape.sync(plan);
+}
+
+/**
+ * Turn the ambience on or off, from a click.
+ *
+ * `start` has to be reached from a user gesture — no browser will make a noise
+ * without one — which is why this is a button rather than a setting that
+ * quietly comes back on at load. A show reopened in the morning is silent
+ * until somebody says otherwise, and that is the right default for a tab that
+ * might be running unattended in a garage.
+ */
+async function setSoundEnabled(on) {
+  app.project.settings.soundEnabled = !!on;
+  if (on) {
+    try {
+      await soundscape.start();
+      soundscape.setMaster(app.project.settings.soundMaster ?? 0.7);
+      soundKey = '';
+      syncSoundscape();
+    } catch (err) {
+      app.project.settings.soundEnabled = false;
+      toast(`No sound: ${err.message}`, 'bad');
+    }
+  } else {
+    soundscape.stop();
+    soundKey = '';
+  }
+  const box = $('soundEnabled');
+  if (box) box.checked = !!app.project.settings.soundEnabled;
+  app.commitLive();
   publishShowState(true);
 }
 
@@ -2828,6 +2960,8 @@ function frame() {
     markDirty();
     broadcast(true);
   }
+
+  syncSoundscape();
 
   mediaPool.syncPlayback(time.t, time.running);
   scanSource.sync(app.project, worldSize(app.project), getBlob);
@@ -3118,6 +3252,8 @@ function syncControlsFromProject() {
   $('bpm').value = app.project.settings.bpm ?? 120;
   $('master').value = app.project.settings.master ?? 1;
   $('showSafeArea').checked = app.project.settings.showSafeArea !== false;
+  $('soundEnabled').checked = !!app.project.settings.soundEnabled;
+  $('soundMaster').value = app.project.settings.soundMaster ?? 0.7;
   $('audioEnabled').checked = !!app.project.settings.audioEnabled;
   $('audioGain').value = app.project.settings.audioGain ?? 1;
   $('scheduleEnabled').checked = !!app.project.schedule?.enabled;
@@ -3591,6 +3727,14 @@ function wire() {
   $('btnEmptyCamera').addEventListener('click', () => {
     switchPanel('settings');
     startCamera();
+  });
+
+  $('soundEnabled').addEventListener('change', (ev) => setSoundEnabled(ev.target.checked));
+  $('soundMaster').addEventListener('input', (ev) => {
+    app.project.settings.soundMaster = Number(ev.target.value);
+    soundscape.setMaster(app.project.settings.soundMaster);
+    soundKey = '';
+    app.commitLive();
   });
 
   $('audioEnabled').addEventListener('change', async (ev) => {

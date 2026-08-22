@@ -726,7 +726,7 @@ layer stops asking, so the recording light goes out when it should.
 ### Drawing on it by hand
 
 **Live drawing** is a layer whose content is a person with a tablet. Add it,
-point it at a wall or a window, and open `draw.html` on an iPad from the address
+point it at a wall or a window, and open the remote on an iPad from the address
 in **Devices** — whatever is drawn there is on the house while the pencil is
 still moving. See [more than one device](multi-device.md) for the server that
 carries it.
@@ -1049,3 +1049,70 @@ in the roof's shadow and never collect a flake.
 such draw is rendered into its own layer and composited back, so a few hundred
 of them will cost tens of milliseconds a frame on their own. See
 [performance](performance.md), where this is measured.
+
+
+## The sound the house makes
+
+A projection show is silent, and silence is most of the reason a very good one
+still reads as a picture rather than as a place. Water lapping under a flooded
+window, legs skittering behind a web, thunder a field away: each is a few
+seconds of work and does more for the illusion than any amount of extra light.
+
+Turn it on under **Setup → The sound of the show**, or from the **Sound** button
+on the remote. It plays in the control tab only — that is the machine with the
+speakers, and two projector tabs making the same noise a few milliseconds apart
+sounds like a flanger rather than like thunder. Nothing starts until you press
+something, because no browser will make a noise before a gesture and a projector
+left running in a garage should not start talking.
+
+**Every layer that has a voice already has one.** Add the Halloween preset and
+the web skitters, the fire crackles and the lightning rumbles; flood the house
+and it laps. The mapping lives in one table in
+[`js/core/soundscape.js`](../js/core/soundscape.js) rather than a field on each
+effect, because the question you are actually answering is not "what does kelp
+sound like" but "what does this whole look sound like with eight layers on" —
+and you cannot answer that reading eight files. Most of the library is silent on
+purpose: five underwater effects share a single water voice instead of each
+adding its own lapping until the show is mush.
+
+| | |
+| --- | --- |
+| **Water lapping** | Waterline, caustics |
+| **Bubbles rising** | Bubbles |
+| **Tentacles writhing** | Breach, Portal, Serpent |
+| **Spiders crawling** | Web |
+| **Thunder** | Lightning |
+| **Fire crackling** | Fire, Candle, Bonfire, Embers, Sparkler |
+| **Wind** | Fog, Smoke, Snow, Aurora, Ghost |
+| **Rain** | Rain |
+| **Dripping** | Blood drip, Icicles |
+| **Wings** | Bats, Bat burst |
+| **Neon hum** | Neon, Neon sign, Hologram, Scan lines, Static, Plasma |
+| **Glisten** | Stars, Fairy lights, Frost |
+
+Each layer's **Sound** in the inspector picks a different voice or silences it,
+and its **Volume** sits next to it — and on the remote, under every layer that
+makes a noise, because whether the water is too loud is a question you can only
+answer standing in front of the house.
+
+**It is synthesised, not sampled.** Every voice is noise and filters built at
+run time, for three reasons in order of how much they matter. It never repeats,
+and a loop of rain is a loop that anybody standing there for ten minutes hears
+the seam in. It costs nothing to ship, where a sound library is tens of
+megabytes of binary in a repository of text files. And it can be *driven*: a
+voice is a graph with knobs on it.
+
+A few of them are worth knowing about because the physics is the sound. A bubble
+is a resonance that rises in pitch as it leaves, because the cavity shrinks as
+it detaches — drawn as a click at a fixed pitch it is a click. Thunder is a
+crack and then a rumble with a gap between them, because the sharp part is high
+frequency and the air eats it over distance while the low part travels. And
+skittering is not a steady patter but *runs* of legs with stillness between
+them, which is what makes it sound like something deciding where to go rather
+than like a machine.
+
+**The sound follows the wall.** The plan is read off the same effective layers
+the renderer draws, so a scene decides what you hear, a crossfade fades the
+sound with the picture, and a blackout is silent — none of which is wired up per
+layer. Two layers asking for the same voice play it once, at the louder of the
+two.
