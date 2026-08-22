@@ -1082,6 +1082,7 @@ adding its own lapping until the show is mush.
 | **Tentacles writhing** | Breach, Portal, Serpent |
 | **Spiders crawling** | Web |
 | **Thunder** | Lightning |
+| **Fireworks** | Fireworks |
 | **Fire crackling** | Fire, Candle, Bonfire, Embers, Sparkler |
 | **Wind** | Fog, Smoke, Snow, Aurora, Ghost |
 | **Rain** | Rain |
@@ -1090,10 +1091,21 @@ adding its own lapping until the show is mush.
 | **Neon hum** | Neon, Neon sign, Hologram, Scan lines, Static, Plasma |
 | **Glisten** | Stars, Fairy lights, Frost |
 
-Each layer's **Sound** in the inspector picks a different voice or silences it,
-and its **Volume** sits next to it — and on the remote, under every layer that
-makes a noise, because whether the water is too loud is a question you can only
-answer standing in front of the house.
+**Volume is the only sound control on a layer**, in the inspector and on the
+remote, because whether the water is too loud is a question you can only answer
+standing in front of the house. There is no picker for *which* noise a layer
+makes: fire sounds like fire, and an evening spent choosing otherwise is an
+evening not spent pointing the projector. All the way down is how a layer is
+made silent.
+
+Where several layers share a voice — three kinds of fire in one scene, four
+twinkling layers at Christmas — **one of them plays it and the rest are quiet
+under it**, and only the one playing it gets a fader. Three faders moving one
+crackle would mean two of them did nothing. It is the first such layer in the
+list that carries the voice, so the fader stays where you left it rather than
+hopping about as you mix; a layer faded to nothing hands the voice to the next,
+which is what keeps a crossfade between two fires crackling the whole way
+through.
 
 **It is synthesised, not sampled.** Every voice is noise and filters built at
 run time, for three reasons in order of how much they matter. It never repeats,
@@ -1104,15 +1116,31 @@ voice is a graph with knobs on it.
 
 A few of them are worth knowing about because the physics is the sound. A bubble
 is a resonance that rises in pitch as it leaves, because the cavity shrinks as
-it detaches — drawn as a click at a fixed pitch it is a click. Thunder is a
-crack and then a rumble with a gap between them, because the sharp part is high
-frequency and the air eats it over distance while the low part travels. And
-skittering is not a steady patter but *runs* of legs with stillness between
-them, which is what makes it sound like something deciding where to go rather
-than like a machine.
+it detaches — drawn as a click at a fixed pitch it is a click. Skittering is not
+a steady patter but *runs* of legs with stillness between them, which is what
+makes it sound like something deciding where to go rather than like a machine.
+And fire is its pops, not its roar: a real one two metres away has no swell in
+it, and a bed of noise breathing on a slow cycle is — acoustically — wind.
+
+**Thunder is cued by the lightning, not run on a timer.** The flash is on the
+wall in front of you and the ear is extremely good at the gap between the two: a
+clap a quarter of a second late is heard as a fault, and one on its own schedule
+is heard as a different storm somewhere else. So the lightning effect says when
+its return stroke fires and the crack is scheduled on the audio clock for that
+exact instant, at full level, with no distance delay — the bolt is on your house.
+
+Fireworks work the same way and say it twice per shell: once when it leaves the
+ground, which the sound follows up as a rush, and once when it breaks. The break
+is a click, a thump, a mid-crack and then a tail of tiny pops — the stars going
+out — which is the part that makes it a firework rather than a gunshot.
+
+An effect of your own can do the same by exporting `cues(p, from, to)`, which
+returns `[{ at, level, distance }]` for the loud moments falling in a short
+window of show time just ahead of now. `distance` in seconds is the gap between
+the crack and the rumble, which is the only thing that makes a strike sound far
+away.
 
 **The sound follows the wall.** The plan is read off the same effective layers
 the renderer draws, so a scene decides what you hear, a crossfade fades the
 sound with the picture, and a blackout is silent — none of which is wired up per
-layer. Two layers asking for the same voice play it once, at the louder of the
-two.
+layer.

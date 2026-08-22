@@ -200,6 +200,56 @@ thirty-second mark.
 makes `drawImage` around thirty times slower. See
 [performance](performance.md#the-two-traps).
 
+## Making a noise on cue
+
+Most effects that have a sound just get one: the mapping from effect to voice
+lives in one table in [`js/core/soundscape.js`](../js/core/soundscape.js), and
+an effect of your own can override it by exporting `sound: 'fire'` (or `null` to
+be silent).
+
+That covers textures — a bed of crackle or lapping that is simply on while the
+layer is. What it does not cover is an effect with a *bang* in it, and thunder
+is the reason this hook exists: the flash is on the wall in front of somebody
+and the ear is extremely good at the gap between the two, so a clap fired from
+whichever animation frame noticed the strike is audibly late.
+
+Export `cues(p, from, to)` and say when instead. It is given the layer's base
+parameters and a short window of show time just ahead of now, and returns the
+events falling inside it:
+
+```js
+cues(p, from, to) {
+  const interval = 60 / Math.max(0.2, p.rate);
+  const events = [];
+  for (let i = Math.floor(from / interval); i <= Math.floor(to / interval); i++) {
+    const at = i * interval + offsetFor(i);
+    if (at >= from && at < to) events.push({ at, level: 1, distance: 0 });
+  }
+  return events;
+}
+```
+
+- `at` is show time, in seconds — the same `t` `draw` gets. Derive it from the
+  same event index `draw` derives its animation from, or the two will drift.
+- `level` is 0–1, on top of the layer's own volume.
+- `distance` in seconds is the gap between the sharp part of the sound and its
+  low tail, which is the only thing that makes an event sound far away. Zero is
+  on the house.
+
+Return each event exactly once: the windows are contiguous, so a cue emitted at
+both `from` and `to` is heard as a stutter and one missed at the boundary is a
+silent flash. `from < at <= to` or `from <= at < to`, consistently — not both.
+
+Only the layer actually playing the voice is asked, so several layers of the
+same effect produce one bang rather than a pile of them — and it is asked once
+per *layer*, not once per target. A shape-scoped effect pointed at four windows
+draws four bursts, but they are the same four events on the same clock, and
+four copies of one bang is one muddy bang.
+
+An event may carry anything else the voice understands. Thunder reads
+`distance`; fireworks pass `kind: 'rise' | 'burst'`, because a shell going up
+and a shell breaking are two different noises from the same layer.
+
 ## Debugging
 
 An effect that throws is caught, reported once as a toast, and skipped —

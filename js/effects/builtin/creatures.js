@@ -148,6 +148,15 @@ function drawBat(g, x, y, span, flap, dir) {
   g.restore();
 }
 
+/**
+ * How long a shell takes to reach apogee, in seconds.
+ *
+ * Up here rather than inside `draw` because `cues` needs the same number to
+ * tell the soundscape when the break happens, and two copies of it would drift
+ * the bang off the flash the first time anybody tuned one of them.
+ */
+const SHELL_RISE = 0.9;
+
 const fireworks = {
   id: 'fireworks',
   name: 'Fireworks',
@@ -166,6 +175,36 @@ const fireworks = {
     { key: 'trail', type: 'bool', label: 'Rising trail', default: true },
     { key: 'level', type: 'range', label: 'Brightness', default: 1, min: 0, max: 2, step: 0.01 },
   ],
+  /**
+   * When each shell leaves the ground and when it breaks, in show time.
+   *
+   * Two events per shell: the lift, which the sound follows up as a rush, and
+   * the break, which is the bang. Both derive from the shell index the same way
+   * `draw` derives the picture from it, so the report lands on the flash rather
+   * than near it — see `cue` in core/soundscape.js.
+   *
+   * Once per layer, not once per target. A layer pointed at four windows draws
+   * four bursts but they are the same four shells on the same clock, and four
+   * copies of one bang is one muddy bang.
+   */
+  cues(p, from, to) {
+    const interval = 60 / Math.max(1, p.rate);
+    const events = [];
+    const first = Math.max(0, Math.floor((from - SHELL_RISE) / interval));
+    for (let index = first; index <= Math.floor(to / interval); index++) {
+      const launch = index * interval;
+      // Only when the rising trail is actually drawn: a sound for something
+      // invisible is a sound coming from nowhere.
+      if (p.trail && launch >= from && launch < to) {
+        events.push({ at: launch, kind: 'rise', duration: SHELL_RISE, level: 1 });
+      }
+      const breaks = launch + SHELL_RISE;
+      if (breaks >= from && breaks < to) {
+        events.push({ at: breaks, kind: 'burst', level: clamp(0.45 + p.power * 0.55, 0.15, 1) });
+      }
+    }
+    return events;
+  },
   draw({ g, p, shape, t }) {
     const { bbox } = shape;
     if (bbox.w <= 0 || bbox.h <= 0) return;
@@ -180,7 +219,7 @@ const fireworks = {
     const palette = palettes[p.palette] || palettes.multi;
 
     const interval = 60 / Math.max(1, p.rate);
-    const riseTime = 0.9;
+    const riseTime = SHELL_RISE;
     const total = riseTime + p.life;
     // How many shells could still be visible at once.
     const overlap = Math.ceil(total / interval) + 1;

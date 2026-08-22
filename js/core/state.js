@@ -141,9 +141,12 @@ export function createLayer(effectId, overrides = {}) {
     /**
      * What this layer sounds like, and how loud.
      *
-     * `auto` takes the voice the effect is mapped to — see `VOICE_FOR_EFFECT`
-     * in core/soundscape.js — which is what makes a preset arrive with sound
-     * already on it. `none` silences the layer, and a voice id forces one.
+     * `auto` — which is all the UI ever sets — takes the voice the effect is
+     * mapped to, see `VOICE_FOR_EFFECT` in core/soundscape.js. Fire sounds like
+     * fire, and picking which noise the fire makes was a decision nobody wanted
+     * to be asked for; `soundLevel` is the only sound control on a layer, and
+     * all the way down is how one is silenced. `none` and an explicit voice id
+     * are still honoured for projects saved while the picker existed.
      */
     sound: 'auto',
     soundLevel: 1,

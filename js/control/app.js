@@ -102,7 +102,8 @@ import {
 } from './panels.js';
 import { createMotionDetector } from './motion.js';
 import { createSoundPlayer } from './sound.js';
-import { createSoundscape, planSoundscape, voiceForLayer, VOICES, VOICE_OPTIONS } from '../core/soundscape.js';
+import { createSoundscape, planSoundscape, soundFaders, soundOwners, VOICES } from '../core/soundscape.js';
+import { baseParams } from '../core/modulators.js';
 import { createTriggerRuntime } from './triggers.js';
 import { scheduleWantsOn, describeSchedule } from './schedule.js';
 import { el, clear, toast, paramRow } from './ui.js';
@@ -2346,6 +2347,10 @@ function showDigest() {
   const show = project.show || {};
   const scenes = project.scenes || [];
   const at = linkNow();
+  // Read off `effectiveLayers`, so a scene that has switched a layer off hands
+  // its voice to whichever layer is still on rather than leaving the fader
+  // pointing at something silent.
+  const soundVoiceOwners = soundFaders(effectiveLayers(project), getEffect);
 
   return {
     name: project.name,
@@ -2377,13 +2382,14 @@ function showDigest() {
     /**
      * Layers, with what each one sounds like.
      *
-     * `voice` is null for the many layers that make no noise, and the remote
-     * uses it to decide whether to draw a volume slider — a row of faders for
-     * silent layers is a row of controls that do nothing.
+     * `voice` is null for the many layers that make no noise *and* for the ones
+     * whose voice another layer is already carrying — see `soundFaders`. The
+     * remote uses it to decide whether to draw a volume slider, and a fader
+     * that moves without changing anything is worse than no fader at all.
      */
     layers: (project.layers || []).map((l) => {
       const effect = getEffect(l.effect);
-      const voice = voiceForLayer(l, effect);
+      const voice = soundVoiceOwners.get(l.id) || null;
       return {
         id: l.id,
         name: l.name || effect?.name || l.effect,
@@ -2798,19 +2804,104 @@ window.__soundscape = () => ({
   running: soundscape.running,
   master: app.project.settings.soundMaster ?? 0.7,
   voices: soundscape.voices(),
+  /**
+   * Cues sent, and the last one. Thunder landing on its flash is the one thing
+   * in here you cannot check by reading the graph — either it is scheduled from
+   * the strike or it is not — and this is how you tell from outside the module.
+   */
+  cued: cueCount,
+  lastCue,
+  /** Layer id -> the voice whose fader it carries. The rest get no slider. */
+  faders: [...soundFaders(effectiveLayers(app.project), getEffect)].map(([id, voice]) => {
+    const layer = app.project.layers.find((l) => l.id === id);
+    return { id, voice, name: layer?.name || layer?.effect };
+  }),
 });
 
-function syncSoundscape() {
+function syncSoundscape(layers = effectiveLayers(app.project)) {
   if (!soundscape.running) return;
   const settings = app.project.settings || {};
   const muted = settings.blackout ? 0 : 1;
-  const plan = planSoundscape(effectiveLayers(app.project), getEffect, {
+  const plan = planSoundscape(layers, getEffect, {
     master: (settings.soundMaster ?? 0.7) * muted,
   });
   const key = plan.map((p) => `${p.voice}:${p.level.toFixed(3)}`).sort().join('|');
   if (key === soundKey) return;
   soundKey = key;
   soundscape.sync(plan);
+}
+
+/**
+ * How far ahead of the picture the sound is scheduled.
+ *
+ * Long enough that a frame arriving late still leaves the audio clock time to
+ * place the sound, short enough that a scene change cannot cancel a clap that
+ * has already been queued. Two frames' worth, near enough.
+ */
+const CUE_AHEAD = 0.4;
+let cuedTo = 0;
+let cueCount = 0;
+let lastCue = null;
+
+/**
+ * Hand the soundscape the loud moments the wall is about to have.
+ *
+ * The effects that make a bang know exactly when they are going to make it —
+ * lightning's return stroke is a function of the strike index — so they say so
+ * through `cues`, and the sound is scheduled on the audio clock for that
+ * instant instead of being fired from whichever animation frame noticed. The
+ * gap between a flash and its thunder is the one piece of timing in this whole
+ * app that a person can hear to the millisecond.
+ *
+ * `cuedTo` is where the last window ended, so a strike is offered exactly once.
+ * Anything that moves show time by a jump — scrubbing, a playlist change, the
+ * clock being paused and resumed — restarts the window at now rather than
+ * dumping a scene's worth of queued thunder into one frame.
+ */
+function cueSoundscape(t, layers) {
+  if (!soundscape.running) return;
+  const to = t + CUE_AHEAD;
+  let from = cuedTo;
+  if (!(from > 0) || from > to || to - from > 2) from = t;
+  cuedTo = to;
+  if (from >= to) return;
+
+  const owners = soundOwners(layers, getEffect);
+  for (const layer of layers) {
+    if (layer.enabled === false) continue;
+    const voice = owners.get(layer.id);
+    if (!voice) continue;
+    const effect = getEffect(layer.effect);
+    if (typeof effect?.cues !== 'function') continue;
+    let events;
+    try {
+      // Base parameters rather than modulated ones: this is looking ahead, and
+      // a bound parameter has no value yet at a time that has not happened.
+      events = effect.cues(baseParams(effect, layer), from, to) || [];
+    } catch (err) {
+      console.warn('[sound] effect failed to cue', layer.effect, err);
+      continue;
+    }
+    for (const event of events) {
+      if (!soundscape.cue(voice, { ...event, in: event.at - t })) continue;
+      cueCount++;
+      lastCue = { voice, effect: layer.effect, at: event.at, ahead: event.at - t };
+    }
+  }
+}
+
+/**
+ * The sound, once per frame.
+ *
+ * Both halves want the same list of layers — what is on the wall right now —
+ * and working it out twice a frame, on top of the renderer's own call, is pure
+ * waste on the machine that is already doing the most work.
+ */
+function tickSoundscape(t) {
+  if (!soundscape.running) return;
+  const layers = effectiveLayers(app.project);
+  syncSoundscape(layers);
+  cueSoundscape(t, layers);
 }
 
 /**
@@ -2961,7 +3052,7 @@ function frame() {
     broadcast(true);
   }
 
-  syncSoundscape();
+  tickSoundscape(time.t);
 
   mediaPool.syncPlayback(time.t, time.running);
   scanSource.sync(app.project, worldSize(app.project), getBlob);

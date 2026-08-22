@@ -205,7 +205,8 @@ function build(digest) {
      * Outside the row rather than inside it, because the row is a button and a
      * slider inside a button is a slider you cannot drag without switching the
      * layer off. Only for layers with a voice — a fader that does nothing is
-     * worse than no fader.
+     * worse than no fader — and, where several layers share one voice, only for
+     * the one actually playing it. See `soundOwners` in core/soundscape.js.
      */
     if (!layer.voice) continue;
     const fader = document.createElement('label');
@@ -296,9 +297,9 @@ function paint() {
     const fader = soundNodes.get(layer.id);
     if (!fader || draggingSound.has(layer.id)) continue;
     fader.slider.value = String(layer.soundLevel ?? 1);
-    // Lit while this layer is the one actually making its voice: two layers
-    // sharing a voice play once, at the louder of the two, and knowing which
-    // is which saves a lot of pushing sliders that do nothing.
+    // Lit while the voice is actually audible. Layers that share a voice have
+    // already been resolved to one fader by the control tab, so every slider
+    // here does something; this only says whether it is doing it right now.
     fader.classList.toggle('playing', (show.sound?.playing || []).includes(layer.voice));
   }
 
