@@ -14,6 +14,7 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎃</text></svg>" />
     <link rel="stylesheet" href="css/base.css" />
     <link rel="stylesheet" href="css/remote.css" />
+    <link rel="stylesheet" href="css/draw.css" />
   </head>
   <body class="remote-body">
     <header class="remote-bar">
@@ -21,6 +22,11 @@
       <span class="remote-show" id="showName">Facade Mapper</span>
       <span class="remote-time" id="showTime">00:00.0</span>
     </header>
+
+    <nav class="remote-tabs" id="tabs" hidden aria-label="What this device is doing">
+      <button type="button" class="tab on" id="tabControl" aria-pressed="true">Control</button>
+      <button type="button" class="tab" id="tabDraw" aria-pressed="false">Draw</button>
+    </nav>
 
     <p class="remote-notice" id="notice" role="status">Looking for the show…</p>
 
@@ -66,6 +72,43 @@
         <p class="remote-note" id="linkNote"></p>
       </details>
     </main>
+
+    <!--
+      The drawing surface, which is the same page rather than a second address:
+      one device carried into the garden, one thing to open, and turning a
+      layer off while holding the pencil does not mean switching tabs. It is
+      mounted lazily and asks for the project only while it is open — see
+      js/draw/pad.js.
+    -->
+    <section class="pad-root" id="padRoot" hidden>
+      <canvas class="pad" data-pad="pad"></canvas>
+
+      <div class="draw-notice" data-pad="notice" role="status">
+        <p data-pad="noticeText">Looking for the show…</p>
+        <button type="button" class="tool" data-pad="btnAddLayer" hidden>Add a drawing layer</button>
+      </div>
+
+      <header class="draw-head" data-pad="head">
+        <select data-pad="surfacePicker" class="draw-select" aria-label="Which drawing layer"></select>
+        <span class="draw-target" data-pad="targetName"></span>
+      </header>
+
+      <footer class="draw-bar" data-pad="bar">
+        <div class="swatches" data-pad="swatches"></div>
+
+        <label class="draw-width">
+          <input type="range" data-pad="width" min="0.4" max="12" step="0.1" value="2.2" aria-label="Line width" />
+          <span class="nib" data-pad="nib" aria-hidden="true"></span>
+        </label>
+
+        <div class="draw-tools">
+          <button type="button" class="tool" data-pad="btnErase" aria-pressed="false">Rub out</button>
+          <button type="button" class="tool" data-pad="btnUndo">Undo</button>
+          <button type="button" class="tool" data-pad="btnClear">Clear</button>
+          <button type="button" class="tool" data-pad="btnPencilOnly" aria-pressed="false" title="Ignore fingers and palms">Pencil</button>
+        </div>
+      </footer>
+    </section>
 
     <div class="toast" id="toast" hidden></div>
 

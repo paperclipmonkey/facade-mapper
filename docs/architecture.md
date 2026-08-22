@@ -6,7 +6,7 @@ No build step. Plain ES modules, served exactly as they sit in the repository.
 index.html          control tab
 projector.html      output tab, one per projector
 remote.html         phone or second-laptop remote
-draw.html           tablet drawing surface
+draw.html           redirect to remote.html#draw, for links already in the wild
 server.mjs          optional: static files + the cross-device link
 js/core/            project model, storage, cross-tab bus, maths, clock, modulation
 js/effects/         effect registry and the built-in library

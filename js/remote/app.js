@@ -24,27 +24,40 @@ import { createBus, MSG } from '../core/bus.js';
 import { createClock, formatTime } from '../core/clock.js';
 import { createLink } from '../core/link.js';
 import { now as linkNow } from '../core/time.js';
+import { createDrawPad } from '../draw/pad.js';
 
 const $ = (id) => document.getElementById(id);
 
 const bus = createBus('remote');
 const clock = createClock();
+
+/**
+ * What this device asks the server for when it is only being a remote.
+ *
+ * Small on purpose: the project is a few hundred kilobytes and is broadcast a
+ * dozen times a second while somebody drags a slider at the laptop, and a
+ * phone in a coat pocket at the end of a garden has no use for it and may be
+ * on one bar of signal.
+ *
+ * Ink is on the list even though the drawing surface may never be opened,
+ * because it is a handful of bytes a stroke and because this device may be the
+ * only one still holding a drawing: the control tab answers "what is already
+ * on the wall" for a projector that joins late, and the control tab is the tab
+ * most likely to have been reloaded. Whoever drew it can answer instead.
+ */
+const BASE_SUBSCRIPTIONS = [MSG.SHOW, MSG.CLOCK, MSG.DRAW];
+
 const link = createLink(bus, {
   role: 'remote',
   label: 'Remote',
-  /**
-   * The two message types a remote can act on.
-   *
-   * The server sends nothing else, which is what keeps a 300 KB project
-   * broadcast — twelve times a second while somebody drags a slider — off a
-   * phone that has no use for it and may be on one bar of signal.
-   */
-  subscribe: [MSG.SHOW, MSG.CLOCK],
+  subscribe: BASE_SUBSCRIPTIONS,
 });
 
 /** The last digest, and the moment it arrived, on this device's own clock. */
 let show = null;
 let showAt = 0;
+/** 'control' or 'draw'. Declared up here because the notice reads it. */
+let mode = 'control';
 /** Structure of the last digest, so the DOM is rebuilt only when it changes. */
 let structure = '';
 let draggingMaster = false;
@@ -303,10 +316,83 @@ function updateNotice() {
     message = 'The control tab has gone quiet. It may have been closed, or the machine may be asleep.';
   }
 
-  notice.hidden = !message;
+  /**
+   * Whose notice this is.
+   *
+   * While the pad is up it has its own things to say — no drawing layer yet,
+   * waiting for the shapes — and two notices stacked on a phone screen is one
+   * too many. The page-level one only speaks when the link itself is the
+   * problem, which is a thing the pad cannot fix and should not paper over.
+   */
+  const drawing = mode === 'draw';
+  const linkFault = !fresh && status !== 'linked';
+
+  notice.hidden = !message || (drawing && !linkFault);
   notice.textContent = message;
-  $('main').hidden = !show;
+  $('main').hidden = !show || drawing;
+  $('tabs').hidden = !show;
 }
+
+/* ------------------------------------------------------------------ *
+ * Drawing, on the same device
+ * ------------------------------------------------------------------ */
+
+/** The one thing this page says out loud, and the pad borrows it. */
+let toastTimer = null;
+function toast(message) {
+  const node = $('toast');
+  node.textContent = message;
+  node.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    node.hidden = true;
+  }, 4000);
+}
+
+/**
+ * Two things this device can be, on one page.
+ *
+ * They were two addresses, and carrying two addresses out to the garden is not
+ * one device: turning a layer off while holding the pencil meant switching
+ * pages, waiting for a reconnect and losing your place. The drawing surface is
+ * a panel now, and the only thing that distinguishes it from the buttons is
+ * that opening it costs a subscription to the project — so it is mounted once
+ * and opened on demand.
+ */
+const pad = createDrawPad({
+  bus,
+  link,
+  root: $('padRoot'),
+  base: BASE_SUBSCRIPTIONS,
+  toast,
+  onChange: ({ ready }) => {
+    $('tabDraw').classList.toggle('ready', ready);
+  },
+});
+
+function setMode(next) {
+  if (next === mode) return;
+  mode = next;
+  const drawing = mode === 'draw';
+  $('tabControl').classList.toggle('on', !drawing);
+  $('tabControl').setAttribute('aria-pressed', String(!drawing));
+  $('tabDraw').classList.toggle('on', drawing);
+  $('tabDraw').setAttribute('aria-pressed', String(drawing));
+  document.body.classList.toggle('drawing-mode', drawing);
+  if (drawing) pad.open();
+  else pad.close();
+  updateNotice();
+  // The address bar carries it, so a reload comes back where you were and the
+  // control tab can hand somebody a link straight to the pencil.
+  try {
+    history.replaceState(null, '', drawing ? '#draw' : ' ');
+  } catch {
+    /* A file: URL, or a browser that will not have it. Not worth saying. */
+  }
+}
+
+$('tabControl').addEventListener('click', () => setMode('control'));
+$('tabDraw').addEventListener('click', () => setMode('draw'));
 
 /* ------------------------------------------------------------------ *
  * The tick
@@ -455,5 +541,8 @@ function refreshIfStale() {
 announce();
 setInterval(announce, 4000);
 keepAwake();
+// `#draw` opens straight onto the pencil, so the control tab can hand a tablet
+// a link to the thing it is for and a reload comes back where you were.
+if (location.hash === '#draw') setMode('draw');
 updateNotice();
 requestAnimationFrame(tick);

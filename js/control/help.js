@@ -434,7 +434,7 @@ export const HELP_SECTIONS = [
 <h2>Drawing on the house</h2>
 <p>
   Add the <strong>Live drawing</strong> effect, point it at a wall or a window — or at nothing,
-  which covers the whole facade — and open <code>draw.html</code> on an iPad. What you draw with the
+  which covers the whole facade — and open the remote on an iPad, then press <b>Draw</b>. What you draw with the
   pencil is on the wall while the pencil is still moving, pressure and all.
 </p>
 <p>

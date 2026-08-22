@@ -83,23 +83,31 @@ controls spread out.
 
 ## Drawing on the house
 
-`draw.html` on an iPad, with an Apple Pencil or a finger. What you draw is on
-the wall while the pencil is still moving.
+The **Draw** tab of the remote, on an iPad, with an Apple Pencil or a finger.
+What you draw is on the wall while the pencil is still moving.
 
 1. Run `node server.mjs` on the machine driving the projectors, if it is not
    already running — the tablet is a second device, so it needs the link
    server. **Devices** in the control tab's top bar prints the address.
-2. In the control tab, add the **Live drawing** effect and point it at a wall,
-   a window, or nothing at all — a layer with no targets covers the whole
-   facade, which is usually what you want to draw on.
-3. Open the drawing address on the tablet. If there is no drawing layer yet the
-   page offers to ask the control tab for one, so you do not have to walk back
-   indoors to press a button.
+2. Open that address on the tablet and press **Draw**.
+3. If there is no drawing layer yet the page offers to ask the control tab for
+   one, so you do not have to walk back indoors to press a button. (Or add the
+   **Live drawing** effect yourself and point it at a wall, a window, or
+   nothing at all — a layer with no targets covers the whole facade, which is
+   usually what you want to draw on.)
 4. Draw.
 
-There is nothing to switch on beyond that: the effect is in the **basic**
-category of the effect gallery, called **Live drawing**, and `draw.html` is
-served by the same server as everything else.
+It is the same page as the remote on purpose. Carrying two addresses out to the
+garden is not one device: turning a layer off while holding the pencil meant
+leaving the page, waiting for a reconnect and losing your place. `draw.html`
+still works and goes straight to the pencil, because that address has been
+typed into tablets and printed onto QR codes.
+
+Opening the **Draw** tab is the only thing on the phone that costs anything on
+the wire. The shapes are why — a pencil needs to know what it is drawing into —
+so the page asks for the project when the tab opens and drops it again when you
+go back to the buttons. A phone that only ever presses scene buttons never
+receives a show.
 
 The page shows the area you are drawing into as a dashed box, with the rest of
 the traced facade faint around it, so a window you are drawing on has the door

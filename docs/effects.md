@@ -726,7 +726,7 @@ layer stops asking, so the recording light goes out when it should.
 ### Drawing on it by hand
 
 **Live drawing** is a layer whose content is a person with a tablet. Add it,
-point it at a wall or a window, and open `draw.html` on an iPad from the address
+point it at a wall or a window, and open the remote on an iPad from the address
 in **Devices** — whatever is drawn there is on the house while the pencil is
 still moving. See [more than one device](multi-device.md) for the server that
 carries it.

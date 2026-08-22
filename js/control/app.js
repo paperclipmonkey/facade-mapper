@@ -2623,12 +2623,8 @@ function renderLinkDialog() {
   body.appendChild(
     el('div', { class: 'link-urls' }, [
       el('div', { class: 'link-url' }, [
-        el('span', { class: 'link-url-what', text: 'Phone remote' }),
+        el('span', { class: 'link-url-what', text: 'Phone or tablet — run the show, and draw on it' }),
         el('code', { text: `${base}/remote.html${suffix}` }),
-      ]),
-      el('div', { class: 'link-url' }, [
-        el('span', { class: 'link-url-what', text: 'Tablet, to draw on the house' }),
-        el('code', { text: `${base}/draw.html${suffix}` }),
       ]),
       el('div', { class: 'link-url' }, [
         el('span', { class: 'link-url-what', text: 'Second laptop, driving a projector' }),

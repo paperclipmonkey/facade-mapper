@@ -84,6 +84,9 @@ function linkSecret() {
 export function createLink(bus, { role = 'unknown', subscribe = null, label = '', onStatus } = {}) {
   const device = deviceId();
   const secret = linkSecret();
+  /** What this device currently asks the server for. Widened and narrowed at
+   *  runtime by `setSubscribe`; see it for why. */
+  let subs = subscribe;
 
   let socket = null;
   let unmirror = null;
@@ -197,7 +200,7 @@ export function createLink(bus, { role = 'unknown', subscribe = null, label = ''
       state.status = 'linked';
       state.error = '';
       publish();
-      send({ type: 'link/hello', role, device, label, subscribe });
+      send({ type: 'link/hello', role, device, label, subscribe: subs });
       startSync();
       // Everything this tab says from here on goes out as well as round the
       // browser. Only posts, never messages that arrived from elsewhere — see
@@ -307,6 +310,31 @@ export function createLink(bus, { role = 'unknown', subscribe = null, label = ''
     state: () => ({ ...state, peers: [...state.peers], addresses: [...state.addresses], sync: clockSync() }),
     /** Post to the link only, bypassing BroadcastChannel. Used for keepalives. */
     send,
+    /**
+     * Change what this device asks the server to send it, while connected.
+     *
+     * The subscription is a bandwidth decision, and on a phone it is the
+     * difference between a page that works on one bar and one that does not:
+     * the project is a few hundred kilobytes and is broadcast a dozen times a
+     * second while somebody drags a slider, and a remote has no use for it.
+     *
+     * A page that can *also* draw does have a use for it — but only while
+     * somebody is drawing, because that is when it needs the shapes. So rather
+     * than choosing once at startup between a cheap remote and a capable one,
+     * it asks for more when the drawing surface opens and less when it closes.
+     * The server keeps one subscription per connection and replaces it on
+     * every hello, so re-announcing is the whole mechanism.
+     *
+     * A no-op when nothing changed, so this is safe to call on every open.
+     */
+    setSubscribe(next) {
+      const before = subs ? [...subs].sort().join(',') : '*';
+      const after = next ? [...next].sort().join(',') : '*';
+      if (before === after) return false;
+      subs = next;
+      if (state.status === 'linked') send({ type: 'link/hello', role, device, label, subscribe: subs });
+      return true;
+    },
     now,
     close() {
       closed = true;

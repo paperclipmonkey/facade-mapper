@@ -1,9 +1,32 @@
+/**
+ * The drawing surface.
+ *
+ * A panel inside the remote rather than a page of its own, so everything here
+ * is positioned within `.pad-root` — which the remote sizes — instead of
+ * against the viewport.
+ */
+
+.pad-root {
+  position: fixed;
+  left: 0;
+  right: 0;
+  /* Under the header and the tab row; the pad measures this box itself. */
+  top: calc(var(--remote-chrome, 92px));
+  bottom: 0;
+  overflow: hidden;
+  background: #07080b;
+}
+
+.pad-root[hidden] { display: none; }
+
 /* The drawing surface.
-   One canvas filling the screen, with everything else pushed to the edges: a
+   One canvas filling the panel, with everything else pushed to its edges: a
    tablet held up in front of a house is not a place for chrome. The bars fade
    back while the pencil is moving and come back when it stops. */
 
-.draw-body {
+/* Only while the pencil is the point. The rest of the time this is a page of
+   buttons that has every business scrolling. */
+body.drawing-mode {
   height: 100%;
   overflow: hidden;
   /* No rubber-banding, no pull-to-refresh, no pinch zoom fighting the pencil. */
@@ -15,10 +38,8 @@
 }
 
 .pad {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
   touch-action: none;
   display: block;
 }
@@ -28,33 +49,18 @@
  * ------------------------------------------------------------------ */
 
 .draw-head {
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   right: 0;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: calc(env(safe-area-inset-top) + 8px) 14px 8px;
+  padding: 8px 14px;
   background: linear-gradient(color-mix(in srgb, var(--bg) 82%, transparent), transparent);
   transition: opacity 0.25s ease;
 }
 
-.draw-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--text-faint);
-  flex: none;
-}
-.draw-dot[data-link='linked'] {
-  background: var(--good);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent);
-}
-.draw-dot[data-link='connecting'],
-.draw-dot[data-link='checking'] { background: var(--warn); }
-.draw-dot[data-link='unavailable'],
-.draw-dot[data-link='off'] { background: var(--bad); }
 
 .draw-select {
   background: var(--bg-input);
@@ -75,7 +81,7 @@
 }
 
 .draw-bar {
-  position: fixed;
+  position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
@@ -170,7 +176,7 @@
 }
 
 .draw-notice {
-  position: fixed;
+  position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
