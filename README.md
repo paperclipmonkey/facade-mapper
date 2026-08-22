@@ -109,6 +109,9 @@ is for.
   where the show is actually seen. The same link lets a second computer drive
   projectors of its own, on a clock shared with the first, so two machines paint
   the same frame of the same animation rather than two.
+- **Draw on the house.** Open the drawing page on an iPad and whatever you draw
+  with the pencil is on the wall while the pencil is still moving — pressure and
+  all, mapped into whichever window or wall the layer points at.
 - **It runs itself.** A nightly schedule turns the show on at dusk and off at
   bedtime, without you going near the laptop.
 - **Programmable.** Any numeric parameter can be driven by an LFO, the beat, the

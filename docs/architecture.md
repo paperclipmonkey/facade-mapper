@@ -6,6 +6,7 @@ No build step. Plain ES modules, served exactly as they sit in the repository.
 index.html          control tab
 projector.html      output tab, one per projector
 remote.html         phone or second-laptop remote
+draw.html           tablet drawing surface
 server.mjs          optional: static files + the cross-device link
 js/core/            project model, storage, cross-tab bus, maths, clock, modulation
 js/effects/         effect registry and the built-in library
@@ -13,6 +14,7 @@ js/render/          world renderer (2D), projective warp and post-processing (We
 js/control/         camera, calibration, motion, sound, triggers, UI
 js/projector/       the output tab
 js/remote/          the remote
+js/draw/            the drawing surface
 docs/               this
 test/               plain Node tests, no dependencies, plus a browser benchmark
 ```
@@ -123,6 +125,13 @@ the show is doing and accepts a fixed list of verbs back, each delegating to the
 function its own button calls — so the control tab remains the only place the
 project is edited, and there is nothing to reconcile.
 
+Drawing from a tablet goes the same way and for the same reason. What travels is
+a stroke beginning, a handful of points and a stroke ending; every tab applies
+them through [`js/core/drawing.js`](../js/core/drawing.js) and arrives at the
+same picture, and the ink never enters the project — the project is broadcast
+whole and saved on every change, which is the wrong path for a pencil. A tab
+that opens later asks for the drawing and is sent all of it at once.
+
 ## Determinism
 
 Effects are seeded per (layer, shape) pairing rather than globally, so the same
@@ -155,7 +164,9 @@ node test/obstacles.test.mjs   # facade collision, automatic edge blending
 node test/figures.test.mjs     # the drawn figures
 node test/link.test.mjs        # clock offset, WebSocket framing, the relay
 node test/underwater.test.mjs  # absorption, wave dispersion, buoyancy, shoaling
+node test/drawing.test.mjs     # live drawing: strokes, undo, late joiners
 node test/robustness.test.mjs  # every effect against every degenerate shape
+node test/renderer.test.mjs    # the simulation clock, catch-up and the transport
 ```
 
 [`robustness.test.mjs`](../test/robustness.test.mjs) is the one that is not
