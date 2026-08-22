@@ -11,7 +11,8 @@ import { SHAPE_TAGS, RESERVED_KEYS } from '../core/state.js';
 import { getEffect, listByCategory, defaultParams } from '../effects/registry.js';
 import { openEffectPicker } from './effectPicker.js';
 import { layerIssues } from './diagnostics.js';
-import { voiceForLayer, VOICES, VOICE_OPTIONS } from '../core/soundscape.js';
+import { voiceForLayer, soundFaders, VOICES } from '../core/soundscape.js';
+import { effectiveLayers } from '../core/scenes.js';
 import { POINT_PAIRS_NEEDED } from './calibration.js';
 import { checkReachable, fireWebhook } from './webhooks.js';
 
@@ -469,43 +470,42 @@ function renderLayer(container, app, id) {
   container.appendChild(blendRow);
 
   /**
-   * What this layer sounds like.
+   * How loud this layer is.
    *
-   * `Automatic` is the effect's own voice — see `VOICE_FOR_EFFECT` in
-   * core/soundscape.js — which is what makes a preset arrive with sound on it
-   * already. The list is here rather than only on the remote because choosing
-   * a voice is authoring and belongs where the rest of the authoring is; the
-   * *level* is on both, because that is a thing you set standing outside.
+   * There is no picker for *what* it sounds like. A layer's voice comes from
+   * the effect on it — see `VOICE_FOR_EFFECT` in core/soundscape.js — because
+   * fire sounds like fire, and an evening spent choosing which noise the fire
+   * makes is an evening not spent pointing the projector. What you do want to
+   * set is the balance, and that is this one slider; all the way down is how a
+   * layer is made silent.
+   *
+   * Only on the layer actually carrying the voice. Three layers of fire share
+   * one crackle rather than stacking three of them into mud, so the other two
+   * get a line saying who has it instead of a fader that moves and changes
+   * nothing — which is the whole reason for the distinction.
+   *
+   * Ownership is read off `effectiveLayers`, the same list the mixer plans
+   * from, so the panel agrees with what is coming out of the speakers rather
+   * than with the project as saved. A layer the current scene has switched off
+   * still gets its fader as long as nothing else has taken the voice, because
+   * setting a level for later is exactly what you do with a layer that is off.
    */
   const sounding = getEffect(layer.effect);
-  const auto = voiceForLayer({ ...layer, sound: 'auto' }, sounding);
-  const soundRow = el('div', { class: 'param-row' }, [el('label', { text: 'Sound' })]);
-  const soundSelect = el('select');
-  soundSelect.appendChild(
-    el('option', {
-      value: 'auto',
-      text: auto ? `Automatic — ${VOICES.get(auto)?.name}` : 'Automatic — silent',
-      selected: (layer.sound ?? 'auto') === 'auto',
-    })
-  );
-  soundSelect.appendChild(el('option', { value: 'none', text: 'Silent', selected: layer.sound === 'none' }));
-  for (const voice of VOICE_OPTIONS) {
-    soundSelect.appendChild(
-      el('option', { value: voice.id, text: voice.name, selected: layer.sound === voice.id })
-    );
-  }
-  soundSelect.addEventListener('change', () => {
-    app.pushUndo();
-    layer.sound = soundSelect.value;
-    app.commit();
-  });
-  soundRow.append(el('div', { class: 'param-control' }, [soundSelect]), el('span'));
-  container.appendChild(soundRow);
+  const voice = voiceForLayer(layer, sounding);
+  const faders = soundFaders(effectiveLayers(app.project), getEffect);
 
-  if (voiceForLayer(layer, sounding)) {
+  if (voice && faders.get(layer.id) === voice) {
     container.appendChild(
       paramRow(
-        { key: 'soundLevel', type: 'range', label: 'Volume', min: 0, max: 1, step: 0.01, default: 1 },
+        {
+          key: 'soundLevel',
+          type: 'range',
+          label: `Volume — ${VOICES.get(voice)?.name}`,
+          min: 0,
+          max: 1,
+          step: 0.01,
+          default: 1,
+        },
         layer.soundLevel ?? 1,
         null,
         {
@@ -516,6 +516,20 @@ function renderLayer(container, app, id) {
         }
       )
     );
+  } else if (voice) {
+    const holder = [...faders].find(([, v]) => v === voice)?.[0];
+    const owner = (app.project.layers || []).find((l) => l.id === holder);
+    const row = el('div', { class: 'param-row' }, [el('label', { text: 'Sound' })]);
+    row.append(
+      el('div', { class: 'param-control' }, [
+        el('span', {
+          class: 'muted',
+          text: `${VOICES.get(voice)?.name} — played by ${owner?.name || getEffect(owner?.effect)?.name || 'another layer'}`,
+        }),
+      ]),
+      el('span')
+    );
+    container.appendChild(row);
   }
 
   container.appendChild(

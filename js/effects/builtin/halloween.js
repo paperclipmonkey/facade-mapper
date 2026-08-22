@@ -227,6 +227,38 @@ const lightning = {
     { key: 'duration', type: 'range', label: 'Strike length (s)', default: 0.6, min: 0.05, max: 3, step: 0.01 },
     { key: 'leader', type: 'range', label: 'Leader time (s)', default: 0.09, min: 0, max: 0.5, step: 0.005 },
   ],
+  /**
+   * When this effect is about to be loud, in show time.
+   *
+   * The one hook an effect has into the soundscape. Thunder used to rumble on
+   * its own timer, which is fine for weather happening somewhere else and
+   * completely wrong for a bolt being drawn on the wall in front of you: a clap
+   * a quarter-second off its flash is heard as a fault, and one on a separate
+   * schedule entirely is heard as two different storms.
+   *
+   * The control tab asks every sounding layer for the events falling in a short
+   * window just ahead of now and hands them to `cue` on the voice, so the audio
+   * clock schedules the crack for the exact instant rather than for whichever
+   * frame the ask happened on. Everything here is derived from the strike index
+   * the same way `draw` derives it, which is what keeps the two in step.
+   */
+  cues(p, from, to) {
+    const interval = 60 / Math.max(0.2, p.rate);
+    const events = [];
+    for (let strike = Math.max(0, Math.floor(from / interval)); strike <= Math.floor(to / interval); strike++) {
+      const slack = Math.max(0, interval - p.duration - p.leader);
+      const offset = makeRng(`when${strike}`)() * slack;
+      // The return stroke, not the leader. The leader is the dim flicker on the
+      // way down, and it is silent — the bang is the channel connecting.
+      const at = strike * interval + offset + p.leader;
+      if (at < from || at >= to) continue;
+      // Zero distance: this is a strike on your own house, so the crack and the
+      // rumble arrive together. The sky flash is how big the strike looks, so
+      // it is also how loud it should be.
+      events.push({ at, level: clamp(0.6 + p.flash * 0.4, 0, 1), distance: 0 });
+    }
+    return events;
+  },
   draw({ g, p, world, t }) {
     const interval = 60 / Math.max(0.2, p.rate);
     const strike = Math.floor(t / interval);

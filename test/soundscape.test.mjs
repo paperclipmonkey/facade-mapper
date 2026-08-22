@@ -24,10 +24,14 @@ import {
   VOICE_FOR_EFFECT,
   voiceForLayer,
   planSoundscape,
+  soundOwners,
+  soundFaders,
   createSoundscape,
 } from '../js/core/soundscape.js';
 import { listEffects, getEffect } from '../js/effects/registry.js';
 import { createProject, createLayer, migrateProject } from '../js/core/state.js';
+import { PRESETS, applyPreset } from '../js/control/presets.js';
+import { baseParams } from '../js/core/modulators.js';
 
 let failures = 0;
 const ok = (name, cond, detail = '') => {
@@ -140,13 +144,58 @@ const layer = (effect, extra = {}) => ({ ...createLayer(effect), ...extra });
    * Two layers, one voice, one instance. A show with a preset applied twice —
    * or simply a waterline and the caustics that go with it — must not stack
    * two beds of the same noise.
+   *
+   * The *first* of them plays it, not the loudest. Ownership decided by level
+   * moves from layer to layer as the faders do, which makes a volume slider
+   * that changes which slider is live — see `soundOwners`.
    */
-  const plan = planSoundscape(
-    [layer('waterline', { soundLevel: 0.3 }), layer('caustics', { soundLevel: 0.9 })],
-    getEffect
-  );
+  const first = layer('waterline', { soundLevel: 0.3 });
+  const second = layer('caustics', { soundLevel: 0.9 });
+  const plan = planSoundscape([first, second], getEffect);
   ok('two layers wanting the same voice play it once', plan.length === 1, `${plan.length}`);
-  ok('at the louder of the two', Math.abs(plan[0].level - 0.9) < 1e-9, plan[0].level.toFixed(2));
+  ok('and it is the first of them that plays it', plan[0].layerId === first.id);
+  ok('at its own level, not the other one\'s', Math.abs(plan[0].level - 0.3) < 1e-9,
+    plan[0].level.toFixed(2));
+
+  const owners = soundOwners([first, second], getEffect);
+  ok('so only one of the two gets a fader', owners.size === 1 && owners.get(first.id) === 'water',
+    [...owners].map(([id, v]) => `${id}=${v}`).join(' '));
+
+  /**
+   * Unless the first is faded to nothing — then it hands the voice on rather
+   * than taking the show silent with it, which is what keeps a crossfade
+   * between two scenes that both contain water lapping the whole way through.
+   */
+  const muted = layer('waterline', { soundLevel: 0 });
+  const handed = planSoundscape([muted, second], getEffect);
+  ok('a layer faded to nothing hands its voice to the next one',
+    handed.length === 1 && handed[0].layerId === second.id,
+    handed.map((h) => h.layerId).join(','));
+
+  /**
+   * A layer switched off keeps its fader, as long as nothing else has taken
+   * the voice — setting the level of a layer you are about to switch on is the
+   * whole point of the fader, and a control that disappears when you turn the
+   * layer off is one you cannot set up in daylight.
+   */
+  const off = layer('waterline', { enabled: false });
+  ok('a layer switched off keeps its fader', soundFaders([off], getEffect).get(off.id) === 'water');
+  ok('but not when another layer has the voice',
+    soundFaders([layer('caustics'), off], getEffect).get(off.id) === undefined);
+  ok('and it is not playing either way', planSoundscape([off], getEffect).length === 0);
+
+  /**
+   * The case that started this: a scene should not ask for one sound several
+   * times over. Every preset in the app, checked, because the table is easy to
+   * add to and this is the failure you only hear standing outside.
+   */
+  for (const preset of PRESETS) {
+    const project = createProject();
+    applyPreset(project, preset.id);
+    const voices = planSoundscape(project.layers, getEffect).map((p) => p.voice);
+    ok(`${preset.id} asks for each sound once`, new Set(voices).size === voices.length,
+      voices.join(','));
+  }
 }
 
 {
@@ -177,7 +226,7 @@ console.log('\n— building, retuning and dropping —');
  * are made of.
  */
 function stubContext() {
-  const log = { built: [], started: 0, stopped: 0 };
+  const log = { built: [], started: 0, startedAt: [], stopped: 0 };
   const param = () => ({
     value: 0,
     setValueAtTime() {},
@@ -199,7 +248,7 @@ function stubContext() {
       loop: false,
       connect: (to) => to,
       disconnect() {},
-      start() { log.started++; },
+      start(when = 0) { log.started++; log.startedAt.push(when); },
       stop() { log.stopped++; },
     };
     return self;
@@ -309,6 +358,170 @@ function stubContext() {
     scape.stop();
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Cues
+ * ------------------------------------------------------------------ */
+
+console.log('\n— sounds cued from the picture —');
+
+/**
+ * Every effect that declares `cues`, against the contract, rather than the two
+ * that exist today named individually. The contract is easy to get subtly
+ * wrong — an event emitted at both ends of adjacent windows is a stutter, one
+ * missed at a boundary is a silent flash — and the failure is inaudible until
+ * somebody is standing in the garden.
+ */
+{
+  const cueing = listEffects()
+    .map((e) => getEffect(e.id))
+    .filter((e) => typeof e.cues === 'function');
+
+  ok('at least the effects that bang have a cue hook', cueing.length >= 2,
+    cueing.map((e) => e.id).join(', '));
+
+  for (const effect of cueing) {
+    const p = baseParams(effect, createLayer(effect.id));
+    const span = 240;
+    const all = effect.cues(p, 0, span);
+
+    ok(`${effect.id}: says when it is going to be loud`, Array.isArray(all) && all.length > 0,
+      `${all.length} in ${span}s`);
+    ok(`${effect.id}: every event inside the window it was asked for`,
+      all.every((e) => e.at >= 0 && e.at < span && Number.isFinite(e.at)));
+    ok(`${effect.id}: in order`, all.every((e, i) => i === 0 || e.at >= all[i - 1].at));
+    ok(`${effect.id}: with a level between none and all of it`,
+      all.every((e) => e.level === undefined || (e.level > 0 && e.level <= 1)));
+
+    /**
+     * The one that matters. The control tab asks in short windows, one per
+     * frame, and the union of those must be exactly what one long ask gives.
+     */
+    const sliced = [];
+    for (let at = 0; at < span; at += 0.4) sliced.push(...effect.cues(p, at, at + 0.4));
+    ok(`${effect.id}: asked frame by frame, exactly the same events`,
+      sliced.length === all.length && sliced.every((e, i) => Math.abs(e.at - all[i].at) < 1e-9),
+      `${sliced.length} sliced vs ${all.length} whole`);
+
+    // And at a frame rate that is struggling, which is when a show is at its
+    // most demanding and least able to afford a dropped bang. Windows clamped
+    // to the span, or the last one reaches past the end and legitimately finds
+    // an event the single long ask never asked for.
+    const coarse = [];
+    for (let at = 0; at < span; at += 1.7) coarse.push(...effect.cues(p, at, Math.min(at + 1.7, span)));
+    ok(`${effect.id}: and on a stuttering frame rate`,
+      coarse.length === all.length, `${coarse.length} vs ${all.length}`);
+  }
+}
+
+{
+  const lightning = getEffect('lightning');
+  const p = baseParams(lightning, createLayer('lightning'));
+  const strikes = lightning.cues(p, 0, 600);
+  ok('lightning claps as often as it flashes',
+    Math.abs(strikes.length - (600 * p.rate) / 60) <= 1,
+    `${strikes.length} in 600s at ${p.rate}/min`);
+  ok('and every strike is a distinct instant',
+    new Set(strikes.map((e) => e.at)).size === strikes.length);
+}
+
+{
+  /**
+   * A shell is two events, and the gap between them is the shell going up. If
+   * that drifts from the picture the bang belongs to a different firework.
+   */
+  const fireworks = getEffect('fireworks');
+  const p = baseParams(fireworks, createLayer('fireworks'));
+  const events = fireworks.cues(p, 0, 120);
+  const rises = events.filter((e) => e.kind === 'rise');
+  const bangs = events.filter((e) => e.kind === 'burst');
+  // One more launch than break, always: the last shell of the window is still
+  // in the air when the window ends, and its bang belongs to the next one.
+  ok('every shell that breaks was heard going up first',
+    bangs.every((b) => rises.some((r) => Math.abs(b.at - r.at - 0.9) < 1e-9)),
+    `${rises.length} up, ${bangs.length} down`);
+  ok('and none of them breaks twice', new Set(bangs.map((b) => b.at)).size === bangs.length);
+  ok('a shell with no visible trail is silent on the way up',
+    fireworks.cues({ ...p, trail: false }, 0, 120).every((e) => e.kind === 'burst'));
+}
+
+{
+  const ctx = stubContext();
+  const scape = createSoundscape({ createContext: () => ctx });
+  await scape.start();
+  scape.sync([{ voice: 'thunder', level: 1, name: 'Storm' }]);
+
+  ctx.currentTime = 10;
+  ctx.log.startedAt.length = 0;
+  scape.cue('thunder', { in: 0.25, level: 1, distance: 0 });
+  ok('a cued clap is scheduled, not fired on the spot', ctx.log.startedAt.length > 0);
+  ok('and every part of it lands on the instant it was given, to the sample',
+    ctx.log.startedAt.every((at) => Math.abs(at - 10.25) < 0.01),
+    ctx.log.startedAt.map((n) => n.toFixed(3)).join(' '));
+
+  ok('and it says so, so a caller can count sounds rather than intentions',
+    scape.cue('thunder', { in: 0.1 }) === true);
+  ok('cueing a voice that is not playing is a no-op, and says so',
+    scape.cue('water', { in: 0.1 }) === false);
+  scape.stop();
+  ok('as is cueing anything at all once the sound is off',
+    scape.cue('thunder', { in: 0.1 }) === false);
+}
+
+{
+  /**
+   * The firework voice has no timetable of its own at all — it exists only to
+   * be cued — so the thing to check is that a bang starts where it was put and
+   * the sizzle after it does not run on past the picture.
+   */
+  const ctx = stubContext();
+  ctx.state = 'running';
+  ctx.currentTime = 5;
+  const out = ctx.createGain();
+  const shells = VOICES.get('firework').build(ctx, out);
+  ok('the firework voice runs on cues alone', typeof shells.schedule !== 'function');
+
+  ctx.log.startedAt.length = 0;
+  shells.cue(6, { kind: 'burst', level: 1 });
+  const at = ctx.log.startedAt;
+  ok('a break starts on its instant', Math.min(...at) >= 6 - 1e-9, `${Math.min(...at)}`);
+  // Bounded, so that at 240 shells a minute they do not pile into a hiss.
+  ok('and its sizzle has died inside a second and a bit', Math.max(...at) < 7.1,
+    `${(Math.max(...at) - 6).toFixed(2)}s tail`);
+
+  ctx.log.startedAt.length = 0;
+  shells.cue(9, { kind: 'rise', duration: 0.9, level: 1 });
+  ok('a launch is heard going up, not banging', ctx.log.startedAt.length > 0 &&
+    Math.min(...ctx.log.startedAt) >= 9 - 1e-9);
+}
+
+{
+  /**
+   * And having been cued, thunder stops inventing storms of its own. Two of
+   * them, one attached to nothing you can see, is worse than none — but a
+   * thunder voice with no lightning driving it still has to rumble, or a layer
+   * somebody wired up by hand goes silent for the evening.
+   */
+  const ctx = stubContext();
+  ctx.state = 'running';
+  const out = ctx.createGain();
+  const storm = VOICES.get('thunder').build(ctx, out);
+
+  const run = (from, to, step = 0.3) => {
+    ctx.log.startedAt.length = 0;
+    for (ctx.currentTime = from; ctx.currentTime < to; ctx.currentTime += step) {
+      storm.schedule(ctx.currentTime + 0.35);
+    }
+    return ctx.log.startedAt.length;
+  };
+
+  ok('left to itself, thunder rumbles', run(0, 60) > 0);
+  storm.cue(ctx.currentTime + 0.2, { level: 1, distance: 0 });
+  ok('once something is cueing it, it adds nothing of its own', run(ctx.currentTime, ctx.currentTime + 30) === 0);
+  ok('and it picks up again when the lightning goes away',
+    run(ctx.currentTime + 60, ctx.currentTime + 180) > 0);
+}
+
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');
 process.exit(failures ? 1 : 0);

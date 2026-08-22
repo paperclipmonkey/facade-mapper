@@ -87,6 +87,22 @@ function normaliseEffect(def, isBuiltin = false) {
      */
     step: typeof def.step === 'function' ? def.step : null,
     draw: typeof def.draw === 'function' ? def.draw : () => {},
+    /**
+     * Optional: when this effect is about to make a noise, in show time.
+     *
+     * `cues(p, from, to)` returns `[{ at, level, distance }]` for the events
+     * falling in a short window just ahead of now, and the control tab hands
+     * them to the voice so the audio clock can place the sound on the exact
+     * instant. Thunder is why this exists — a clap a quarter-second off its
+     * flash is heard as a fault. See core/soundscape.js.
+     */
+    cues: typeof def.cues === 'function' ? def.cues : null,
+    /**
+     * Optional: the voice this effect sounds like, overriding the table in
+     * core/soundscape.js. A user effect that wants a noise of its own says so
+     * here rather than editing the app.
+     */
+    sound: def.sound === undefined ? undefined : def.sound,
     builtin: isBuiltin,
   };
 }

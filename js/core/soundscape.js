@@ -19,7 +19,7 @@
  *   it and break the show.
  * - It can be *driven*. A voice is a graph with knobs on it, so thunder can
  *   crack when the lightning effect actually fires rather than on its own
- *   timetable. See `sync`.
+ *   timetable. See `cue`, and `cues` on the lightning effect.
  *
  * **It plays in one place: the control tab.** That is the machine with the
  * speakers, and it is the tab that is definitely running. Projector tabs are
@@ -290,41 +290,97 @@ const VOICE_LIST = [
 
   {
     id: 'thunder',
-    name: 'Thunder crackling',
+    name: 'Thunder',
     /**
-     * A crack and then a rumble, with a gap between them, because that is what
-     * distance does to a lightning strike: the sharp part is high frequency and
-     * the air eats it, the low part travels. The gap is randomised over a range
-     * that reads as "somewhere over there" rather than "on the roof".
+     * Cued by the lightning, not running on its own timetable.
+     *
+     * Thunder is the one voice in here where being a second out is not "a bit
+     * of atmosphere", it is *wrong*: the flash is on the wall in front of you
+     * and the ear is extremely good at the gap between the two. So the clap is
+     * scheduled from `cues` on the lightning effect, which knows the exact show
+     * time its return stroke fires, and it lands on that instant at full level
+     * — the strike being drawn is on your own house, not somewhere over there.
+     *
+     * `schedule` below still exists as a fallback for a thunder voice with
+     * nothing driving it, and any cue shuts it up for the next forty seconds.
+     * Two thunders, one of them attached to nothing you can see, is worse than
+     * one and much worse than none.
      */
     build(ctx, out) {
       let next = 0;
+      let lastCue = -Infinity;
+
+      /**
+       * One clap: the crack, then the rumble underneath it.
+       *
+       * `distance` is the gap between them in seconds, which is the only thing
+       * that makes a strike sound far away — the sharp part is high frequency
+       * and the air eats it, the low part travels. A cue from the lightning
+       * passes zero, and the two arrive together as a bang.
+       */
+      function clap(at, { level = 1, distance = 0 } = {}) {
+        const near = distance < 0.35;
+
+        // The crack. Two bursts, because a highpass alone is a hiss: the top
+        // is the snap and the mid-band right behind it is the weight.
+        const crack = level * Math.max(0.05, 1 - distance * 0.42);
+        if (crack > 0.05) {
+          burst(ctx, out, at, {
+            type: 'highpass',
+            frequency: near ? 900 : 1800,
+            Q: 0.7,
+            level: crack,
+            attack: 0.0015,
+            decay: near ? between(0.18, 0.32) : 0.09,
+          });
+          burst(ctx, out, at + 0.004, {
+            type: 'bandpass',
+            frequency: between(170, 400),
+            Q: 0.6,
+            level: crack * 0.9,
+            attack: 0.005,
+            decay: between(0.25, 0.5),
+          });
+        }
+
+        // The rumble: the low half of the same strike, arriving `distance`
+        // later and rolling away for several seconds.
+        const rumbleAt = at + distance;
+        const source = ctx.createBufferSource();
+        source.buffer = noiseBuffer(ctx);
+        source.loop = true;
+        const low = filter(ctx, 'lowpass', near ? 240 : 130, 1.1);
+        const env = ctx.createGain();
+        const length = between(2.4, near ? 5 : 6.5);
+        // Silent *before* the first automation point as well as at it. A gain
+        // node starts life at 1, and a rumble scheduled half a second ahead
+        // used to leak that half second at full level first.
+        env.gain.value = 0.0001;
+        env.gain.setValueAtTime(0.0001, rumbleAt);
+        env.gain.exponentialRampToValueAtTime(
+          Math.max(0.0002, level * (near ? 0.75 : 0.35)),
+          rumbleAt + between(0.04, near ? 0.12 : 0.3)
+        );
+        env.gain.exponentialRampToValueAtTime(0.0001, rumbleAt + length);
+        source.connect(low).connect(env).connect(out);
+        source.start(rumbleAt, Math.random() * 3.5);
+        source.stop(rumbleAt + length + 0.1);
+      }
+
       return {
+        cue(at, detail) {
+          lastCue = ctx.currentTime;
+          clap(at, detail);
+        },
         schedule(until) {
+          // Something on the wall is driving us. Stay out of its way.
+          if (ctx.currentTime - lastCue < 40) {
+            next = 0;
+            return;
+          }
           if (!next) next = ctx.currentTime + between(2, 8);
           while (next < until) {
-            const near = Math.random() < 0.3;
-            // The crack, only when it is close enough to have survived.
-            if (near) {
-              burst(ctx, out, next, {
-                type: 'highpass',
-                frequency: 1800,
-                Q: 0.7,
-                level: 0.5,
-                attack: 0.002,
-                decay: 0.09,
-              });
-            }
-            const at = next + (near ? 0.05 : between(0.2, 0.6));
-            const source = noiseSource(ctx);
-            const low = filter(ctx, 'lowpass', near ? 260 : 130, 1.1);
-            const env = ctx.createGain();
-            const length = between(1.8, near ? 4.5 : 6.5);
-            env.gain.setValueAtTime(0.0001, at);
-            env.gain.exponentialRampToValueAtTime(near ? 0.8 : 0.35, at + between(0.05, 0.3));
-            env.gain.exponentialRampToValueAtTime(0.0001, at + length);
-            source.connect(low).connect(env).connect(out);
-            source.stop(at + length + 0.1);
+            clap(next, { level: 0.7, distance: between(0.2, 2.2) });
             next += between(7, 26);
           }
         },
@@ -337,35 +393,165 @@ const VOICE_LIST = [
     id: 'fire',
     name: 'Fire crackling',
     /**
-     * A bed of roar with pops on top. The pops are what people hear as fire —
-     * the bed alone is a hairdryer — and they have to be sparse and irregular,
-     * because a pop every half second is a Geiger counter.
+     * Pops, and very little else.
+     *
+     * This was a bed of filtered noise breathing on a slow oscillator with the
+     * crackle sprinkled over the top, and what you actually heard standing in
+     * front of it was the breathing: a four-second swell that is, acoustically,
+     * *wind* — and in a scene that already has fog in it, the same sound twice.
+     *
+     * A real fire a couple of metres away has no swell. Its roar is close to
+     * steady, and everything that reads as fire rather than as a gas ring is in
+     * the pops. So the bed is quiet and fixed, rolled off at the bottom (a gust
+     * lives in the bottom two octaves and a fire does not) and at the top, and
+     * the pops carry the voice: dense, uneven, and one in eight a proper snap.
      */
     build(ctx, out) {
       const bed = noiseSource(ctx);
-      const low = filter(ctx, 'lowpass', 700, 0.8);
-      const breathe = lfo(ctx, 0.23, 0.1, 0.16);
-      bed.connect(low).connect(breathe.node).connect(out);
+      const body = filter(ctx, 'lowpass', 1100, 0.7);
+      const floor = filter(ctx, 'highpass', 190, 0.7);
+      const level = gain(ctx, 0.07);
+      bed.connect(body).connect(floor).connect(level).connect(out);
 
       let next = 0;
       return {
         schedule(until) {
           if (!next) next = ctx.currentTime;
           while (next < until) {
+            // Irregular *size* is as much of the illusion as irregular timing:
+            // a snap is lower, longer and several times the level, and it is
+            // the sap going. Ticks of one loudness are a Geiger counter.
+            const snap = Math.random() < 0.12;
             burst(ctx, out, next, {
-              frequency: between(700, 3400),
-              Q: between(1, 3),
-              level: between(0.04, 0.22),
-              attack: 0.001,
-              decay: between(0.01, 0.05),
+              frequency: snap ? between(320, 1100) : between(900, 4200),
+              Q: snap ? between(0.8, 1.8) : between(1.5, 4),
+              level: snap ? between(0.22, 0.5) : between(0.05, 0.18),
+              attack: 0.0012,
+              decay: snap ? between(0.05, 0.13) : between(0.008, 0.03),
             });
-            next += between(0.03, 0.5);
+            next += snap ? between(0.12, 0.7) : between(0.02, 0.24);
           }
         },
         stop() {
           bed.stop();
-          breathe.stop();
         },
+      };
+    },
+  },
+
+  {
+    id: 'firework',
+    name: 'Fireworks',
+    /**
+     * Cue-only, like thunder and for the same reason: a report that lands a
+     * beat off the flash is not atmosphere, it is a fault. The fireworks effect
+     * knows exactly when each shell leaves the ground and when it breaks, and
+     * both are handed over through `cues`.
+     *
+     * There is no `schedule` here at all. A voice with nothing driving it makes
+     * no noise, and that is right — a bang on its own timetable belongs to no
+     * shell on the wall.
+     */
+    build(ctx, out) {
+      /**
+       * A shell going up: not a cartoon whistle, which very few of them have,
+       * but the rush of the lift charge — noise through a band climbing as it
+       * climbs, thinning out towards apogee.
+       */
+      function rise(at, duration = 0.9, level = 1) {
+        // The lift charge itself, a soft thump off the ground.
+        burst(ctx, out, at, {
+          type: 'lowpass',
+          frequency: between(120, 220),
+          Q: 0.8,
+          level: level * between(0.12, 0.22),
+          attack: 0.004,
+          decay: between(0.08, 0.16),
+        });
+
+        const source = ctx.createBufferSource();
+        source.buffer = noiseBuffer(ctx);
+        source.loop = true;
+        const band = filter(ctx, 'bandpass', 700, 2.2);
+        band.frequency.setValueAtTime(700, at);
+        band.frequency.exponentialRampToValueAtTime(2200, at + duration);
+        const env = ctx.createGain();
+        env.gain.value = 0.0001;
+        env.gain.setValueAtTime(0.0001, at);
+        env.gain.exponentialRampToValueAtTime(Math.max(0.0002, level * 0.1), at + duration * 0.35);
+        // Down to nothing right at apogee, so the trail stops when the picture
+        // stops and the bang has silence in front of it to land in.
+        env.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+        source.connect(band).connect(env).connect(out);
+        source.start(at, Math.random() * 3.5);
+        source.stop(at + duration + 0.05);
+      }
+
+      /**
+       * The break.
+       *
+       * Three things at once and then a tail. The click is the leading edge,
+       * the thump is the body, the mid-crack is what stops the thump being a
+       * door closing — and the tail of tiny high pops is the stars burning,
+       * which is the part that makes it a firework rather than a gunshot.
+       */
+      function bang(at, level = 1) {
+        burst(ctx, out, at, {
+          type: 'highpass',
+          frequency: 2600,
+          Q: 0.7,
+          level: level * 0.5,
+          attack: 0.0008,
+          decay: 0.02,
+        });
+        burst(ctx, out, at + 0.002, {
+          type: 'lowpass',
+          frequency: between(110, 190),
+          Q: 0.9,
+          level,
+          attack: 0.004,
+          decay: between(0.3, 0.5),
+        });
+        burst(ctx, out, at + 0.004, {
+          type: 'bandpass',
+          frequency: between(300, 700),
+          Q: 0.8,
+          level: level * 0.7,
+          attack: 0.003,
+          decay: between(0.1, 0.2),
+        });
+
+        /**
+         * The sizzle: the stars burning out, thinning rather than stopping.
+         *
+         * Spread across a tail of a known length instead of by accumulating
+         * random gaps. A gap that grows as it goes is the right *shape*, but
+         * adding up forty of them puts the end of one shell anywhere between
+         * half a second and two seconds out — and at a high shell rate that is
+         * three fireworks sizzling over each other into a hiss.
+         */
+        const pops = 16 + Math.floor(Math.random() * 18);
+        const tail = between(0.5, 0.95);
+        for (let i = 0; i < pops; i++) {
+          const u = i / pops;
+          // Front-loaded, because most of the stars go out early.
+          const when = at + between(0.03, 0.08) + tail * u ** 0.7;
+          burst(ctx, out, when, {
+            frequency: between(2600, 7000),
+            Q: between(2, 6),
+            level: level * (1 - u) * between(0.03, 0.1),
+            attack: 0.001,
+            decay: between(0.006, 0.018),
+          });
+        }
+      }
+
+      return {
+        cue(at, { kind, level = 1, duration } = {}) {
+          if (kind === 'rise') rise(at, duration, level);
+          else bang(at, level);
+        },
+        stop() {},
       };
     },
   },
@@ -590,6 +776,10 @@ export const VOICE_OPTIONS = VOICE_LIST.map(({ id, name }) => ({ id, name }));
  * An effect may still declare `sound` on itself and that wins; nothing built in
  * does, and a user effect that wants a noise of its own should not have to come
  * back here to get one.
+ *
+ * Several effects mapping to one voice is normal and intended — five kinds of
+ * fire all sound like fire. Which of them actually plays it when a scene has
+ * more than one on the wall is `soundOwners`, not this table.
  */
 export const VOICE_FOR_EFFECT = {
   // Under the sea. One water, deliberately: the waterline is the layer that
@@ -621,6 +811,10 @@ export const VOICE_FOR_EFFECT = {
   serpent: 'writhe',
   ghost: 'wind',
 
+  // Fireworks. The bang is cued from the shell, not played on a loop — see
+  // `cues` on the effect.
+  fireworks: 'firework',
+
   // Weather and the sky.
   rain: 'rain',
   snow: 'wind',
@@ -651,41 +845,93 @@ export function voiceForLayer(layer, effect) {
 }
 
 /**
+ * Who owns each voice.
+ *
+ * A scene is not a list of sounds, it is *one* soundscape, and a Christmas
+ * preset with four twinkling layers in it asks for the glisten voice four
+ * times. Playing it four times is not four times the twinkle, it is one
+ * louder, muddier twinkle — so a voice is played once, by one layer, and the
+ * others are silent under it.
+ *
+ * Which one? The first that asks, in layer order. Not the loudest: ownership
+ * decided by level hops from layer to layer as the faders move, and a volume
+ * slider that changes *which* slider is live is a slider nobody can use. The
+ * one concession is that a layer faded to nothing hands the voice on rather
+ * than taking the whole show silent with it, which is what makes a crossfade
+ * between two scenes that both contain fire keep crackling throughout.
+ *
+ * Returned as layer id -> voice, because both the callers — the plan below and
+ * the two places that draw a volume fader — are asking the same question about
+ * a layer they already have.
+ */
+export function soundOwners(layers, getEffect) {
+  const held = new Map();
+  for (const layer of layers || []) {
+    if (layer.enabled === false) continue;
+    const voice = voiceForLayer(layer, getEffect?.(layer.effect));
+    if (!voice) continue;
+    const audible = clamp01(layer.soundLevel ?? 1) * clamp01(layer.opacity ?? 1) > 0.0005;
+    const incumbent = held.get(voice);
+    if (!incumbent || (!incumbent.audible && audible)) held.set(voice, { id: layer.id, audible });
+  }
+  const owners = new Map();
+  for (const [voice, entry] of held) owners.set(entry.id, voice);
+  return owners;
+}
+
+/**
+ * Which layer gets a volume fader, which is not quite the same question.
+ *
+ * `soundOwners` answers "what is audible"; this answers "what should have a
+ * control on it", and the two differ for a layer that is simply switched off.
+ * Nothing is playing its voice, but nothing else has claimed it either, so it
+ * keeps its fader — setting the level of a layer you are about to turn on is
+ * exactly what the fader is for, and a control that vanishes when you switch a
+ * layer off is a control you cannot set up in daylight.
+ *
+ * Used by both places that draw one — the inspector and the remote — so they
+ * cannot drift apart and disagree about which slider is the live one.
+ */
+export function soundFaders(layers, getEffect) {
+  const faders = soundOwners(layers, getEffect);
+  const taken = new Set(faders.values());
+  for (const layer of layers || []) {
+    if (faders.has(layer.id)) continue;
+    const voice = voiceForLayer(layer, getEffect?.(layer.effect));
+    if (!voice || taken.has(voice)) continue;
+    faders.set(layer.id, voice);
+    taken.add(voice);
+  }
+  return faders;
+}
+
+/**
  * What should be playing, given the layers that are actually on the wall.
  *
  * Pure, and separate from the audio graph on purpose: this is the part with the
- * decisions in it — which layers count, how loud, and what happens when three
- * of them ask for the same voice — and it is the part worth testing. The mixer
- * below only does what this says.
- *
- * Two layers wanting the same voice get *one* instance at the loudest of their
- * levels rather than two. Two copies of a noise bed is not twice the water, it
- * is one louder and muddier water, and a show with a preset applied twice would
- * otherwise be unlistenable.
+ * decisions in it — which layers count and how loud — and it is the part worth
+ * testing. The mixer below only does what this says.
  */
 export function planSoundscape(layers, getEffect, { master = 1 } = {}) {
-  const byVoice = new Map();
+  const owners = soundOwners(layers, getEffect);
+  const plan = [];
   for (const layer of layers || []) {
-    if (layer.enabled === false) continue;
-    const effect = getEffect(layer.effect);
-    const voice = voiceForLayer(layer, effect);
+    const voice = owners.get(layer.id);
     if (!voice) continue;
     // Silent layers are silent: the opacity fader takes the sound with it, so
     // a crossfade between two scenes fades what you hear as well as what you
     // see, without anybody wiring that up per layer.
     const level = clamp01(layer.soundLevel ?? 1) * clamp01(layer.opacity ?? 1) * clamp01(master);
     if (level <= 0.0005) continue;
-    const existing = byVoice.get(voice);
-    if (!existing || level > existing.level) {
-      byVoice.set(voice, {
-        voice,
-        level,
-        layerId: layer.id,
-        name: layer.name || effect?.name || layer.effect,
-      });
-    }
+    const effect = getEffect?.(layer.effect);
+    plan.push({
+      voice,
+      level,
+      layerId: layer.id,
+      name: layer.name || effect?.name || layer.effect,
+    });
   }
-  return [...byVoice.values()];
+  return plan;
 }
 
 const clamp01 = (v) => (Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0);
@@ -816,6 +1062,35 @@ export function createSoundscape({ createContext } = {}) {
     sync(plan) {
       wanted = plan || [];
       apply();
+    },
+    /**
+     * Something on the wall is about to make a noise, at a known instant.
+     *
+     * `detail.in` is how many seconds ahead of now that instant is — a fraction
+     * of a second, handed over by the effect that is drawing it, so the audio
+     * clock can put the sound on exactly the right sample rather than on
+     * whichever frame the message happened to arrive in. That is the whole
+     * difference between thunder that belongs to the lightning and thunder that
+     * merely follows it around.
+     *
+     * A voice that is not currently playing is not cued: it is inaudible, and
+     * building it for one clap would fade a whole bed in behind it. Returns
+     * whether the cue actually landed, so a caller counting them is counting
+     * sounds rather than intentions — during a blackout every voice is dropped
+     * and every cue is a no-op.
+     */
+    cue(voiceId, detail = {}) {
+      if (!ctx || ctx.state !== 'running') return false;
+      const live = playing.get(voiceId);
+      if (!live?.instance?.cue) return false;
+      const at = ctx.currentTime + Math.max(0, detail.in || 0);
+      try {
+        live.instance.cue(at, detail);
+        return true;
+      } catch (err) {
+        console.warn('[sound] voice failed to cue', voiceId, err);
+        return false;
+      }
     },
     setMaster(value) {
       volume = clamp01(value);

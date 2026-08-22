@@ -167,7 +167,7 @@ node test/underwater.test.mjs  # absorption, wave dispersion, buoyancy, shoaling
 node test/drawing.test.mjs     # live drawing: strokes, undo, late joiners
 node test/robustness.test.mjs  # every effect against every degenerate shape
 node test/renderer.test.mjs    # the simulation clock, catch-up and the transport
-node test/soundscape.test.mjs  # which layer sounds like what, and the mixer
+node test/soundscape.test.mjs  # which layer sounds like what, the mixer, cue timing
 ```
 
 [`robustness.test.mjs`](../test/robustness.test.mjs) is the one that is not
