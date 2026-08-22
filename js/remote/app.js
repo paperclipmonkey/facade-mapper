@@ -331,6 +331,7 @@ function tick() {
     }
   }
 
+  refreshIfStale();
   updateNotice();
 }
 
@@ -420,9 +421,35 @@ document.addEventListener('visibilitychange', () => {
  * everything it has, which is not something to ask for every four seconds.
  */
 let introduced = false;
-function announce() {
-  bus.post(MSG.HELLO, { role: 'remote', requestState: !introduced });
+function announce(askForState = false) {
+  bus.post(MSG.HELLO, { role: 'remote', requestState: askForState || !introduced });
   introduced = true;
+}
+
+/**
+ * How long a digest may go without being replaced before this page assumes it
+ * is looking at an old show and asks again.
+ *
+ * The control tab publishes on every change and on a heartbeat, so in normal
+ * running a digest is never more than half a second old. Anything past a few
+ * seconds means the other end has stopped telling us things — the first
+ * announcement was posted before the socket finished opening and was never
+ * heard, the window it uses to decide somebody is listening has lapsed, the
+ * link dropped and came back. The remote is the only device in a position to
+ * notice, since it is the one holding the stale copy, so it is the one that
+ * asks: the alternative is a phone showing last hour's scenes with no way to
+ * find out, which is exactly what it did.
+ */
+const STALE_DIGEST_MS = 4000;
+let askedAt = 0;
+
+function refreshIfStale() {
+  if (link.status !== 'linked' && link.status !== 'off') return;
+  const now = Date.now();
+  if (show && now - showAt < STALE_DIGEST_MS) return;
+  if (now - askedAt < STALE_DIGEST_MS) return;
+  askedAt = now;
+  announce(true);
 }
 
 announce();

@@ -278,6 +278,12 @@ function broadcast(immediate = false) {
   if (immediate || elapsed > 80) {
     lastBroadcast = now;
     bus.post(MSG.PROJECT, JSON.parse(JSON.stringify(app.project)));
+    // The project moved, so the digest a phone is holding is out of date. Its
+    // own rate limit keeps this to a couple a second however fast this is
+    // called, and unlike the heartbeat it does not wait to be sure somebody is
+    // listening — the whole failure was a remote that had stopped being heard
+    // from and therefore stopped being told anything.
+    publishShowState();
   } else {
     broadcastTimer = setTimeout(() => broadcast(true), 80 - elapsed);
   }
@@ -2376,32 +2382,62 @@ function showDigest() {
   };
 }
 
+/**
+ * Send the digest, at most a couple of times a second.
+ *
+ * Called on every project change as well as on the heartbeat below, and the
+ * change is the important one: before it existed, the *only* thing carrying a
+ * controller-side edit to a phone was the heartbeat — which is gated on a
+ * liveness window, so a remote whose window had lapsed sat on the list it had
+ * when it connected. Adding a preset, renaming a scene, adding a trigger:
+ * none of it arrived, and pressing a button on the phone made everything
+ * appear at once, because an action forces a digest. That reads exactly like
+ * the phone being out of date about the show, which is what it was.
+ */
 function publishShowState(force = false) {
   const now = performance.now();
-  if (!force) {
-    if (now - lastDigestAt < 450) return;
-    if (Date.now() > remotesUntil) return;
-  }
+  if (!force && now - lastDigestAt < 450) return;
   lastDigestAt = now;
   bus.post(MSG.SHOW, showDigest());
 }
 
 /**
+ * The heartbeat, which is the part worth gating.
+ *
+ * Nothing has changed, so this is only for a remote's own sense of what is
+ * live — cooldowns, frame rate, who is on the link. Publishing that to nobody
+ * is wasted work, and the window is how "nobody" is known.
+ */
+function heartbeatShowState() {
+  if (Date.now() > remotesUntil) return;
+  publishShowState();
+}
+
+/**
  * Put a scene on the wall for a remote.
  *
- * Deliberately not `app.activateScene`, which also loads the scene's values
- * into the editor and pushes an undo step. That is right when you press the
- * button yourself and wrong from a phone, where it would quietly rewrite the
- * layers somebody is editing at the laptop. Triggers and the playlist take this
- * same route, for the same reason.
+ * Somebody pressing a scene on a phone means the same thing as somebody
+ * pressing it at the laptop, so it does the same thing: the values are loaded
+ * onto the layers, and an undo step is pushed in case they were mid-edit at
+ * the desk. What it does *not* do is `app.activateScene`, which also moves the
+ * inspector's selection — the phone should not be reaching into a panel
+ * somebody else is looking at.
+ *
+ * It used to skip the load, and the cost was a phone whose effect switches did
+ * nothing: with the scene applied only at render time, every toggle was undone
+ * on the next frame. Triggers and the playlist still skip it — those fire by
+ * themselves, and an evening of scares must not slowly overwrite the show.
  */
 function remoteScene(sceneId) {
   const scene = (app.project.scenes || []).find((s) => s.id === sceneId);
   if (!scene) return;
+  app.pushUndo();
   applyScene(app.project, sceneId);
+  applySceneToLayers(app.project, sceneId);
   markDirty();
   broadcast(true);
   renderSceneButtons($('sceneButtons'), app);
+  refreshPanels();
   toast(`${scene.name} — from a remote`);
 }
 
@@ -3315,6 +3351,10 @@ function wire() {
      * first thing anybody does after saving is keep tweaking.
      */
     applyScene(app.project, scene.id, { fade: 0 });
+    // The layers are where this scene came from a moment ago, so they already
+    // carry it — this says so, which is what stops the renderer overriding
+    // the very layers you go on to tweak. See `effectiveLayers`.
+    applySceneToLayers(app.project, scene.id);
     app.select({ type: 'scene', id: scene.id });
     app.commit();
     toast(`Saved as "${scene.name}"${hotkey ? ` — press ${hotkey} to recall it.` : '.'}`, 'good');
@@ -4071,7 +4111,7 @@ async function boot() {
    * hidden tab, which is plenty. It publishes nothing at all when no remote is
    * listening.
    */
-  setInterval(() => publishShowState(), 500);
+  setInterval(heartbeatShowState, 500);
 
   /**
    * Ask whoever is holding a pencil what is already on the wall.

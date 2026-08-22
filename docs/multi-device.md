@@ -86,13 +86,20 @@ controls spread out.
 `draw.html` on an iPad, with an Apple Pencil or a finger. What you draw is on
 the wall while the pencil is still moving.
 
-1. In the control tab, add the **Live drawing** effect and point it at a wall,
+1. Run `node server.mjs` on the machine driving the projectors, if it is not
+   already running — the tablet is a second device, so it needs the link
+   server. **Devices** in the control tab's top bar prints the address.
+2. In the control tab, add the **Live drawing** effect and point it at a wall,
    a window, or nothing at all — a layer with no targets covers the whole
    facade, which is usually what you want to draw on.
-2. Open the drawing address on the tablet. If there is no drawing layer yet the
+3. Open the drawing address on the tablet. If there is no drawing layer yet the
    page offers to ask the control tab for one, so you do not have to walk back
    indoors to press a button.
-3. Draw.
+4. Draw.
+
+There is nothing to switch on beyond that: the effect is in the **basic**
+category of the effect gallery, called **Live drawing**, and `draw.html` is
+served by the same server as everything else.
 
 The page shows the area you are drawing into as a dashed box, with the rest of
 the traced facade faint around it, so a window you are drawing on has the door

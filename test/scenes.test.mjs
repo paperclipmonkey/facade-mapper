@@ -315,5 +315,108 @@ console.log('\n— clicking a scene and pressing its key are the same thing —'
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * A scene you loaded is a starting point, not a cage
+ * ------------------------------------------------------------------ */
+
+console.log('\n— and a loaded scene lets go of the layers —');
+
+{
+  /**
+   * The switches have to work while a scene is up.
+   *
+   * A scene arrives one of two ways and they mean different things. A trigger
+   * or a playlist fires one *at* the layers — the values are applied at render
+   * time, every frame, and the project is deliberately left alone, or an
+   * evening of scares would slowly overwrite the show with the last scare. A
+   * person pressing a scene gets it copied *onto* the layers instead, so the
+   * inspector shows what is on the wall and editing works normally.
+   *
+   * The second kind used to keep being applied at render time as well, and the
+   * effect was a control surface with dead switches: turn a layer off, the
+   * project changes, the panel agrees, and the next frame puts the scene's own
+   * value back. Which layers it happened to was whichever ones the scene named,
+   * so a preset's captured look froze every switch and a hand-built one froze
+   * some — two scenes behaving differently for a reason nothing on screen could
+   * explain.
+   */
+  const project = traced();
+  applyPresets(project, ['halloween']);
+  const scene = project.scenes[0];
+  ok('the preset saved a whole-show scene', scene.full === true, `full: ${scene.full}`);
+
+  // Pressed by a person: activated, then loaded onto the layers.
+  activateScene(project, scene.id, { fade: 0 });
+  applySceneToLayers(project, scene.id);
+
+  const target = project.layers.find((l) => l.enabled !== false);
+  ok('something is on to turn off', !!target, target?.name);
+
+  target.enabled = false;
+  const afterOff = effectiveLayers(project).find((l) => l.id === target.id);
+  ok('turning a layer off while a loaded scene is up turns it off',
+    afterOff.enabled === false, `renderer says enabled: ${afterOff.enabled}`);
+
+  target.enabled = true;
+  const afterOn = effectiveLayers(project).find((l) => l.id === target.id);
+  ok('and turning it back on turns it back on', afterOn.enabled === true);
+
+  // The other direction: a parameter edit has to survive too, since the same
+  // override was replacing those.
+  const [first] = project.layers;
+  first.opacity = 0.25;
+  ok('and an opacity edit is not put back either',
+    effectiveLayers(project).find((l) => l.id === first.id).opacity === 0.25);
+}
+
+{
+  /**
+   * The other kind still holds, which is the half that must not regress: a
+   * trigger fires a scene without rewriting the project, so its values *are*
+   * the override, and they have to keep being applied.
+   */
+  const project = traced();
+  applyPresets(project, ['halloween']);
+  const scene = project.scenes[0];
+
+  activateScene(project, scene.id, { fade: 0 });    // as a trigger does: no load
+  const target = project.layers.find((l) => scene.state[l.id]?.enabled);
+  target.enabled = false;                            // somebody edits at the desk
+
+  ok('a scene fired by a trigger still overrides the layers',
+    effectiveLayers(project).find((l) => l.id === target.id).enabled === true,
+    'the project is left alone and the wall shows the scene');
+}
+
+{
+  /**
+   * And loading a scene does not break the crossfade, which is the thing the
+   * render-time override exists for. Half way through a fade the blend still
+   * has to run, whatever the layers now say.
+   */
+  const project = traced();
+  applyPresets(project, ['halloween', 'christmas']);
+  const [a, b] = project.scenes;
+
+  activateScene(project, a.id, { fade: 0 });
+  applySceneToLayers(project, a.id);
+  activateScene(project, b.id, { fade: 4 });
+  applySceneToLayers(project, b.id);
+
+  // Half way: `sceneChangeAt` is on the shared clock, so ask for a moment two
+  // seconds after it rather than waiting two seconds.
+  const half = project.show.sceneChangeAt + 2000;
+  const mid = effectiveLayers(project, half);
+  const ended = effectiveLayers(project, project.show.sceneChangeAt + 9000);
+
+  const faded = mid.filter((l) => (l.opacity ?? 1) > 0.001 && (l.opacity ?? 1) < 0.999);
+  ok('a crossfade still blends after the scene has been loaded',
+    faded.length > 0, `${faded.length} layers part way`);
+  ok('and once it is over the layers are back in charge',
+    ended.length === project.layers.length
+      && ended.every((l, i) => l === project.layers[i]),
+    'the same objects, not copies');
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');
 process.exit(failures ? 1 : 0);

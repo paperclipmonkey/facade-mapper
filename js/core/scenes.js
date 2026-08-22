@@ -49,6 +49,12 @@ export function captureScene(project) {
 export function applySceneToLayers(project, sceneId) {
   const scene = (project.scenes || []).find((s) => s.id === sceneId);
   if (!scene) return false;
+  /**
+   * And say so, because the renderer has to stop overriding once this has
+   * happened. See `effectiveLayers`.
+   */
+  const show = project.show || (project.show = {});
+  show.sceneLoaded = sceneId;
   for (const layer of project.layers) {
     const stored = scene.state?.[layer.id];
     // The same rule the renderer follows, so that clicking a scene and firing
@@ -142,6 +148,33 @@ export function effectiveLayers(project, at = now()) {
   if (!active) return project.layers;
 
   const f = transitionProgress(show, at);
+
+  /**
+   * The layers already *are* this scene, so there is nothing left to override.
+   *
+   * This is the difference between the two ways a scene arrives. A trigger or
+   * a playlist must not rewrite the project as it runs — an evening of scares
+   * would slowly overwrite the show with the last scare — so for those the
+   * stored values are applied here, at render time, every frame, for as long
+   * as the scene is up. A person pressing a scene, at the laptop or on the
+   * phone, gets it copied onto the layers instead, and after that this must
+   * get out of the way.
+   *
+   * It did not, and the result was a control surface with dead switches. Turn
+   * a layer off while a captured look was up and the switch moved, the project
+   * changed, the inspector agreed — and the wall did not, because every frame
+   * put the scene's own value back. Which layers were affected depended on
+   * whether the scene named them, so a preset's scene froze the lot and a
+   * hand-made one froze some: two scenes behaving differently for a reason
+   * nothing on screen could explain.
+   *
+   * Only once the crossfade is over. Until then the blend below is the whole
+   * point, and it runs off the two scenes' stored states rather than off the
+   * layers, so it is unaffected by them having been written to.
+   */
+  if (f >= 1 && show.sceneLoaded && show.sceneLoaded === show.activeScene) {
+    return project.layers;
+  }
   const out = [];
 
   for (const layer of project.layers) {
@@ -205,6 +238,12 @@ export function activateScene(project, sceneId, { fade } = {}) {
   show.activeScene = sceneId;
   show.fade = fade ?? scene.fade ?? 0;
   show.sceneChangeAt = now();
+  /**
+   * A scene that has just been activated has not been *loaded* — its values
+   * are not on the layers yet, and may never be. `applySceneToLayers` says
+   * when they are; a trigger or a playlist deliberately never calls it.
+   */
+  show.sceneLoaded = null;
   return show;
 }
 
