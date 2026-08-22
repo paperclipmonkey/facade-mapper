@@ -36,6 +36,8 @@ import {
   bellAt,
   strandLag,
   porpoise,
+  podPlacement,
+  stratum,
 } from '../js/effects/builtin/underwater.js';
 import { waterAbsorb, waterTransmission } from '../js/effects/color.js';
 import { getEffect, defaultParams } from '../js/effects/registry.js';
@@ -982,6 +984,88 @@ console.log('\n— dolphins —');
   ok('and the top of the leap is out of the water',
     onWall < wall.bbox.y + 0.2 * wall.bbox.h,
     `${((wall.bbox.y + 0.2 * wall.bbox.h) - onWall).toFixed(0)} px of air`);
+}
+
+{
+  /**
+   * A pod is several animals, not one drawn several times.
+   *
+   * Placing four dolphins with a free `rng()` each puts two of them on top of
+   * one another often enough to see it every evening — and when they are also
+   * a few thousandths of a cycle apart in their stroke, what is on the wall is
+   * unmistakably one dolphin with a small offset. So each animal is given its
+   * own band of the frame, of the cycle and of the depth, and jitters inside
+   * it: placed rather than ruled, but never coincident.
+   */
+  const bandsOf = (n, fill) => Array.from({ length: n }, (_, i) => {
+    const rng = makeRng(`band:${i}`);
+    return stratum(i, n, rng, fill);
+  });
+
+  for (const n of [2, 4, 8, 16]) {
+    const bands = bandsOf(n, 0.7);
+    let closest = Infinity;
+    for (let a = 1; a < bands.length; a++) closest = Math.min(closest, bands[a] - bands[a - 1]);
+    ok(`${n} of them never share a band`, closest > 0.25 / n,
+      `closest ${closest.toFixed(4)}, band ${(1 / n).toFixed(4)}`);
+  }
+
+  /**
+   * And the consequence, measured the way the eye measures it: the smallest
+   * gap between any two animals over a whole leap cycle, in body lengths.
+   * Before this was stratified it was 0.42 of a body length at the defaults.
+   */
+  const WORLD_H = 1080;
+  const closestApproach = (count, together) => {
+    const p = {
+      count, length: 3, speed: 210, leap: 1.1, between: 2.4, dive: 1,
+      together, metres: 14, surface: 0.08,
+    };
+    const perMetre = WORLD_H / p.metres;
+    const length = p.length * perMetre;
+    const spanX = 1920 + length * 2.5;
+    const pod = Array.from({ length: count }, (_, i) => {
+      const at = podPlacement(i, count, together, spanX, length);
+      return { ...at, len: length * at.scale };
+    });
+
+    const period = porpoise(0, p).period;
+    let worst = Infinity;
+    for (let n = 0; n <= 300; n++) {
+      const t = (n / 300) * period;
+      const at = pod.map((d) => {
+        const swim = porpoise(t, p, d.phase);
+        return {
+          d,
+          x: d.x0 + t * p.speed,
+          y: p.surface * WORLD_H + (swim.z + d.lane * Math.min(1, Math.max(0, swim.z))) * perMetre,
+        };
+      });
+      for (let a = 0; a < at.length; a++) {
+        for (let b = a + 1; b < at.length; b++) {
+          const gap = Math.hypot(at[a].x - at[b].x, at[a].y - at[b].y)
+            / Math.max(at[a].d.len, at[b].d.len);
+          worst = Math.min(worst, gap);
+        }
+      }
+    }
+    return worst;
+  };
+
+  const atDefaults = closestApproach(4, 0.7);
+  ok('at the defaults no two of them are ever within a body length',
+    atDefaults > 1, `closest approach ${atDefaults.toFixed(2)} body lengths`);
+
+  let worstAnywhere = Infinity;
+  let worstAt = '';
+  for (const count of [2, 3, 4, 6, 8]) {
+    for (const together of [0, 0.25, 0.5, 0.7, 0.9, 1]) {
+      const gap = closestApproach(count, together);
+      if (gap < worstAnywhere) { worstAnywhere = gap; worstAt = `${count} at together ${together}`; }
+    }
+  }
+  ok('and that holds across the pod size and the formation slider',
+    worstAnywhere > 0.8, `worst ${worstAnywhere.toFixed(2)} body lengths, with ${worstAt}`);
 }
 
 {

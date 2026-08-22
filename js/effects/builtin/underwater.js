@@ -1828,6 +1828,60 @@ function melon(u) {
   return 0.3 * Math.exp(-(((u - 0.215) / 0.115) ** 2));
 }
 
+/**
+ * A place for animal `i` of `n`, in 0..1, jittered inside its own band.
+ *
+ * The point is the *gap*. A free `rng()` per animal is at liberty to land on
+ * top of the last one, and at four animals it does so often — which does not
+ * read as coincidence, it reads as one animal drawn twice. Giving each its own
+ * band and letting it move within `fill` of it keeps a guaranteed `1 − fill`
+ * of a band between any two, while still looking placed rather than ruled.
+ */
+export function stratum(i, n, rng, fill) {
+  return (i + (1 - fill) / 2 + rng() * fill) / Math.max(1, n);
+}
+
+/**
+ * Where animal `i` of a pod of `count` starts, and how it differs from the
+ * rest of them.
+ *
+ * Exported because it is the whole of what makes a pod read as several animals
+ * rather than one drawn a few times, and a test that reconstructs it is
+ * testing its own copy of it.
+ *
+ * All three of position, stroke phase and depth are stratified — see
+ * `stratum`. Drawn freely they collide, and they did: at the defaults two of
+ * the four sat four tenths of a body length apart with their leap phases five
+ * thousandths of a cycle apart, which is not two dolphins passing, it is one
+ * dolphin with a small offset.
+ *
+ * `together` then chooses between two arrangements that are *both* well
+ * spread: at 1 an echelon a couple of body lengths apart with the leap running
+ * down it as a wave, which is what a porpoising pod looks like; at 0, spread
+ * across the frame and completely out of phase with one another.
+ */
+export function podPlacement(i, count, together, spanX, length) {
+  const rng = makeRng(`dolphins:pod:${i}`);
+  const tight = clamp(together, 0, 1);
+  return {
+    x0: lerp(
+      stratum(i, count, rng, 0.7) * spanX,
+      i * length * 2.1 + rng() * length * 0.4,
+      tight
+    ),
+    /**
+     * A whole cycle apart when they are strangers, a tenth of one when they
+     * are a pod: near enough to surface together, far enough that no two are
+     * ever in the same posture.
+     */
+    phase: (stratum(i, count, rng, 0.6) * lerp(1, 0.12, tight)) % 1,
+    scale: 0.78 + rng() * 0.44,
+    /** Its own cruising depth in metres, faded in below the surface by `draw`. */
+    lane: stratum(i, count, rng, 0.8) * 1.8,
+    tint: rng(),
+  };
+}
+
 /** `v` brought into one span, offset to start at `from`. */
 function wrapped(v, span, from) {
   return from + (((v % span) + span) % span);
@@ -1926,19 +1980,8 @@ const dolphins = {
     g.clip(shape.path);
 
     for (let i = 0; i < count; i++) {
-      const rng = makeRng(`dolphins:${shape.id}:${i}`);
-      /**
-       * A pod, not a scatter. At `together` = 1 they run in an echelon a body
-       * length apart and surface as one, which is what a pod actually looks
-       * like; at 0 they are strangers who happen to share a wall.
-       */
-      const tight = clamp(p.together, 0, 1);
-      const loose = 1 - tight;
-      const x0 = rng() * spanX * loose + i * length * 1.9 * tight;
-      const phase = (rng() * loose + i * 0.04) % 1;
-      const scale = 0.78 + rng() * 0.44;
-      const lane = rng() * 1.5;
-      const tint = rng();
+      const { x0, phase, scale, lane, tint } =
+        podPlacement(i, count, p.together, spanX, length);
 
       const L = length * scale;
       const swim = porpoise(t, p, phase);
