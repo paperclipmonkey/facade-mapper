@@ -846,8 +846,27 @@ const SUNKEN = () => [
         needsTag: 'wall',
         params: {
           ...water, color: '#2c6f8c', belly: '#e2f7ff', count: 46, size: 26,
-          speed: 175, cohesion: 0.8, alignment: 1.1, separation: 1, wander: 0.65,
+          species: 'mixed', speed: 175, cohesion: 0.8, alignment: 1.1,
+          separation: 1, wander: 0.65,
           obstacles: 'window, door', startle: 0.3, flash: 1.2,
+        },
+      }),
+      /**
+       * A pod over the roofline, and up there on purpose.
+       *
+       * The surface of this show is at 0.045 — just under the top of the frame
+       * — so the one place anything can break it is the strip of sky above the
+       * chimneys. Which turns out to be the best thing in the look: everything
+       * else is a house that has gone under, and the dolphins are the only
+       * part of the picture that can still get out.
+       */
+      layer('dolphins', {
+        name: 'A pod over the roofline',
+        opacity: 0.95,
+        params: {
+          ...water, anchor: 'frame', color: '#2b4756', belly: '#eaf6fd',
+          count: 4, length: 2.6, speed: 190, leap: 0.75, between: 3.2,
+          dive: 1.4, together: 0.75, strouhal: 0.3, spray: 1.1, level: 1,
         },
       }),
       layer('jellyfish', {

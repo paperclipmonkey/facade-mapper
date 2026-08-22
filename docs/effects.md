@@ -578,10 +578,11 @@ this one puts it fourteen metres down.
 | **Kelp** | Weed rooted along the bottom edge of a shape, thrashing at the tip and still at the holdfast. |
 | **Bubbles** | Rising out of the brickwork, zigzagging, swelling, and collecting under any sill they meet. |
 | **Jellyfish** | Bells pulsing up the wall, trailing tentacles that follow where the bell has been. |
+| **Dolphins** | A pod crossing the wall and porpoising through the surface, on the ballistics that go with the height you asked for. |
 
-All six take the same three parameters — **Surface at**, **Metres top to
+All seven take the same three parameters — **Surface at**, **Metres top to
 bottom** and **Murkiness** — and that is not repetition, it is the mechanism.
-They are what makes six independent effects agree about one body of water. Set
+They are what makes seven independent effects agree about one body of water. Set
 the surface once and the shafts arrive at the height the waterline is drawn at,
 the kelp sways hardest where the shafts are brightest, and a jellyfish at the
 eaves is tinted for the depth it is actually at. Change one layer's and the look
@@ -644,9 +645,48 @@ a second. That silver flicker running through a shoal as it changes direction is
 the most recognisable thing a shoal does, and it comes out of one term keyed to
 the turn rate.
 
+**A fish's shape is a choice, and Shoal's Body plan is that choice.** Fast open
+water wants a fusiform body and a deeply forked tail — a long thin foil that
+shed little energy sideways, superb over distance and hopeless at turning. A
+reef wants the opposite: a deep disc with a rounded paddle, which cannot cruise
+and can pivot inside its own length, because the food and the thing eating you
+are both one body length away. So the three plans differ in how fast they
+cruise as well as in outline, and `mixed` gives you all three in one shoal —
+without that, three silhouettes swimming at one speed are three costumes.
+
+**Porpoising is economy, not showing off.** A body moving at the surface makes
+waves, and wave drag there runs to several times the drag on the same body a
+couple of diameters down — so above a threshold speed the cheapest way to
+breathe is to leave the water entirely, and that is why fast dolphins leap and
+slow ones do not. The arc is not a shape chosen to look like a leap: it is
+constant gravity, with the hang time `2√(2H/g)` that goes with the height. Ask
+for twice the height and the animal stays up √2 times as long, enters at
+`√(2gH)` nose down at the same angle it left nose up, and throws spray that is
+itself on the same ballistics. **Leap height** and **Extra dive** are in metres,
+like everything else here, and so is **Length** — a three metre animal in
+fourteen metres of water is the right size for that water however big the wall
+is.
+
+**And the beat rate is not a slider.** St = fA/U — beat frequency times fluke
+amplitude over speed — comes out between about 0.2 and 0.4 in dolphins, sharks,
+tuna, bats and hummingbirds alike, because that is the band in which a flapping
+foil sheds its vortices in the arrangement that makes thrust. So **Strouhal
+number** is the parameter and the frequency is a consequence: tell a dolphin to
+swim faster and it beats faster, by exactly the right amount, with nothing tied
+together by hand. The flukes are horizontal, too, and beat up and down rather
+than side to side, because a whale is a land mammal that went back and the spine
+it took with it bends that way. It is the one silhouette cue that says mammal.
+
 Point Shoal, Kelp and Bubbles at the shape tagged `wall` and tell them the
 windows are solid, exactly as with the [facade effects](#effects-that-know-where-the-windows-are)
 above. Waterline, Shafts and Jellyfish want the whole frame.
+
+Waterline and Dolphins both draw *at* the surface rather than reading depth off
+it, so both carry **Surface measured from**. On `auto` — the default — a layer
+covering the whole frame measures the height from the frame, and one pointed at
+a traced shape measures it inside that shape, so half way down means half way
+down the thing you aimed it at. Force it to `frame` when the waterline and the
+pod have to agree with the shafts to the metre.
 
 This is a starter preset like the rest, with its own demo:
 [under the sea](https://paperclipmonkey.github.io/facade-mapper/?demo=sunken).

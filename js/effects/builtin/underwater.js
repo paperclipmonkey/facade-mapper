@@ -80,6 +80,52 @@ const SURFACE_PARAMS = [
   { key: 'turbidity', type: 'range', label: 'Murkiness', default: 1.3, min: 0.2, max: 6, step: 0.05 },
 ];
 
+/**
+ * What `Surface at` is a fraction *of*.
+ *
+ * Most of this set reads depth off the whole frame, which is what makes the
+ * effects agree about one body of water — and for the ones that read depth as
+ * a gradient it is invisible, because being a little off changes nothing you
+ * can see.
+ *
+ * The effects that draw *at* the surface are the exception: a waterline is a
+ * line and a leaping dolphin is a splash, and both have to land somewhere
+ * specific. Measured against the frame and pointed at a wall traced across the
+ * middle of the picture, the default puts the surface above that wall,
+ * everything below it gets clipped away, and the effect appears not to work at
+ * all — which is exactly what it looked like. The value that would have worked
+ * was findable by dragging, and nothing said so.
+ *
+ * `auto` is the answer for both cases without anybody having to know: a layer
+ * covering the whole frame measures from the frame, and one pointed at a shape
+ * measures inside that shape, so half way down means half way down *the thing
+ * you aimed it at*. `frame` and `shape` force it, and `frame` is the one to
+ * pick when the surface has to agree with the shafts and the kelp to the metre.
+ */
+const ANCHOR_PARAM = {
+  key: 'anchor',
+  type: 'select',
+  label: 'Surface measured from',
+  default: 'auto',
+  options: ['auto', 'frame', 'shape'],
+};
+
+/**
+ * The surface height as a fraction of the *frame*, whatever `p.anchor` says it
+ * was a fraction of to begin with — so `depthAt` keeps working in world metres
+ * and the colour stays physical either way.
+ *
+ * The frame shape is the stand-in the renderer substitutes for a layer with no
+ * targets, and its id is the one reliable way to tell "this covers everything"
+ * from "this was aimed at something".
+ */
+export function surfaceFraction(p, shape, world) {
+  const anchored = p.anchor === 'shape'
+    || (p.anchor !== 'frame' && shape.id !== '__frame__');
+  if (!anchored) return p.surface ?? 0;
+  return (shape.bbox.y + (p.surface ?? 0) * shape.bbox.h) / Math.max(1, world.h);
+}
+
 /** Metres of water above a world-pixel `y`. Never negative — air is not water. */
 function depthAt(p, y, world) {
   return Math.max(0, (y / Math.max(1, world.h) - (p.surface ?? 0)) * (p.metres ?? 14));
@@ -335,30 +381,7 @@ const waterline = {
      */
     ...SURFACE_PARAMS.map((param) =>
       (param.key === 'surface' ? { ...param, default: 0.08 } : param)),
-    /**
-     * What `Surface at` is a fraction *of*.
-     *
-     * Everything else in this set reads depth off the whole frame, which is
-     * what makes six effects agree about one body of water — and for five of
-     * them that is invisible, because they read depth as a gradient and being
-     * a little off changes nothing you can see.
-     *
-     * The waterline is the exception: it draws a *line*, and a line has to
-     * land somewhere specific. Measured against the frame and pointed at a
-     * wall traced across the middle of the picture, the default puts the
-     * surface above that wall, everything but the wash gets clipped away, and
-     * the effect appears not to work at all — which is exactly what it looked
-     * like. The value that would have worked was findable by dragging, and
-     * nothing said so.
-     *
-     * `auto` is the answer for both cases without anybody having to know: a
-     * layer covering the whole frame measures from the frame, and one pointed
-     * at a shape measures inside that shape, so half way down means half way
-     * down *the thing you aimed it at*. `frame` and `shape` force it, and
-     * `frame` is the one to pick when the waterline has to agree with the
-     * shafts and the kelp to the metre.
-     */
-    { key: 'anchor', type: 'select', label: 'Surface measured from', default: 'auto', options: ['auto', 'frame', 'shape'] },
+    ANCHOR_PARAM,
     { key: 'body', type: 'range', label: 'Water', default: 0.55, min: 0, max: 1.5, step: 0.01 },
     { key: 'wave', type: 'range', label: 'Wave height (cm)', default: 22, min: 0, max: 200, step: 1 },
     { key: 'wavelength', type: 'range', label: 'Wavelength (m)', default: 5, min: 0.5, max: 40, step: 0.1 },
@@ -384,24 +407,12 @@ const waterline = {
      */
     const tide = Math.sin((t * TAU) / Math.max(1, p.tidePeriod)) * p.tide * world.h;
 
-    /**
-     * Where the surface actually is, and the depth everything below it is at.
-     *
-     * `water` is `p` with the surface rewritten as a fraction of the frame,
-     * whatever it was a fraction of to begin with — so `depthAt` below keeps
-     * working in world metres and the colour stays physical either way. The
-     * frame shape is the stand-in the renderer substitutes for a layer with no
-     * targets, and its id is the one reliable way to tell "this covers
-     * everything" from "this was aimed at something".
-     */
-    const anchored = p.anchor === 'shape'
-      || (p.anchor !== 'frame' && shape.id !== '__frame__');
-    const surfaceFraction = anchored
-      ? (bbox.y + (p.surface ?? 0) * bbox.h) / Math.max(1, world.h)
-      : (p.surface ?? 0);
-    const water = anchored ? { ...p, surface: surfaceFraction } : p;
+    // Where the surface actually is — see `surfaceFraction` — and `p` rewritten
+    // so `depthAt` below keeps reading it as a fraction of the frame.
+    const fraction = surfaceFraction(p, shape, world);
+    const water = fraction === p.surface ? p : { ...p, surface: fraction };
 
-    const baseY = surfaceFraction * world.h + tide;
+    const baseY = fraction * world.h + tide;
     const amplitude = (p.wave / 100) * pixelsPerMetre;
 
     const left = bbox.x;
@@ -571,6 +582,35 @@ function angleDelta(from, to) {
   return d;
 }
 
+/**
+ * Three body plans, and the trade-off they are three points on.
+ *
+ * A fish's shape is a choice between going fast in a straight line and turning
+ * on the spot, and you can read which one it made off the silhouette. A
+ * sardine is fusiform with a deeply forked tail — a high-aspect-ratio foil, low
+ * induced drag, superb cruising, and it turns like a bus. An angelfish is a
+ * disc with a rounded paddle: hopeless over distance, and it can pivot inside
+ * its own length, which is what you want among coral heads where the food is a
+ * body length away and so is the thing eating you. Reef fish sit in between.
+ *
+ * So `cruise` is not decoration either. A deep-bodied fish in the same shoal
+ * as a sardine, swimming at the same speed, is the tell that these are three
+ * paint jobs rather than three animals.
+ */
+const SPECIES = {
+  sardine: { depth: 0.28, fork: 1, dorsal: 0.5, cruise: 1, bars: 0 },
+  reef: { depth: 0.46, fork: 0.5, dorsal: 0.8, cruise: 0.82, bars: 0.55 },
+  angelfish: { depth: 0.78, fork: 0.05, dorsal: 1.1, cruise: 0.62, bars: 0.9 },
+};
+const SPECIES_NAMES = Object.keys(SPECIES);
+
+/** Which body plan fish `tint` has, given the layer's setting. */
+function speciesFor(choice, tint) {
+  if (choice && choice !== 'mixed' && SPECIES[choice]) return SPECIES[choice];
+  return SPECIES[SPECIES_NAMES[Math.min(SPECIES_NAMES.length - 1,
+    Math.floor(tint * SPECIES_NAMES.length))]];
+}
+
 const shoal = {
   id: 'shoal',
   name: 'Shoal',
@@ -583,6 +623,7 @@ const shoal = {
     { key: 'belly', type: 'color', label: 'Flank', default: '#dff6ff' },
     { key: 'count', type: 'range', label: 'Fish', default: 42, min: 1, max: 90, step: 1 },
     { key: 'size', type: 'range', label: 'Length', default: 30, min: 6, max: 180, step: 1 },
+    { key: 'species', type: 'select', label: 'Body plan', default: 'mixed', options: ['mixed', ...SPECIES_NAMES] },
     { key: 'speed', type: 'range', label: 'Speed', default: 190, min: 20, max: 900, step: 5 },
     { key: 'cohesion', type: 'range', label: 'Cohesion', default: 0.7, min: 0, max: 2, step: 0.01 },
     { key: 'alignment', type: 'range', label: 'Alignment', default: 1, min: 0, max: 2, step: 0.01 },
@@ -775,13 +816,18 @@ const shoal = {
       f.vx += f.ax * dt;
       f.vy += f.ay * dt;
 
+      // A deep-bodied fish holding station beside a sardine at the same speed
+      // is the tell that these are three paint jobs rather than three animals.
+      const cruise = speciesFor(p.species, f.tint).cruise;
+      const top = maxSpeed * cruise;
+      const floor = minSpeed * cruise;
       const sp = Math.hypot(f.vx, f.vy);
-      if (sp > maxSpeed) {
-        f.vx *= maxSpeed / sp;
-        f.vy *= maxSpeed / sp;
-      } else if (sp < minSpeed && sp > 1e-6) {
-        f.vx *= minSpeed / sp;
-        f.vy *= minSpeed / sp;
+      if (sp > top) {
+        f.vx *= top / sp;
+        f.vy *= top / sp;
+      } else if (sp < floor && sp > 1e-6) {
+        f.vx *= floor / sp;
+        f.vy *= floor / sp;
       }
 
       f.x += f.vx * dt;
@@ -832,9 +878,20 @@ const shoal = {
     g.clip(shape.path);
 
     for (const f of state.fish) {
+      const kind = speciesFor(p.species, f.tint);
       const len = size * f.scale;
       const half = len * 0.5;
-      const body = len * 0.3;
+      const body = len * kind.depth;
+      /**
+       * How deep the drawn outline actually is.
+       *
+       * `body` is the control point of the curve that makes the flank, and a
+       * quadratic passes nowhere near its control point — the silhouette peaks
+       * at a little over half of it. Anything that has to sit *on* the fish
+       * rather than stick out of it needs this number, and using `body` puts
+       * bars and fins in the water beside the animal.
+       */
+      const rim = body * 0.5;
       const angle = Math.atan2(f.vy, f.vx);
       const metres = depthAt(p, f.y, world);
 
@@ -854,12 +911,18 @@ const shoal = {
 
       g.globalCompositeOperation = 'lighter';
 
-      // Tail fin, hinged at the peduncle.
+      /**
+       * Tail fin, hinged at the peduncle, forked as deeply as the body plan
+       * says. The fork is the aspect ratio: a deep one is a long thin foil
+       * that sheds little energy sideways and drives a cruiser; a rounded
+       * paddle is a low-aspect-ratio blade that is inefficient and can throw a
+       * lot of water in one stroke, which is how a reef fish leaves.
+       */
       g.fillStyle = rgba(back, 0.75);
       g.beginPath();
       g.moveTo(-half * 0.55, 0);
       g.lineTo(-half * 1.15, -body * (0.75 - bend));
-      g.lineTo(-half * 0.95, 0);
+      g.lineTo(-half * (0.95 - 0.28 * (1 - kind.fork)), 0);
       g.lineTo(-half * 1.15, body * (0.75 + bend));
       g.closePath();
       g.fill();
@@ -881,11 +944,26 @@ const shoal = {
       // Dorsal, and a pectoral that sculls opposite the tail.
       g.fillStyle = rgba(back, 0.55);
       g.beginPath();
-      g.moveTo(half * 0.1, -body * 0.85);
-      g.lineTo(-half * 0.35, -body * 1.45);
-      g.lineTo(-half * 0.5, -body * 0.7);
+      g.moveTo(half * 0.3, -rim * 0.85);
+      g.lineTo(-half * 0.15, -(rim + half * 0.22 * kind.dorsal));
+      g.lineTo(-half * 0.55, -rim * 0.7);
       g.closePath();
       g.fill();
+      /**
+       * And, on the deep-bodied ones, the anal fin that mirrors it.
+       *
+       * A tall dorsal on its own reads as a sailfish. The pair — one above,
+       * one below, both swept back — is what makes the outline a disc with
+       * points on it, which is the thing anybody recognises as a reef fish.
+       */
+      if (kind.dorsal > 0.7) {
+        g.beginPath();
+        g.moveTo(half * 0.05, rim * 0.85);
+        g.lineTo(-half * 0.28, rim + half * 0.15 * kind.dorsal);
+        g.lineTo(-half * 0.55, rim * 0.7);
+        g.closePath();
+        g.fill();
+      }
       g.beginPath();
       g.moveTo(half * 0.05, body * 0.3);
       g.lineTo(-half * 0.3, body * (0.9 - bend * 0.6));
@@ -904,6 +982,33 @@ const shoal = {
         g.moveTo(half * 0.55, -body * 0.05);
         g.lineTo(-half * 0.4, body * 0.05);
         g.stroke();
+      }
+
+      /**
+       * Bars, on the deep-bodied ones only.
+       *
+       * Vertical banding is disruptive camouflage and it is a reef pattern for
+       * a reason: it works against a background of vertical structure, and it
+       * breaks up a shape that is otherwise a large conspicuous disc. Open
+       * water has no vertical structure to hide against, which is why a
+       * sardine is a plain mirror instead.
+       */
+      if (kind.bars > 0) {
+        g.fillStyle = rgba(back, kind.bars * 0.45);
+        const wide = half * 0.05;
+        for (let b = -1; b <= 1; b++) {
+          const at = half * (0.05 + b * 0.3);
+          // Kept inside the outline by the body's own profile, so a bar on a
+          // disc is a band across it rather than a stick through it.
+          const tall = rim * 0.92 * Math.min(1, (half - at) / (half * 0.6));
+          g.beginPath();
+          g.moveTo(at - wide, -tall);
+          g.lineTo(at + wide, -tall);
+          g.lineTo(at + wide - half * 0.05, tall);
+          g.lineTo(at - wide - half * 0.05, tall);
+          g.closePath();
+          g.fill();
+        }
       }
 
       // Eye. One dot, and the fish stops being a leaf.
@@ -1605,4 +1710,445 @@ const jellyfish = {
   },
 };
 
-export default [godrays, waterline, shoal, bubbles, kelp, jellyfish];
+/* ------------------------------------------------------------------ *
+ * Dolphins
+ * ------------------------------------------------------------------ */
+
+/**
+ * The Strouhal number, and why a dolphin does not get a "tail speed" slider.
+ *
+ * St = fA/U — beat frequency times peak-to-peak fluke amplitude, over swimming
+ * speed. Measure it across dolphins, sharks, tuna, bats, hummingbirds and
+ * moths and it comes out between about 0.2 and 0.4 in every one of them,
+ * because that is the band in which a flapping foil sheds its vortices in the
+ * arrangement that produces thrust efficiently. It is one of the few numbers
+ * in biomechanics that is genuinely universal.
+ *
+ * So the beat is not a parameter here, it is a *consequence*: pick the speed
+ * and the animal's length, and the frequency follows. Which is also the reason
+ * a dolphin speeding up looks right — it beats faster, exactly as fast as it
+ * has to, and nobody had to tie two sliders together by hand.
+ */
+const STROUHAL = 0.3;
+
+/**
+ * Fluke amplitude as a fraction of body length — peak to peak, tip to tip of
+ * the stroke. About a fifth, across the range of animals the number above was
+ * measured in.
+ */
+const FLUKE_AMPLITUDE = 0.2;
+
+/**
+ * Porpoising: the vertical motion of one animal, in metres, over its cycle.
+ *
+ * Leaving the water is not showing off, it is economy. A body swimming at the
+ * surface makes waves, and wave drag at the surface runs to several times the
+ * drag on the same body a couple of diameters down. Above a threshold speed
+ * the cheapest way to breathe is therefore to leave entirely — a ballistic
+ * hop, during which the drag is that of air and the propulsion bill is zero —
+ * and that is why fast dolphins porpoise and slow ones do not.
+ *
+ * So the airborne arc here is not a shape chosen to look like a leap; it is
+ * `−4H·s(1−s)`, which is what constant gravity gives, with the hang time
+ * `2√(2H/g)` that goes with the height. Ask for twice the height and the
+ * animal stays up √2 times as long, all by itself.
+ *
+ * The submerged half is a Hermite whose end slopes are the entry and launch
+ * speeds `√(2gH)`, so the vertical velocity is continuous through the surface
+ * in both directions — it enters as fast as it left, nose down at the angle it
+ * went up at. The `dive` term on top is the only part anybody chose.
+ *
+ * Returns depth in metres, positive downwards, with `vz` its rate.
+ */
+export function porpoise(t, p, phase = 0) {
+  const height = Math.max(0, p.leap ?? 0);
+  const tAir = height > 0 ? 2 * Math.sqrt((2 * height) / G) : 0;
+  const tUnder = Math.max(0.05, p.between ?? 2.6);
+  const period = tAir + tUnder;
+  const q = ((((t / period + phase) % 1) + 1) % 1) * period;
+
+  if (q < tAir) {
+    const s = q / tAir;
+    return {
+      z: -4 * height * s * (1 - s),
+      vz: (-4 * height * (1 - 2 * s)) / tAir,
+      airborne: true,
+      q, period, tAir, tUnder,
+    };
+  }
+
+  const w = (q - tAir) / tUnder;
+  const entry = Math.sqrt(2 * G * height);
+  const dive = Math.max(0, p.dive ?? 0);
+  const sink = Math.sin(Math.PI * w);
+  return {
+    z: entry * tUnder * w * (1 - w) + dive * sink * sink,
+    vz: entry * (1 - 2 * w) + (dive * Math.PI * Math.sin(TAU * w)) / tUnder,
+    airborne: false,
+    q, period, tAir, tUnder,
+  };
+}
+
+/**
+ * The girth of a cetacean at `u` along it, nose at 0 and peduncle at 1, as a
+ * fraction of its deepest.
+ *
+ * Fusiform, and widest about two fifths of the way back — the shape that keeps
+ * the flow attached the whole length of the body. Widest at the middle, which
+ * is the obvious thing to draw, reads as a seal; widest at the shoulder reads
+ * as a fish. It does not taper to a point either: the peduncle carries a fifth
+ * of the maximum, because there is a spine and a lot of muscle in it, and it
+ * is the bit doing the work.
+ */
+function girth(u) {
+  const b = clamp((u - 0.115) / 1.13, 0, 1);
+  return Math.pow(Math.sin(Math.PI * Math.pow(b, 0.55)), 1.5);
+}
+
+/**
+ * The beak, which the girth profile above starts too far back to include.
+ *
+ * Roughly a tenth of the animal, and near enough parallel-sided rather than
+ * tapering to a point — a bottlenose's jaw is a stubby thing with teeth in it,
+ * not a bill. It fades out across the same span the head swells over, so the
+ * two add to a continuous line instead of pinching in between.
+ */
+function rostrum(u) {
+  return 0.3 * (1 - smoothstep(0.04, 0.22, u));
+}
+
+/**
+ * The melon: the fatty acoustic lens over the forehead, dorsal side only.
+ *
+ * It is the reason a dolphin's head is a dome and its jaw is a beak, and
+ * leaving it off is most of the difference between a dolphin and a small
+ * whale — or, with the beak still on, a fish.
+ */
+function melon(u) {
+  return 0.3 * Math.exp(-(((u - 0.215) / 0.115) ** 2));
+}
+
+/** `v` brought into one span, offset to start at `from`. */
+function wrapped(v, span, from) {
+  return from + (((v % span) + span) % span);
+}
+
+/** Scratch for one body outline. Module-level so `draw` allocates nothing. */
+const BODY_SEGMENTS = 22;
+const bodyCx = new Float64Array(BODY_SEGMENTS + 1);
+const bodyCy = new Float64Array(BODY_SEGMENTS + 1);
+const bodyUp = new Float64Array(BODY_SEGMENTS + 1);
+const bodyDn = new Float64Array(BODY_SEGMENTS + 1);
+
+/**
+ * Spray, thrown on real ballistics from a point on the surface.
+ *
+ * Droplets leave at the speed the animal arrived with, and then they are
+ * simply projectiles: the same `g` the leap used, so the water that comes off
+ * a big leap hangs in the air longer than the water off a small one without
+ * anything being told to.
+ */
+function splash(g, x, y, age, life, spread, speed, gPx, colour, strength, key) {
+  if (age < 0 || age >= life || strength <= 0) return;
+  const rng = makeRng(key);
+  const fade = 1 - age / life;
+  g.fillStyle = rgba(colour, clamp(fade * fade * strength, 0, 1));
+  for (let i = 0; i < 18; i++) {
+    const a = -Math.PI / 2 + (rng() - 0.5) * spread;
+    const v = speed * (0.35 + rng() * 1.15);
+    const dx = Math.cos(a) * v * age;
+    const dy = Math.sin(a) * v * age + 0.5 * gPx * age * age;
+    const r = Math.max(0.5, speed * 0.012 * (0.4 + rng()));
+    g.beginPath();
+    g.arc(x + dx, y + dy, r, 0, TAU);
+    g.fill();
+  }
+}
+
+const dolphins = {
+  id: 'dolphins',
+  name: 'Dolphins',
+  category: 'underwater',
+  scope: 'shape',
+  description:
+    'A pod crossing the wall, porpoising through the surface on real ballistics — the hang time is the one that goes with the height — and beating their flukes up and down at whatever rate keeps their Strouhal number where every swimming animal keeps it.',
+  params: [
+    { key: 'color', type: 'color', label: 'Back', default: '#2b4756' },
+    { key: 'belly', type: 'color', label: 'Belly', default: '#eaf6fd' },
+    { key: 'count', type: 'range', label: 'Pod', default: 4, min: 1, max: 16, step: 1 },
+    /**
+     * Length in metres, not pixels, because everything else about this effect
+     * already is — the leap, the dive, the depth the colour is read off. A
+     * three metre animal in fourteen metres of water is the right size for
+     * that water however big the wall is, and the alternative is a slider
+     * somebody has to re-find every time the scale of the show changes.
+     */
+    { key: 'length', type: 'range', label: 'Length (m)', default: 3, min: 0.4, max: 14, step: 0.1 },
+    { key: 'speed', type: 'range', label: 'Speed', default: 210, min: -800, max: 800, step: 5 },
+    { key: 'leap', type: 'range', label: 'Leap height (m)', default: 1.1, min: 0, max: 6, step: 0.05 },
+    { key: 'between', type: 'range', label: 'Seconds under', default: 2.4, min: 0.2, max: 20, step: 0.1 },
+    { key: 'dive', type: 'range', label: 'Extra dive (m)', default: 1, min: 0, max: 20, step: 0.1 },
+    { key: 'together', type: 'range', label: 'Formation', default: 0.7, min: 0, max: 1, step: 0.01 },
+    { key: 'strouhal', type: 'range', label: 'Strouhal number', default: STROUHAL, min: 0.12, max: 0.6, step: 0.005 },
+    { key: 'spray', type: 'range', label: 'Spray', default: 1, min: 0, max: 3, step: 0.05 },
+    { key: 'level', type: 'range', label: 'Brightness', default: 1, min: 0, max: 3, step: 0.05 },
+    ...SURFACE_PARAMS.map((param) =>
+      (param.key === 'surface' ? { ...param, default: 0.08 } : param)),
+    ANCHOR_PARAM,
+  ],
+  draw({ g, p, shape, t, world }) {
+    const { bbox } = shape;
+    if (bbox.w <= 2 || bbox.h <= 2 || p.level <= 0) return;
+
+    const fraction = surfaceFraction(p, shape, world);
+    const water = fraction === p.surface ? p : { ...p, surface: fraction };
+    const pixelsPerMetre = Math.max(1, world.h) / Math.max(1, p.metres || 14);
+    const surfacePx = fraction * world.h;
+    const gPx = G * pixelsPerMetre;
+
+    const count = Math.max(1, Math.round(p.count));
+    const length = Math.max(6, p.length * pixelsPerMetre);
+    const facing = p.speed < 0 ? -1 : 1;
+    const spanX = bbox.w + length * 2.5;
+
+    /**
+     * The beat rate, from the Strouhal number rather than from a slider.
+     *
+     * Phase is taken from the *horizontal* speed only, which is constant, so
+     * it advances smoothly through a leap. The vertical motion changes the
+     * animal's speed through the water by a few per cent over a cycle; letting
+     * that into the phase would buy nothing visible and cost continuity.
+     */
+    const amplitude = FLUKE_AMPLITUDE * length;
+    const beatHz = (p.strouhal * Math.abs(p.speed)) / Math.max(1, amplitude);
+
+    g.save();
+    g.clip(shape.path);
+
+    for (let i = 0; i < count; i++) {
+      const rng = makeRng(`dolphins:${shape.id}:${i}`);
+      /**
+       * A pod, not a scatter. At `together` = 1 they run in an echelon a body
+       * length apart and surface as one, which is what a pod actually looks
+       * like; at 0 they are strangers who happen to share a wall.
+       */
+      const tight = clamp(p.together, 0, 1);
+      const loose = 1 - tight;
+      const x0 = rng() * spanX * loose + i * length * 1.9 * tight;
+      const phase = (rng() * loose + i * 0.04) % 1;
+      const scale = 0.78 + rng() * 0.44;
+      const lane = rng() * 1.5;
+      const tint = rng();
+
+      const L = length * scale;
+      const swim = porpoise(t, p, phase);
+      /**
+       * Its own cruising depth, faded in below the surface.
+       *
+       * A pod is not a line of animals at one depth — but an offset applied
+       * flat would either lift somebody permanently into the air or stop
+       * somebody else ever breaking the surface, and both are worse than the
+       * problem. Fading it in over the first metre keeps every animal's
+       * surfacing exact and still puts them on different levels underneath.
+       */
+      const depthM = swim.z + lane * clamp(swim.z, 0, 1);
+
+      const unwrappedX = x0 + t * p.speed;
+      const x = wrapped(unwrappedX, spanX, bbox.x - length * 1.25);
+      const y = surfacePx + depthM * pixelsPerMetre;
+      if (
+        x < bbox.x - L || x > bbox.x + bbox.w + L
+        || y < bbox.y - L * 2 || y > bbox.y + bbox.h + L
+      ) continue;
+
+      const metres = depthAt(water, y, world);
+      const back = waterAbsorb(mixHex(p.color, p.belly, tint * 0.12), metres, p.turbidity);
+      const belly = waterAbsorb(p.belly, metres, p.turbidity);
+      const alpha = clamp(0.92 * p.level, 0, 1);
+
+      /**
+       * Pitch, from the velocity rather than from the pose.
+       *
+       * The body points where it is going, which through a leap means nose up
+       * on the way out and nose down on the way in, at equal angles, because
+       * the vertical speed is continuous through the surface. It is the single
+       * detail that separates a leaping animal from a sprite on an arc.
+       */
+      const pitch = Math.atan2(swim.vz * pixelsPerMetre, Math.max(1, Math.abs(p.speed)));
+
+      g.save();
+      g.translate(x, y);
+      if (facing < 0) g.scale(-1, 1);
+      g.rotate(pitch);
+
+      const half = L * 0.5;
+      const depth = L * 0.105;
+      /**
+       * Airborne, the body locks into an arch and stops beating. A dolphin in
+       * the air is a rigid projectile — there is nothing to push against — and
+       * a fluke still swinging up there is the thing that makes an otherwise
+       * good leap read as a puppet.
+       */
+      const drive = swim.airborne ? 0.12 : 1;
+      const wavePhase = TAU * beatHz * t;
+
+      /**
+       * The centreline, as a wave running aft.
+       *
+       * Thunniform swimming: one wavelength to the body, and an amplitude that
+       * is nothing at the head and everything at the peduncle. A tuna, a mako
+       * and a dolphin all converged on it independently, because it is what
+       * lets a body be stiff enough to hold its shape at speed and still drive
+       * a foil at the back. Give the whole body equal amplitude instead and
+       * you have an eel.
+       */
+      for (let k = 0; k <= BODY_SEGMENTS; k++) {
+        const u = k / BODY_SEGMENTS;
+        const env = amplitude * 0.5 * scale * Math.pow(u, 2.2) * drive;
+        const g0 = depth * (girth(u) + rostrum(u));
+        bodyCx[k] = half - u * L;
+        bodyCy[k] = env * Math.sin(wavePhase - u * TAU);
+        bodyUp[k] = g0 + depth * melon(u);
+        bodyDn[k] = g0;
+      }
+
+      const skin = g.createLinearGradient(0, -depth * 1.5, 0, depth * 1.3);
+      skin.addColorStop(0, rgba(back, alpha));
+      skin.addColorStop(0.46, rgba(back, alpha));
+      skin.addColorStop(0.62, rgba(mixHex(back, belly, 0.55), alpha));
+      skin.addColorStop(0.8, rgba(belly, alpha));
+      skin.addColorStop(1, rgba(mixHex(belly, back, 0.22), alpha));
+      g.fillStyle = skin;
+
+      g.beginPath();
+      g.moveTo(bodyCx[0], bodyCy[0]);
+      for (let k = 1; k <= BODY_SEGMENTS; k++) g.lineTo(bodyCx[k], bodyCy[k] - bodyUp[k]);
+      for (let k = BODY_SEGMENTS; k >= 1; k--) g.lineTo(bodyCx[k], bodyCy[k] + bodyDn[k]);
+      g.closePath();
+      g.fill();
+
+      /**
+       * The flukes, pitched to the local slope of the body wave and *feathered*
+       * — held at less than the path angle, so the blade meets the water at an
+       * angle of attack and generates lift forwards. Rigidly aligned to the
+       * body it produces no thrust and looks like it; square to the path it
+       * stalls. Somewhere in between is what the animal does, and it is the
+       * detail that makes the animal look like it is pushing rather than being
+       * pulled.
+       *
+       * Horizontal, too. Every fish on this wall beats side to side; a whale
+       * beats up and down, because it is a land mammal that went back, and the
+       * spine it took with it bends that way. It is the one silhouette cue
+       * that says mammal, and it costs nothing to get right.
+       */
+      const tail = BODY_SEGMENTS;
+      const slope = Math.atan2(bodyCy[tail] - bodyCy[tail - 4], bodyCx[tail] - bodyCx[tail - 4]);
+      g.fillStyle = rgba(back, alpha);
+      g.save();
+      g.translate(bodyCx[tail], bodyCy[tail]);
+      g.rotate(slope * 0.65);
+      g.beginPath();
+      g.moveTo(L * 0.025, 0);
+      g.quadraticCurveTo(-L * 0.005, -L * 0.05, -L * 0.065, -L * 0.125);
+      g.quadraticCurveTo(-L * 0.045, -L * 0.045, -L * 0.04, 0);
+      g.quadraticCurveTo(-L * 0.045, L * 0.045, -L * 0.065, L * 0.125);
+      g.quadraticCurveTo(-L * 0.005, L * 0.05, L * 0.025, 0);
+      g.closePath();
+      g.fill();
+      g.restore();
+
+      // Dorsal fin: falcate, swept back, with the concave trailing edge that
+      // makes it a dolphin's rather than a shark's.
+      const dorsalAt = Math.round(BODY_SEGMENTS * 0.42);
+      const dx0 = bodyCx[dorsalAt];
+      const dy0 = bodyCy[dorsalAt] - bodyUp[dorsalAt] * 0.94;
+      g.beginPath();
+      g.moveTo(dx0 + L * 0.075, dy0);
+      g.quadraticCurveTo(dx0 + L * 0.045, dy0 - L * 0.055, dx0 - L * 0.075, dy0 - L * 0.125);
+      g.quadraticCurveTo(dx0 - L * 0.015, dy0 - L * 0.045, dx0 - L * 0.07, dy0);
+      g.closePath();
+      g.fill();
+
+      // Pectoral flipper, sculling gently out of phase with the fluke.
+      const pecAt = Math.round(BODY_SEGMENTS * 0.24);
+      const scull = Math.sin(wavePhase - 1.9) * 0.22 * drive;
+      g.fillStyle = rgba(mixHex(back, belly, 0.12), alpha * 0.95);
+      g.save();
+      g.translate(bodyCx[pecAt], bodyCy[pecAt] + bodyDn[pecAt] * 0.45);
+      g.rotate(1.05 + scull);
+      g.beginPath();
+      g.moveTo(L * 0.02, 0);
+      g.quadraticCurveTo(L * 0.022, L * 0.085, -L * 0.028, L * 0.14);
+      g.quadraticCurveTo(-L * 0.026, L * 0.06, -L * 0.03, 0);
+      g.closePath();
+      g.fill();
+      g.restore();
+
+      // The mouthline, from the tip of the beak back to under the eye, which
+      // is where a bottlenose's runs and why it looks like it is smiling.
+      const eyeAt = Math.round(BODY_SEGMENTS * 0.2);
+      g.strokeStyle = rgba(mixHex(back, '#000000', 0.4), alpha * 0.5);
+      g.lineWidth = Math.max(0.5, L * 0.006);
+      g.beginPath();
+      g.moveTo(half - L * 0.005, bodyCy[0] + depth * 0.06);
+      g.quadraticCurveTo(
+        bodyCx[eyeAt] + L * 0.03, bodyCy[eyeAt] + bodyDn[eyeAt] * 0.5,
+        bodyCx[eyeAt] - L * 0.01, bodyCy[eyeAt] + bodyDn[eyeAt] * 0.35
+      );
+      g.stroke();
+
+      // An eye, just aft of the melon.
+      g.fillStyle = rgba('#06141d', alpha * 0.9);
+      g.beginPath();
+      g.arc(bodyCx[eyeAt] - L * 0.01, bodyCy[eyeAt] - bodyUp[eyeAt] * 0.05,
+        Math.max(0.5, L * 0.0075), 0, TAU);
+      g.fill();
+
+      /**
+       * Wet skin in air. Above the surface the animal is not being lit through
+       * ten metres of water, it is being lit directly and it is *shiny* — the
+       * flash off a wet back is most of what you see of a leap at night.
+       */
+      if (swim.airborne) {
+        g.strokeStyle = rgba('#ffffff', alpha * 0.2);
+        g.lineWidth = Math.max(0.6, depth * 0.16);
+        g.lineCap = 'round';
+        g.beginPath();
+        g.moveTo(bodyCx[3], bodyCy[3] - bodyUp[3] * 0.55);
+        for (let k = 4; k <= dorsalAt + 4; k++) g.lineTo(bodyCx[k], bodyCy[k] - bodyUp[k] * 0.6);
+        g.stroke();
+      }
+
+      g.restore();
+
+      /**
+       * What the surface does about it: a burst where the animal left and
+       * another where it came back in, and the exhale on the way up.
+       */
+      if (p.spray > 0) {
+        const entrySpeed = Math.sqrt(2 * G * Math.max(0, p.leap)) * pixelsPerMetre;
+        const leapIndex = Math.floor(t / swim.period + phase);
+        const launch = swim.q;
+        const reentry = swim.q - swim.tAir;
+        // Where the animal was when it crossed, not where it is now — it has
+        // travelled since, and the water it threw has not.
+        const outX = wrapped(unwrappedX - p.speed * launch, spanX, bbox.x - length * 1.25);
+        const inX = wrapped(unwrappedX - p.speed * reentry, spanX, bbox.x - length * 1.25);
+        const life = 0.6;
+        splash(g, outX, surfacePx, launch, life, 1.5,
+          Math.max(L * 0.9, entrySpeed * 0.55), gPx, belly,
+          p.spray * p.level * 0.5, `dolphin-out:${shape.id}:${i}:${leapIndex}`);
+        splash(g, inX, surfacePx, reentry, life, 2.2,
+          Math.max(L * 1.1, entrySpeed * 0.7), gPx, belly,
+          p.spray * p.level * 0.6, `dolphin-in:${shape.id}:${i}:${leapIndex}`);
+        // The blow: a narrow plume of exhaled breath, straight up, slow.
+        splash(g, outX, surfacePx, launch, 0.75, 0.5, L * 0.35, gPx * 0.15,
+          '#ffffff', p.spray * p.level * 0.35, `dolphin-blow:${shape.id}:${i}:${leapIndex}`);
+      }
+    }
+
+    g.restore();
+  },
+};
+
+export default [godrays, waterline, shoal, dolphins, bubbles, kelp, jellyfish];
