@@ -324,7 +324,41 @@ const waterline = {
     'The surface of the water crossing the house, with everything under it absorbed towards blue and the light of the surface dancing on the wall above. Three wave components on the real dispersion relation, so it never repeats.',
   params: [
     { key: 'color', type: 'color', label: 'Light on the water', default: '#dff2ff' },
-    ...SURFACE_PARAMS,
+    /**
+     * The one effect in the set that starts with its surface *in shot*.
+     *
+     * The shared default is −0.2 — off the top of the picture — because that
+     * is what a properly sunk house wants, and for the other five it is
+     * invisible in the right way: they read depth as a gradient and simply
+     * come out deeper. This one draws the surface itself, so the same default
+     * makes it draw nothing, which is not a subtle look, it is a broken one.
+     */
+    ...SURFACE_PARAMS.map((param) =>
+      (param.key === 'surface' ? { ...param, default: 0.08 } : param)),
+    /**
+     * What `Surface at` is a fraction *of*.
+     *
+     * Everything else in this set reads depth off the whole frame, which is
+     * what makes six effects agree about one body of water — and for five of
+     * them that is invisible, because they read depth as a gradient and being
+     * a little off changes nothing you can see.
+     *
+     * The waterline is the exception: it draws a *line*, and a line has to
+     * land somewhere specific. Measured against the frame and pointed at a
+     * wall traced across the middle of the picture, the default puts the
+     * surface above that wall, everything but the wash gets clipped away, and
+     * the effect appears not to work at all — which is exactly what it looked
+     * like. The value that would have worked was findable by dragging, and
+     * nothing said so.
+     *
+     * `auto` is the answer for both cases without anybody having to know: a
+     * layer covering the whole frame measures from the frame, and one pointed
+     * at a shape measures inside that shape, so half way down means half way
+     * down *the thing you aimed it at*. `frame` and `shape` force it, and
+     * `frame` is the one to pick when the waterline has to agree with the
+     * shafts and the kelp to the metre.
+     */
+    { key: 'anchor', type: 'select', label: 'Surface measured from', default: 'auto', options: ['auto', 'frame', 'shape'] },
     { key: 'body', type: 'range', label: 'Water', default: 0.55, min: 0, max: 1.5, step: 0.01 },
     { key: 'wave', type: 'range', label: 'Wave height (cm)', default: 22, min: 0, max: 200, step: 1 },
     { key: 'wavelength', type: 'range', label: 'Wavelength (m)', default: 5, min: 0.5, max: 40, step: 0.1 },
@@ -349,7 +383,25 @@ const waterline = {
      * house going under, and the effect never has to do anything else.
      */
     const tide = Math.sin((t * TAU) / Math.max(1, p.tidePeriod)) * p.tide * world.h;
-    const baseY = surfaceY(p, world) + tide;
+
+    /**
+     * Where the surface actually is, and the depth everything below it is at.
+     *
+     * `water` is `p` with the surface rewritten as a fraction of the frame,
+     * whatever it was a fraction of to begin with — so `depthAt` below keeps
+     * working in world metres and the colour stays physical either way. The
+     * frame shape is the stand-in the renderer substitutes for a layer with no
+     * targets, and its id is the one reliable way to tell "this covers
+     * everything" from "this was aimed at something".
+     */
+    const anchored = p.anchor === 'shape'
+      || (p.anchor !== 'frame' && shape.id !== '__frame__');
+    const surfaceFraction = anchored
+      ? (bbox.y + (p.surface ?? 0) * bbox.h) / Math.max(1, world.h)
+      : (p.surface ?? 0);
+    const water = anchored ? { ...p, surface: surfaceFraction } : p;
+
+    const baseY = surfaceFraction * world.h + tide;
     const amplitude = (p.wave / 100) * pixelsPerMetre;
 
     const left = bbox.x;
@@ -382,7 +434,7 @@ const waterline = {
       for (let i = 0; i < 8; i++) {
         const u = i / 7;
         const y = lerp(gradTop, bottom, u);
-        const colour = waterAbsorb(p.color, depthAt(p, y, world), p.turbidity);
+        const colour = waterAbsorb(p.color, depthAt(water, y, world), p.turbidity);
         /**
          * Brightest immediately under the surface and falling away below.
          *
@@ -1295,6 +1347,18 @@ export function contraction(phase) {
 const CONTRACTION_MEAN = 0.5;
 
 /**
+ * How far down a strand a jet gets before drag has taken most of it out, as a
+ * fraction of the strand's length.
+ *
+ * Just under one, so the far tip keeps about a third of the pulse. Set it much
+ * shorter and the tentacles hang like string off an animal that is visibly
+ * swimming; leave the decay out altogether and every point on the strand
+ * answers the bell's jet in full, which is the thing that used to throw them
+ * up through the bell.
+ */
+const WASH_LENGTH = 0.95;
+
+/**
  * Where a bell is at time `t`. Analytic, on purpose.
  *
  * Nothing here integrates. The position is a closed-form function of show time,
@@ -1327,13 +1391,23 @@ export function bellAt(t, j, p, world, bbox) {
   const spanX = bbox.w + p.size * 4;
   const spanY = bbox.h + p.size * 5;
   const travelX = j.x0 + t * p.drift * j.driftScale;
-  const travelY = j.y0 - t * p.rise;
+  const travelY = j.y0 + t * p.rise;
 
   return {
     x: bbox.x - p.size * 2 + (((travelX % spanX) + spanX) % spanX),
     y: bbox.y + bbox.h + p.size * 2.5 - (((travelY % spanY) + spanY) % spanY) - surge,
     cx: travelX,
     cy: -travelY - surge,
+    /**
+     * The same vertical motion with the pulse taken back out: where the animal
+     * has got to through the water, as opposed to where it is in its stroke.
+     *
+     * The tentacles want this one. A strand hangs off the bell's *path*; the
+     * jet is a thing the bell does on top of that path, and something the
+     * strand only partly feels — see the drawing code.
+     */
+    ty: -travelY,
+    surge,
     c,
     phase,
   };
@@ -1386,7 +1460,15 @@ const jellyfish = {
 
       const now = bellAt(t, j, p, world, bbox);
       const R = p.size * j.scale * 0.5;
-      if (now.y + R * 6 < bbox.y || now.y - R * 2 > bbox.y + bbox.h) continue;
+      /**
+       * How fast a strand hangs away from the bell, in pixels per second of
+       * trail. Proportional to the animal, or a big jellyfish comes out with
+       * the stubby tentacles of a small one drawn at the wrong scale.
+       */
+      const hang = 60 + R * 1.7;
+      // Cull on the bell *and its tentacles* — the strands reach a long way
+      // below it, and a bell just off the top still has them in shot.
+      if (now.y + R * 6 + p.trail * hang < bbox.y || now.y - R * 2 > bbox.y + bbox.h) continue;
 
       const metres = depthAt(p, now.y, world);
       const bell = waterAbsorb(mixHex(p.color, p.rim, j.hue * 0.3), metres, p.turbidity);
@@ -1422,6 +1504,7 @@ const jellyfish = {
       const strands = Math.round(p.tentacles);
       if (strands > 0) {
         g.lineCap = 'round';
+        const anchorY = now.y + bellH * 0.55;
         for (let s = 0; s < strands; s++) {
           const across = strands > 1 ? (s / (strands - 1) - 0.5) * 2 : 0;
           const anchorX = across * bellW * 0.82;
@@ -1430,17 +1513,37 @@ const jellyfish = {
           g.strokeStyle = rgba(isArm ? bell : rimColour, alpha * (isArm ? 0.75 : 0.4));
           g.lineWidth = Math.max(0.6, R * (isArm ? 0.11 : 0.05));
           g.beginPath();
-          g.moveTo(now.x + anchorX, now.y + bellH * 0.55);
+          g.moveTo(now.x + anchorX, anchorY);
           for (let k = 1; k <= segments; k++) {
             const u = k / segments;
             const past = bellAt(t - span * u, j, p, world, bbox);
             // Where the bell was, expressed as how far it has come since —
             // see `cx, cy` in `bellAt` for why it is not simply `past.x`.
-            const sag = bellH * 0.55 + u * span * 120 * (isArm ? 0.5 : 1);
+            const drop = u * span * hang * (isArm ? 0.5 : 1);
             const splay = anchorX * (1 - u * 0.45) + Math.sin(u * 6 + s) * R * 0.12 * u;
+            /**
+             * The pulse reaches a strand, but not all of it and not forever.
+             *
+             * The delay alone gets the *phase* right — a point that far down
+             * is feeling a jet the bell made that long ago — but not the
+             * amplitude, and using the delayed position wholesale hands every
+             * point on the strand the bell's full stroke. On the refill,
+             * when the bell is sinking back, that lifts the tentacles up
+             * through the animal, which is the one thing a tentacle never
+             * does.
+             *
+             * So two corrections, both of them things a real strand does.
+             * Drag damps the jet out along the length, hence `wash`. And the
+             * strand is inextensible: no point on it can be flung further
+             * than the distance it hangs, hence the clamp — which is also
+             * what guarantees the strand stays below the bell it hangs from,
+             * because `drop` is exactly the amount it is below by.
+             */
+            const wash = Math.exp(-u / WASH_LENGTH);
+            const swing = clamp((now.surge - past.surge) * wash, -drop, drop);
             g.lineTo(
               now.x - (now.cx - past.cx) + splay,
-              now.y - (now.cy - past.cy) + sag
+              anchorY - (now.ty - past.ty) + drop + swing
             );
           }
           g.stroke();

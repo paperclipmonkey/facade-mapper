@@ -603,13 +603,27 @@ console.log('\n— jellyfish —');
   ok('the bell surges upward on the squeeze', shut.y < rest.y - 40,
     `${(rest.y - shut.y).toFixed(1)} px in ${(2 * 0.28).toFixed(2)} s, of which ${(40 * 2 * 0.28).toFixed(1)} is the steady rise`);
 
+  /**
+   * And a slider called Rise raises it.
+   *
+   * Screen `y` runs down, the drawn position wraps, and the pulse is a much
+   * bigger number than a second's worth of drift — three separate reasons a
+   * sign error here reads as "hmm, they seem to sink a bit" rather than as
+   * anything obviously wrong. Sample whole pulses so the surge is out of it.
+   */
+  const climb = [];
+  for (let n = 0; n <= 4; n++) climb.push(bellAt(2 * n, j, p, WORLD, bbox).cy);
+  ok('and positive Rise takes it up the wall, not down it',
+    climb.every((cy, n) => n === 0 || cy < climb[n - 1]),
+    climb.map((cy) => cy.toFixed(0)).join(' -> '));
+
   // Over a whole number of pulses the surge cancels and what is left is the
   // rise, exactly.
   const cycles = 6;
   const later = bellAt(2 * cycles, j, p, WORLD, bbox);
   ok('and over whole pulses the surge cancels out',
-    Math.abs((later.cy - rest.cy) - 40 * 2 * cycles) < 1e-6,
-    `${(later.cy - rest.cy).toFixed(3)} px vs ${(40 * 2 * cycles).toFixed(3)} of rise`);
+    Math.abs((rest.cy - later.cy) - 40 * 2 * cycles) < 1e-6,
+    `${(rest.cy - later.cy).toFixed(3)} px vs ${(40 * 2 * cycles).toFixed(3)} of rise`);
 
   ok('the unwrapped track is continuous even where the drawn one wraps', (() => {
     let biggest = 0;
@@ -686,6 +700,98 @@ console.log('\n— jellyfish —');
   }
   ok('and no tentacle is ever stretched across the frame by a wrap',
     longest < WORLD.w * 0.35, `longest segment ${longest.toFixed(0)} px`);
+}
+
+{
+  /**
+   * A tentacle hangs. It never climbs into the animal.
+   *
+   * Which sounds too obvious to test, and is exactly the bug that was here:
+   * trailing a strand through the bell's *whole* past motion hands every point
+   * on it the jet as well as the swim, and the jet is by far the larger of the
+   * two. Through the squeeze that is fine — the bell leaves, the strands
+   * stream out behind. Through the refill it is not: the bell sinks back, and
+   * a strand drawn from where the bell was a second ago is drawn from a second
+   * ago's *higher* position, so it whips up through the bell. Nobody notices
+   * it as a sign error; it reads as a jellyfish that occasionally eats its own
+   * tentacles.
+   *
+   * The fix is two physical facts — drag damps the jet out along the strand,
+   * and a strand cannot be flung further than the length it hangs — so this
+   * checks the consequence, over the whole pulse and at the ends of every
+   * slider that feeds it.
+   */
+  const shape = makeShape(box(0, 0, WORLD.w, WORLD.h), { id: 'w' });
+  const segments = 12;
+
+  /** The worst height any strand vertex reaches above the point it hangs from. */
+  const worstClimb = (params) => {
+    let worst = 0;
+    let where = '';
+    for (let n = 0; n < 90; n++) {
+      const t = 6 + n * ((params.pulse * 2.2) / 90);
+      const g = frame('jellyfish', { shape, t, params });
+      for (let v = 0; v < g.lines.length; v++) {
+        // Every strand is one moveTo and `segments` lineTos, in order, so the
+        // vertex a strand hangs from is the start of its first segment.
+        const anchorY = g.lines[Math.floor(v / segments) * segments].y0;
+        const climb = anchorY - g.lines[v].y1;
+        if (climb > worst) { worst = climb; where = `t=${t.toFixed(2)}`; }
+      }
+    }
+    return { worst, where };
+  };
+
+  const cases = [
+    ['at rest', { count: 1, tentacles: 12, glow: 0 }],
+    ['at full surge', { count: 1, tentacles: 12, glow: 0, thrust: 3 }],
+    ['with long tentacles', { count: 1, tentacles: 12, glow: 0, trail: 6 }],
+    ['on a big slow one', { count: 1, tentacles: 12, glow: 0, size: 320, pulse: 6, thrust: 3 }],
+    ['on a small fast one', { count: 1, tentacles: 12, glow: 0, size: 20, pulse: 0.4, thrust: 3 }],
+    ['hanging still', { count: 1, tentacles: 12, glow: 0, rise: 0, drift: 0, thrust: 3 }],
+  ];
+
+  let worstOfAll = 0;
+  for (const [label, extra] of cases) {
+    const params = { pulse: 2.4, trail: 1.6, thrust: 1, rise: 26, drift: 14, size: 70, ...extra };
+    const { worst, where } = worstClimb(params);
+    worstOfAll = Math.max(worstOfAll, worst);
+    ok(`no tentacle climbs above the bell ${label}`, worst <= 0.001,
+      worst > 0.001 ? `${worst.toFixed(1)} px above its anchor at ${where}` : 'never');
+  }
+  ok('over every stroke and every extreme of the sliders', worstOfAll <= 0.001,
+    `worst ${worstOfAll.toFixed(3)} px`);
+
+  /**
+   * And the clamp has not simply frozen them. A strand that no longer responds
+   * to the pulse at all would pass everything above and look like string.
+   */
+  const params = { count: 1, tentacles: 12, glow: 0, size: 70, thrust: 3, rise: 0, drift: 0, pulse: 2 };
+  const tips = [];
+  for (let n = 0; n < 60; n++) {
+    const g = frame('jellyfish', { shape, t: 6 + (n / 60) * params.pulse, params });
+    // Where the first strand's tip is relative to where that strand hangs from,
+    // so a bell that is merely translating does not count as a swing.
+    tips.push(g.lines[segments - 1].y1 - g.lines[0].y0);
+  }
+  const swing = Math.max(...tips) - Math.min(...tips);
+  ok('but the strands still swing through the stroke', swing > params.size * 0.25,
+    `tip moves ${swing.toFixed(0)} px against the bell over a pulse`);
+
+  /**
+   * And a big jellyfish gets big tentacles. Hanging them at a fixed number of
+   * pixels per second of trail puts a 320-pixel bell on 70-pixel strings.
+   */
+  const reach = (size) => {
+    const g = frame('jellyfish', { shape, t: 6, params: { count: 1, tentacles: 12, glow: 0, thrust: 0, size } });
+    let deepest = 0;
+    for (const l of g.lines) deepest = Math.max(deepest, l.y1 - g.lines[0].y0);
+    return deepest;
+  };
+  const small = reach(40);
+  const big = reach(320);
+  ok('and a strand is as long as the animal it hangs off', big > small * 2.5,
+    `${small.toFixed(0)} px on a 40 px bell, ${big.toFixed(0)} px on a 320 px one`);
 }
 
 /* ------------------------------------------------------------------ *
@@ -784,14 +890,35 @@ console.log('\n— one body of water —');
   ok('every underwater effect takes the same three water parameters',
     missing.length === 0, missing.join(', '));
 
-  const defaults = ids.map((id) => {
+  /**
+   * The *scale* of the water has to match out of the box, because that is what
+   * a show inherits when somebody adds a second underwater layer without
+   * touching anything: metres top to bottom, and how murky it is.
+   */
+  const scale = ids.map((id) => {
     const effect = getEffect(id);
-    return ['surface', 'metres', 'turbidity']
+    return ['metres', 'turbidity']
       .map((key) => effect.params.find((param) => param.key === key).default)
       .join('/');
   });
-  ok('and defaults them to the same water',
-    new Set(defaults).size === 1, defaults[0]);
+  ok('and defaults them to the same depth of water',
+    new Set(scale).size === 1, scale[0]);
+
+  /**
+   * The surface height is the one that does not, and deliberately.
+   *
+   * Five of them read depth as a gradient, so the shared −0.2 — the surface
+   * off the top of the picture, which is what a sunk house wants — simply
+   * makes them deeper. Waterline draws the surface itself, so the same default
+   * makes it draw nothing at all. It starts with its surface in shot instead.
+   */
+  const surfaceOf = (id) => getEffect(id).params.find((param) => param.key === 'surface').default;
+  const gradients = ids.filter((id) => id !== 'waterline');
+  ok('every effect that reads depth as a gradient starts fully under',
+    new Set(gradients.map(surfaceOf)).size === 1 && surfaceOf(gradients[0]) < 0,
+    `${surfaceOf(gradients[0])}`);
+  ok('and the one that draws the surface starts with it in shot',
+    surfaceOf('waterline') > 0, `${surfaceOf('waterline')}`);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');
