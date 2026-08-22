@@ -23,6 +23,8 @@
  *   - a shoal does not swim through the bay window.
  *   - a jellyfish's pulse is asymmetric and adds no drift of its own, and its
  *     tentacles are where the bell was rather than where it is.
+ *   - a porpoising dolphin leaves the water at the speed it comes back in at,
+ *     and hangs up there for exactly as long as that height is worth.
  *
  *   node test/underwater.test.mjs
  */
@@ -33,6 +35,7 @@ import {
   contraction,
   bellAt,
   strandLag,
+  porpoise,
 } from '../js/effects/builtin/underwater.js';
 import { waterAbsorb, waterTransmission } from '../js/effects/color.js';
 import { getEffect, defaultParams } from '../js/effects/registry.js';
@@ -603,13 +606,27 @@ console.log('\n— jellyfish —');
   ok('the bell surges upward on the squeeze', shut.y < rest.y - 40,
     `${(rest.y - shut.y).toFixed(1)} px in ${(2 * 0.28).toFixed(2)} s, of which ${(40 * 2 * 0.28).toFixed(1)} is the steady rise`);
 
+  /**
+   * And a slider called Rise raises it.
+   *
+   * Screen `y` runs down, the drawn position wraps, and the pulse is a much
+   * bigger number than a second's worth of drift — three separate reasons a
+   * sign error here reads as "hmm, they seem to sink a bit" rather than as
+   * anything obviously wrong. Sample whole pulses so the surge is out of it.
+   */
+  const climb = [];
+  for (let n = 0; n <= 4; n++) climb.push(bellAt(2 * n, j, p, WORLD, bbox).cy);
+  ok('and positive Rise takes it up the wall, not down it',
+    climb.every((cy, n) => n === 0 || cy < climb[n - 1]),
+    climb.map((cy) => cy.toFixed(0)).join(' -> '));
+
   // Over a whole number of pulses the surge cancels and what is left is the
   // rise, exactly.
   const cycles = 6;
   const later = bellAt(2 * cycles, j, p, WORLD, bbox);
   ok('and over whole pulses the surge cancels out',
-    Math.abs((later.cy - rest.cy) - 40 * 2 * cycles) < 1e-6,
-    `${(later.cy - rest.cy).toFixed(3)} px vs ${(40 * 2 * cycles).toFixed(3)} of rise`);
+    Math.abs((rest.cy - later.cy) - 40 * 2 * cycles) < 1e-6,
+    `${(rest.cy - later.cy).toFixed(3)} px vs ${(40 * 2 * cycles).toFixed(3)} of rise`);
 
   ok('the unwrapped track is continuous even where the drawn one wraps', (() => {
     let biggest = 0;
@@ -686,6 +703,310 @@ console.log('\n— jellyfish —');
   }
   ok('and no tentacle is ever stretched across the frame by a wrap',
     longest < WORLD.w * 0.35, `longest segment ${longest.toFixed(0)} px`);
+}
+
+{
+  /**
+   * A tentacle hangs. It never climbs into the animal.
+   *
+   * Which sounds too obvious to test, and is exactly the bug that was here:
+   * trailing a strand through the bell's *whole* past motion hands every point
+   * on it the jet as well as the swim, and the jet is by far the larger of the
+   * two. Through the squeeze that is fine — the bell leaves, the strands
+   * stream out behind. Through the refill it is not: the bell sinks back, and
+   * a strand drawn from where the bell was a second ago is drawn from a second
+   * ago's *higher* position, so it whips up through the bell. Nobody notices
+   * it as a sign error; it reads as a jellyfish that occasionally eats its own
+   * tentacles.
+   *
+   * The fix is two physical facts — drag damps the jet out along the strand,
+   * and a strand cannot be flung further than the length it hangs — so this
+   * checks the consequence, over the whole pulse and at the ends of every
+   * slider that feeds it.
+   */
+  const shape = makeShape(box(0, 0, WORLD.w, WORLD.h), { id: 'w' });
+  const segments = 12;
+
+  /** The worst height any strand vertex reaches above the point it hangs from. */
+  const worstClimb = (params) => {
+    let worst = 0;
+    let where = '';
+    for (let n = 0; n < 90; n++) {
+      const t = 6 + n * ((params.pulse * 2.2) / 90);
+      const g = frame('jellyfish', { shape, t, params });
+      for (let v = 0; v < g.lines.length; v++) {
+        // Every strand is one moveTo and `segments` lineTos, in order, so the
+        // vertex a strand hangs from is the start of its first segment.
+        const anchorY = g.lines[Math.floor(v / segments) * segments].y0;
+        const climb = anchorY - g.lines[v].y1;
+        if (climb > worst) { worst = climb; where = `t=${t.toFixed(2)}`; }
+      }
+    }
+    return { worst, where };
+  };
+
+  const cases = [
+    ['at rest', { count: 1, tentacles: 12, glow: 0 }],
+    ['at full surge', { count: 1, tentacles: 12, glow: 0, thrust: 3 }],
+    ['with long tentacles', { count: 1, tentacles: 12, glow: 0, trail: 6 }],
+    ['on a big slow one', { count: 1, tentacles: 12, glow: 0, size: 320, pulse: 6, thrust: 3 }],
+    ['on a small fast one', { count: 1, tentacles: 12, glow: 0, size: 20, pulse: 0.4, thrust: 3 }],
+    ['hanging still', { count: 1, tentacles: 12, glow: 0, rise: 0, drift: 0, thrust: 3 }],
+  ];
+
+  let worstOfAll = 0;
+  for (const [label, extra] of cases) {
+    const params = { pulse: 2.4, trail: 1.6, thrust: 1, rise: 26, drift: 14, size: 70, ...extra };
+    const { worst, where } = worstClimb(params);
+    worstOfAll = Math.max(worstOfAll, worst);
+    ok(`no tentacle climbs above the bell ${label}`, worst <= 0.001,
+      worst > 0.001 ? `${worst.toFixed(1)} px above its anchor at ${where}` : 'never');
+  }
+  ok('over every stroke and every extreme of the sliders', worstOfAll <= 0.001,
+    `worst ${worstOfAll.toFixed(3)} px`);
+
+  /**
+   * And the clamp has not simply frozen them. A strand that no longer responds
+   * to the pulse at all would pass everything above and look like string.
+   */
+  const params = { count: 1, tentacles: 12, glow: 0, size: 70, thrust: 3, rise: 0, drift: 0, pulse: 2 };
+  const tips = [];
+  for (let n = 0; n < 60; n++) {
+    const g = frame('jellyfish', { shape, t: 6 + (n / 60) * params.pulse, params });
+    // Where the first strand's tip is relative to where that strand hangs from,
+    // so a bell that is merely translating does not count as a swing.
+    tips.push(g.lines[segments - 1].y1 - g.lines[0].y0);
+  }
+  const swing = Math.max(...tips) - Math.min(...tips);
+  ok('but the strands still swing through the stroke', swing > params.size * 0.25,
+    `tip moves ${swing.toFixed(0)} px against the bell over a pulse`);
+
+  /**
+   * And a big jellyfish gets big tentacles. Hanging them at a fixed number of
+   * pixels per second of trail puts a 320-pixel bell on 70-pixel strings.
+   */
+  const reach = (size) => {
+    const g = frame('jellyfish', { shape, t: 6, params: { count: 1, tentacles: 12, glow: 0, thrust: 0, size } });
+    let deepest = 0;
+    for (const l of g.lines) deepest = Math.max(deepest, l.y1 - g.lines[0].y0);
+    return deepest;
+  };
+  const small = reach(40);
+  const big = reach(320);
+  ok('and a strand is as long as the animal it hangs off', big > small * 2.5,
+    `${small.toFixed(0)} px on a 40 px bell, ${big.toFixed(0)} px on a 320 px one`);
+}
+
+/* ------------------------------------------------------------------ *
+ * Dolphins
+ * ------------------------------------------------------------------ */
+
+console.log('\n— dolphins —');
+
+{
+  const p = { leap: 1.1, between: 2.4, dive: 1 };
+  const first = porpoise(0, p);
+
+  /**
+   * The leap is a projectile, and that is the whole claim.
+   *
+   * Everything checkable about it follows from `−4H·s(1−s)` with a hang time of
+   * `2√(2H/g)`: it reaches exactly the height asked for, it stays up as the
+   * square root of that height, and it comes back down at the speed it went up
+   * at. An arc drawn to look right passes none of these, and the failure is
+   * invisible — a leap that hangs a little too long is only ever "hmm, that
+   * looks a bit floaty", which nobody can act on.
+   */
+  let peak = 0;
+  let deepest = 0;
+  let jump = 0;
+  let previous = first.z;
+  for (let i = 1; i <= 120000; i++) {
+    const at = porpoise(i * 0.0001, p);
+    peak = Math.min(peak, at.z);
+    deepest = Math.max(deepest, at.z);
+    jump = Math.max(jump, Math.abs(at.z - previous));
+    previous = at.z;
+  }
+  ok('it leaps exactly as high as it was asked to', Math.abs(-peak - p.leap) < 1e-6,
+    `${(-peak).toFixed(4)} m against ${p.leap}`);
+  ok('and the path never jumps', jump < 0.002, `worst step ${jump.toFixed(5)} m per 0.1 ms`);
+  ok('and it goes down as well as up', deepest > p.dive, `${deepest.toFixed(2)} m at the bottom`);
+
+  const hang = (height) => porpoise(0, { ...p, leap: height }).tAir;
+  const ratios = [0.5, 2, 4].map((k) => hang(k) / hang(1) / Math.sqrt(k));
+  ok('hang time goes as the square root of the height',
+    ratios.every((r) => Math.abs(r - 1) < 1e-9),
+    [0.5, 1, 2, 4].map((k) => `${k}m:${hang(k).toFixed(3)}s`).join(' '));
+
+  /**
+   * Continuous *velocity* through the surface, not just position — which is
+   * what makes the animal enter nose-down at the angle it left nose-up, since
+   * the pitch is read off the velocity.
+   */
+  const G = 9.81;
+  const expected = Math.sqrt(2 * G * p.leap);
+  const e = 1e-7;
+  const inBefore = porpoise(first.tAir - e, p).vz;
+  const inAfter = porpoise(first.tAir + e, p).vz;
+  const outBefore = porpoise(first.period - e, p).vz;
+  const outAfter = porpoise(e, p).vz;
+  ok('it hits the water at √(2gH), going down',
+    Math.abs(inBefore - expected) < 1e-4 && Math.abs(inAfter - expected) < 1e-4,
+    `${inBefore.toFixed(4)} then ${inAfter.toFixed(4)} against ${expected.toFixed(4)} m/s`);
+  ok('and left it at the same speed, going up',
+    Math.abs(outBefore + expected) < 1e-4 && Math.abs(outAfter + expected) < 1e-4,
+    `${outBefore.toFixed(4)} then ${outAfter.toFixed(4)}`);
+
+  ok('it is under the water for the rest of the cycle', (() => {
+    for (let i = 0; i <= 2000; i++) {
+      const at = porpoise(first.tAir + (i / 2000) * first.tUnder * 0.999, p);
+      if (at.airborne || at.z < -1e-9) return false;
+    }
+    return true;
+  })(), `${first.tUnder.toFixed(2)} s under, ${first.tAir.toFixed(2)} s over`);
+
+  /**
+   * And with the leap turned off it still comes up to breathe, because a
+   * dolphin has to. The cycle becomes a dive from the surface and back.
+   */
+  const flat = porpoise(0, { ...p, leap: 0 });
+  let highest = Infinity;
+  for (let i = 0; i <= 4000; i++) highest = Math.min(highest, porpoise((i / 4000) * flat.period, { ...p, leap: 0 }).z);
+  ok('with no leap it still surfaces to breathe',
+    flat.tAir === 0 && Math.abs(highest) < 1e-9, `reaches ${highest.toFixed(6)} m`);
+}
+
+{
+  /**
+   * The beat rate is the Strouhal number, not a slider.
+   *
+   * St = fA/U sits between about 0.2 and 0.4 in every animal anybody has
+   * measured it in, which means the frequency is a *consequence* of the speed
+   * and the fluke amplitude rather than something to pick. Checking it here is
+   * checking that a dolphin told to swim faster beats faster, by the right
+   * amount, without anything being tied together by hand.
+   *
+   * Measured off the drawing: count the fluke's own vertical swing over a
+   * cycle and time how long it takes to come back.
+   */
+  const shape = makeShape(box(0, 0, WORLD.w, WORLD.h), { id: 'w' });
+  const base = {
+    count: 1, length: 4, leap: 0, dive: 0, between: 20, spray: 0,
+    together: 1, surface: 0.5, metres: 14,
+  };
+
+  /** The fluke's offset from the body axis, sampled from the drawn outline. */
+  const fluke = (params, t) => {
+    const g = frame('dolphins', { shape, t, params });
+    let lowest = -Infinity;
+    let highest = Infinity;
+    for (const l of g.lines) {
+      lowest = Math.max(lowest, l.y1);
+      highest = Math.min(highest, l.y1);
+    }
+    return { lowest, highest };
+  };
+
+  /** Time from `t` until the beat comes back round, by sampling the tail. */
+  const beatPeriod = (params) => {
+    const at = (t) => {
+      const g = frame('dolphins', { shape, t, params });
+      // The body outline is drawn nose to tail along the top and back along
+      // the bottom, so the last vertex of the upper pass is the peduncle.
+      return g.lines[21] ? g.lines[21].y1 : 0;
+    };
+    const start = at(4);
+    const slope = at(4.002) - start;
+    for (let i = 1; i <= 4000; i++) {
+      const t = 4 + i * 0.002;
+      const here = at(t);
+      const next = at(t + 0.002);
+      if (Math.abs(here - start) < 0.4 && (next - here) * slope > 0 && i > 40) return i * 0.002;
+    }
+    return NaN;
+  };
+
+  const slow = beatPeriod({ ...base, speed: 120, strouhal: 0.3 });
+  const fast = beatPeriod({ ...base, speed: 240, strouhal: 0.3 });
+  ok('the fluke beat is real and periodic', Number.isFinite(slow) && Number.isFinite(fast),
+    `${slow?.toFixed(3)} s at 120 px/s, ${fast?.toFixed(3)} s at 240`);
+  ok('and doubling the speed doubles the beat rate, which is what holds St fixed',
+    Math.abs(slow / fast - 2) < 0.05, `${(slow / fast).toFixed(3)}× against 2`);
+
+  const swing = fluke({ ...base, speed: 200 }, 4);
+  ok('and the fluke swings across the body axis rather than along it',
+    swing.lowest - swing.highest > 0, `${(swing.lowest - swing.highest).toFixed(1)} px of body drawn`);
+}
+
+{
+  /**
+   * A dolphin surfaces where the waterline is drawn, which is the only reason
+   * it shares the surface parameters at all — and it has to work when the
+   * layer is pointed at a traced wall, for exactly the reason the waterline
+   * did not.
+   *
+   * Checked on the top of the leap, which is the one height that is known
+   * exactly: `leap` metres above the surface, wherever the surface is. Moving
+   * the anchor from the frame to the wall moves the surface by a known number
+   * of pixels, and it has to move the animal by the same number.
+   */
+  const wall = makeShape(box(300, 240, 900, 600), { id: 'wall' });
+  const params = {
+    count: 1, length: 3, leap: 2, between: 1.6, dive: 0, spray: 0, together: 1,
+    speed: 260, surface: 0.2,
+  };
+
+  /** The highest point anything is drawn at, over a few leaps. */
+  const ceiling = (anchor) => {
+    let top = Infinity;
+    for (let i = 0; i < 400; i++) {
+      const g = frame('dolphins', { shape: wall, t: 4 + i * 0.02, params: { ...params, anchor } });
+      for (const l of g.lines) top = Math.min(top, l.y1, l.y0);
+    }
+    return top;
+  };
+
+  const onWall = ceiling('shape');
+  const onFrame = ceiling('frame');
+  const shift = (wall.bbox.y + 0.2 * wall.bbox.h) - 0.2 * WORLD.h;
+
+  ok('aimed at a wall, it leaps out of that wall',
+    Number.isFinite(onWall) && Math.abs(onWall - (wall.bbox.y + 0.2 * wall.bbox.h)) < params.length * 90,
+    `peaks at y=${onWall.toFixed(0)}, wall surface at ${(wall.bbox.y + 0.2 * wall.bbox.h).toFixed(0)}`);
+  ok('and measured against the frame instead, it moves by exactly the offset',
+    Math.abs((onWall - onFrame) - shift) < 0.5,
+    `${(onWall - onFrame).toFixed(1)} px against ${shift.toFixed(1)}`);
+
+  // And it does leave the water: the peak is above the surface it measures.
+  ok('and the top of the leap is out of the water',
+    onWall < wall.bbox.y + 0.2 * wall.bbox.h,
+    `${((wall.bbox.y + 0.2 * wall.bbox.h) - onWall).toFixed(0)} px of air`);
+}
+
+{
+  /**
+   * Three body plans, and the one thing that stops them being three skins: a
+   * deep-bodied fish is a worse cruiser. If they all swim at the same speed
+   * the shapes are a costume.
+   */
+  const wall = makeShape(box(0, 0, WORLD.w, WORLD.h), { id: 'w' });
+  const speedOf = (species) => {
+    const { state } = run('shoal', {
+      shape: wall, seconds: 8,
+      params: { count: 12, species, speed: 200, startle: 0, wander: 0.3 },
+    });
+    return state.fish.reduce((sum, f) => sum + Math.hypot(f.vx, f.vy), 0) / state.fish.length;
+  };
+  const sardine = speedOf('sardine');
+  const angel = speedOf('angelfish');
+  ok('a sardine out-cruises an angelfish', sardine > angel * 1.2,
+    `${sardine.toFixed(0)} px/s against ${angel.toFixed(0)}`);
+
+  const effect = getEffect('shoal');
+  const options = effect.params.find((param) => param.key === 'species').options;
+  ok('and every body plan is offered', options.includes('mixed') && options.length === 4,
+    options.join(', '));
 }
 
 /* ------------------------------------------------------------------ *
@@ -772,7 +1093,8 @@ console.log('\n— one body of water —');
    * arriving at another, which is the sort of thing nobody can see and everyone
    * can feel.
    */
-  const ids = ['godrays', 'waterline', 'shoal', 'bubbles', 'kelp', 'jellyfish'];
+  const ids = ['godrays', 'waterline', 'shoal', 'dolphins', 'bubbles', 'kelp', 'jellyfish'];
+  const atSurface = ['waterline', 'dolphins'];
   const missing = [];
   for (const id of ids) {
     const effect = getEffect(id);
@@ -784,14 +1106,45 @@ console.log('\n— one body of water —');
   ok('every underwater effect takes the same three water parameters',
     missing.length === 0, missing.join(', '));
 
-  const defaults = ids.map((id) => {
+  /**
+   * The *scale* of the water has to match out of the box, because that is what
+   * a show inherits when somebody adds a second underwater layer without
+   * touching anything: metres top to bottom, and how murky it is.
+   */
+  const scale = ids.map((id) => {
     const effect = getEffect(id);
-    return ['surface', 'metres', 'turbidity']
+    return ['metres', 'turbidity']
       .map((key) => effect.params.find((param) => param.key === key).default)
       .join('/');
   });
-  ok('and defaults them to the same water',
-    new Set(defaults).size === 1, defaults[0]);
+  ok('and defaults them to the same depth of water',
+    new Set(scale).size === 1, scale[0]);
+
+  /**
+   * The surface height is the one that does not, and deliberately.
+   *
+   * Most of them read depth as a gradient, so the shared −0.2 — the surface
+   * off the top of the picture, which is what a sunk house wants — simply
+   * makes them deeper. The two that work *at* the surface, drawing it or
+   * crossing it, would draw nothing at all from up there. They start with the
+   * surface in shot instead.
+   */
+  const surfaceOf = (id) => getEffect(id).params.find((param) => param.key === 'surface').default;
+  const gradients = ids.filter((id) => !atSurface.includes(id));
+  ok('every effect that reads depth as a gradient starts fully under',
+    new Set(gradients.map(surfaceOf)).size === 1 && surfaceOf(gradients[0]) < 0,
+    `${surfaceOf(gradients[0])}`);
+  ok('and the ones that work at the surface start with it in shot',
+    atSurface.every((id) => surfaceOf(id) > 0),
+    atSurface.map((id) => `${id} ${surfaceOf(id)}`).join(', '));
+
+  // Both of those also have to agree about what the height is measured from,
+  // or a leaping animal surfaces somewhere the waterline is not.
+  const anchorOf = (id) => getEffect(id).params.find((param) => param.key === 'anchor');
+  ok('and both offer the same choice of what to measure it from',
+    atSurface.every((id) => anchorOf(id)?.default === 'auto'
+      && anchorOf(id).options.join() === anchorOf(atSurface[0]).options.join()),
+    anchorOf('dolphins')?.options.join(', '));
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');

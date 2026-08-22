@@ -72,7 +72,8 @@ is for.
 - **Or no night at all: put the house under water.** The surface across the top
   of the frame with shafts coming down through it, caustics on the brickwork,
   weed swaying up the front, a shoal that keeps off the windows, jellyfish going
-  past the roof and bubbles off the wall. The colour is not a blue gel — water
+  past the roof, bubbles off the wall and a pod of dolphins porpoising out
+  through the surface above the chimneys. The colour is not a blue gel — water
   absorbs red about thirty times faster than blue, so the light is *taken apart*
   with depth the way it really is, and the bottom of the wall goes deep blue
   because there is no red left in what reaches it.
