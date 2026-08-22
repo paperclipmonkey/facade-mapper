@@ -165,8 +165,44 @@ const SIM_HZ = 60;
  */
 const CATCHUP_BUDGET_MS = 12;
 const FREE_CATCHUP_STEPS = SIM_HZ;
-/** How often the budget is checked, in steps. A clock read per step is waste. */
-const BUDGET_CHECK_EVERY = 64;
+/**
+ * How often a slice is checked, in steps.
+ *
+ * Small, because the interval is also the *overshoot*: whatever is left of a
+ * check window gets spent whether the slice is gone or not. At sixty-four this
+ * was a bigger number than the entire frame allowance for any effect whose step
+ * costs more than about two hundred microseconds — one instance would run
+ * sixteen milliseconds past its three, the frame's deadline would be gone
+ * before the next instance even asked, and the queue below would hand out
+ * slices that were spent on arrival.
+ *
+ * Eight is under a slice for anything that is not pathological, and a clock
+ * read per eight steps is a fraction of a per cent even of a trivial one.
+ */
+const BUDGET_CHECK_EVERY = 8;
+
+/**
+ * How many instances may share the frame's allowance, and why there is a queue
+ * at all.
+ *
+ * The allowance used to be one deadline for the whole frame, taken by whoever
+ * asked first. Layers are walked in order, so "whoever asked first" is always
+ * the same layer — and it does not stop when it has had a fair share, it stops
+ * when the *frame* is out of time. With one layer behind that is exactly right.
+ * With four it is a disaster: the first one takes all twelve milliseconds every
+ * frame and the other three get, measured, precisely zero steps for as long as
+ * the catch-up lasts. Being more than a second behind they are also not drawn,
+ * so what a projector actually shows is the fish stopping dead while the rest
+ * of the show carries on — and then, ten seconds later, the stall detector
+ * gives up on them and cold-starts them, which is the jump.
+ *
+ * So the allowance is handed out in equal slices to a few instances a frame,
+ * and a cursor moves along the queue so the same layers are not always at the
+ * front of it. Four slices of three milliseconds: enough that a lone layer
+ * still closes a gap quickly, and with twenty instances behind every one of
+ * them is served every five frames rather than never.
+ */
+const CATCHUP_SLOTS = 4;
 
 /**
  * The gap that is finally too big to run, and where a tab restarts if it hits it.
@@ -224,27 +260,38 @@ const now = typeof performance === 'object' && typeof performance.now === 'funct
   ? () => performance.now()
   : null;
 
+const UNMETERED = { spent: () => false };
+
 function createCatchUpBudget() {
-  if (!now) return { spent: () => false };
-  let deadline = null;
+  if (!now) return { claim: () => UNMETERED };
+  let frameDeadline = null;
+  let taken = 0;
   return {
-    spent() {
-      // Started on first use, not at the top of the frame: the budget is for
-      // catching up, and it should not be eaten by the drawing that came first.
-      if (deadline === null) deadline = now() + CATCHUP_BUDGET_MS;
-      return now() > deadline;
+    /**
+     * One instance's slice: whatever is left of the frame's allowance, divided
+     * by the slices still to be handed out.
+     *
+     * An even split of the *remaining* time rather than a fixed fraction of the
+     * whole, which matters in both directions. A claimant that overruns its
+     * slice — the check interval is granular, so they all overrun a little —
+     * has the excess taken off everyone after it rather than off the last one
+     * alone, which is what a fixed share capped by the frame's deadline does:
+     * measured, the fourth of four layers got a fifth of what the first three
+     * did. And a claimant that finishes early gives its remainder back.
+     *
+     * Started on first claim, not at the top of the frame: the budget is for
+     * catching up, and it should not be eaten by the drawing that came first.
+     */
+    claim() {
+      if (frameDeadline === null) frameDeadline = now() + CATCHUP_BUDGET_MS;
+      const at = now();
+      const left = Math.max(0, frameDeadline - at);
+      const mine = at + left / Math.max(1, CATCHUP_SLOTS - taken);
+      taken += 1;
+      return { spent: () => now() > mine };
     },
   };
 }
-
-/**
- * How far `enabledAt` may move before it counts as the layer being re-fired.
- *
- * Generous on purpose. The value comes from a wall-clock stamp carried in the
- * project, converted through the show clock, and a few milliseconds of drift
- * between the two is not somebody pressing a trigger.
- */
-const RETRIGGER_SLACK = 0.05;
 
 /**
  * Show-time seconds for a wall-clock stamp carried in the project.
@@ -330,7 +377,9 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
       // reseeded per simulation step instead, from `key` and the step index.
       inst = { key, state: {}, noise: createNoise(key), initialised: false,
         /** Show time at which this layer was last switched on. See `age`. */
-        enabledAt: null,
+        enabledAt: 0,
+        /** The wall-clock stamp that came from, and the test for a re-fire. */
+        onWall: null,
         /** Simulation steps taken since then. See `SIM_HZ`. */
         step: 0,
         /** Steps still owed at the last frame. See `SETTLE_BEHIND_STEPS`. */
@@ -367,6 +416,16 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
    */
   let generation = 0;
   const STALE_AFTER = 600;
+
+  /**
+   * Where the catch-up queue resumes next frame. See `CATCHUP_SLOTS`.
+   *
+   * Instances are walked in layer order, so without this the same few layers
+   * would be at the front of the queue every frame and everything behind them
+   * would wait for ever. The cursor moves past whoever was served last and
+   * wraps when it reaches the end, which turns a race into a rota.
+   */
+  let catchUpCursor = 0;
 
   function sweepInstances() {
     if (generation % 300 !== 0) return;
@@ -411,16 +470,21 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
     sweepInstances();
 
     /**
-     * One catch-up allowance for the whole frame, shared by every instance.
+     * One catch-up allowance for the whole frame, shared out a few instances at
+     * a time. See `CATCHUP_SLOTS`.
      *
-     * Per-instance it would multiply: twenty stateful layers on a tab that has
-     * just opened would each take their twelve milliseconds and the frame would
-     * take a quarter of a second. Shared, a busy show takes longer to converge
-     * and no single frame is ever hurt by it. Instances that are already in
-     * step never touch it — they never get past their free allowance — so this
-     * costs nothing on an ordinary frame.
+     * Per-instance and unshared it would multiply: twenty stateful layers on a
+     * tab that has just opened would each take their twelve milliseconds and
+     * the frame would take a quarter of a second. Shared, a busy show takes
+     * longer to converge and no single frame is ever hurt by it. Instances
+     * that are already in step never touch it — they never get past their free
+     * allowance — so this costs nothing on an ordinary frame.
      */
     const catchUp = createCatchUpBudget();
+    /** How many instances asked for a metered slice, and who got the last one. */
+    let queued = 0;
+    let served = 0;
+    let lastServed = -1;
 
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.globalAlpha = 1;
@@ -488,11 +552,21 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
      * its age is the age of the show, in every tab, rather than the age of
      * whichever window happens to be looking at it.
      */
-    const enabledAtFor = (layer) => {
+    /**
+     * The wall-clock stamp a layer was last switched on at, or 0 for one that
+     * has simply always been on.
+     *
+     * Kept as the stamp rather than as the show time it converts to, because
+     * *this* is what a re-trigger is: somebody pressed the key again and the
+     * project recorded a new instant. The show time it maps to is a moving
+     * target — every pause, resume and seek shifts the transport's epoch and
+     * therefore shifts the answer for every layer at once, without anything
+     * having been triggered at all.
+     */
+    const enabledWallFor = (layer) => {
       const own = layer.onAt || 0;
       const scene = sceneEnables.has(layer.id) ? (sceneAt || 0) : 0;
-      const wall = Math.max(own, scene);
-      return wall ? (showTimeOf(wall, time) ?? 0) : 0;
+      return Math.max(own, scene);
     };
 
     const depthHandle = depth?.() ?? null;
@@ -701,21 +775,22 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
          * scene was re-fired. That restarts the simulation from step zero, which
          * is what makes pressing the same trigger twice replay the burst.
          */
-        const enabledAt = enabledAtFor(layer) - stagger;
         /**
-         * A slack tolerance, not an exact compare.
+         * An exact compare on the stamp, not a tolerance on the show time.
          *
-         * This is derived from a wall-clock stamp and the show clock, and a
-         * couple of milliseconds of disagreement between them means nothing.
-         * Treating that as "the layer was switched on again" would restart the
-         * simulation from step zero on every frame, so a stateful effect
-         * switched on mid-show would never accumulate anything at all — it would
-         * sit at one sixtieth of a second old for as long as it ran.
+         * The stamp changes when, and only when, the layer was switched on
+         * again — so this restarts the simulation exactly then, and never
+         * because the transport moved underneath it. `enabledAt` still follows
+         * the show clock every frame, so a tab that opens after a pause works
+         * the same conversion out and lands on the same answer; what it no
+         * longer does is take that for a trigger.
          */
-        if (inst.enabledAt === null || Math.abs(inst.enabledAt - enabledAt) > RETRIGGER_SLACK) {
-          inst.enabledAt = enabledAt;
+        const onWall = enabledWallFor(layer);
+        if (inst.onWall !== onWall) {
+          inst.onWall = onWall;
           inst.step = 0;
         }
+        inst.enabledAt = (onWall ? (showTimeOf(onWall, time) ?? 0) : 0) - stagger;
         ctx.age = Math.max(0, t - inst.enabledAt);
 
         if (!inst.initialised) {
@@ -753,6 +828,19 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
           // moving because its seed stopped changing would be a poor trade.
           inst.step = targetStep;
         } else {
+          /**
+           * Show time moved backwards — the transport was scrubbed, or seeked
+           * to an earlier point.
+           *
+           * A step function cannot be run in reverse, so there is nothing to do
+           * but replay it. Left alone the instance simply sits there, ahead of
+           * the show and taking no steps, until show time catches back up with
+           * where it had already got to — which on the wall is the fish
+           * stopping dead for as long as the seek was. A second of tolerance
+           * first, because `targetStep` is a floor and a sub-step wobble must
+           * not be read as a scrub.
+           */
+          if (inst.step - targetStep > SIM_HZ) inst.step = 0;
           if (targetStep - inst.step > MAX_CATCHUP_STEPS) {
             // Beyond running honestly at all. Start cold with a short warm-up.
             inst.step = Math.max(0, targetStep - COLD_START_STEPS);
@@ -778,9 +866,38 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
            * one frame.
            */
           let free = behindBefore <= FREE_CATCHUP_STEPS ? behindBefore : 0;
+          /**
+           * This instance's place in the frame's queue, its slice if it got
+           * one, and how much of the slice it has used.
+           *
+           * `metered` counting from zero rather than reusing `inst.step` is
+           * what makes the *first* check happen immediately: an instance whose
+           * slice is already gone takes no steps at all instead of another
+           * sixty-four, which is what kept the frame inside its allowance once
+           * more than one instance was competing for it.
+           */
+          let slice = null;
+          let metered = 0;
+          let queuedHere = false;
           while (inst.step < targetStep) {
-            if (free > 0) free -= 1;
-            else if ((inst.step & (BUDGET_CHECK_EVERY - 1)) === 0 && catchUp.spent()) break;
+            if (free > 0) {
+              free -= 1;
+            } else {
+              if (!queuedHere) {
+                queuedHere = true;
+                const place = queued++;
+                if (served < CATCHUP_SLOTS && place >= catchUpCursor) {
+                  slice = catchUp.claim();
+                  served++;
+                  lastServed = place;
+                }
+              }
+              // Not this instance's turn: it waits a frame rather than being
+              // handed a slice that has already been spent by somebody else.
+              if (!slice) break;
+              if ((metered & (BUDGET_CHECK_EVERY - 1)) === 0 && slice.spent()) break;
+              metered++;
+            }
             inst.step++;
             ctx.age = inst.step * stepDt;
             ctx.t = inst.enabledAt + ctx.age;
@@ -805,7 +922,13 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
            * failing to gain is taken as proof it cannot, and it starts cold,
            * which is what this code did for every long gap before.
            */
-          if (targetStep - inst.step >= behindBefore && behindBefore > 0) {
+          const gained = behindBefore - (targetStep - inst.step);
+          if (queuedHere && metered === 0) {
+            // Waiting its turn in the queue is not evidence that it cannot
+            // converge, and counting it as such is what used to cold-start —
+            // visibly — the layers that were merely further down the list.
+            // No verdict either way: the counter is left where it is.
+          } else if (behindBefore > 0 && gained <= 0) {
             inst.stalled = (inst.stalled || 0) + 1;
             if (inst.stalled > STALLED_FRAMES) {
               inst.step = Math.max(0, targetStep - COLD_START_STEPS);
@@ -907,6 +1030,16 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
     }
 
     g.setTransform(1, 0, 0, 1, 0, 0);
+
+    /**
+     * Move the rota on.
+     *
+     * Past whoever had the last slice, and back to the start once the queue is
+     * exhausted — including when it shrank, or nobody asked at all, both of
+     * which leave the cursor beyond the end and would otherwise park it there
+     * and starve the whole queue.
+     */
+    catchUpCursor = (lastServed < 0 || lastServed + 1 >= queued) ? 0 : lastServed + 1;
 
     const spent = settlingLayers;
     settlingLayers = nextSettling;
