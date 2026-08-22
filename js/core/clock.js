@@ -43,7 +43,8 @@ export function createClock() {
      * every single frame.
      */
     const nowMs = now();
-    const t = transport.running ? (nowMs - transport.startEpoch) / 1000 : transport.pausedAt;
+    const running = transport.running;
+    const t = running ? (nowMs - transport.startEpoch) / 1000 : transport.pausedAt;
     const wallNow = performance.now();
 
     // dt comes from show time when running so it goes to zero on pause; but a
@@ -68,7 +69,24 @@ export function createClock() {
       bpm: transport.bpm,
       beat,
       beatPhase: beat - Math.floor(beat),
-      wall: nowMs / 1000,
+      /**
+       * The wall-clock instant that show time `t` *is* — which is the clock
+       * now while the show is running, and the moment the clock was frozen
+       * while it is paused.
+       *
+       * Not simply "now", which is what this used to be, and which was only
+       * right by coincidence: the one consumer subtracts it from `t` to turn a
+       * stored wall-clock stamp into a show time, and that subtraction is only
+       * meaningful if the two describe the same instant. Paused they do not —
+       * `t` stops and the clock does not — so the difference slid by a second
+       * every second, and every switch-on time in the show slid with it. Fifty
+       * milliseconds of slide was enough for the renderer to conclude that
+       * every layer had just been switched on again, which it then did sixteen
+       * times a second: measured, one paused layer restarted its simulation
+       * eighty times in five seconds and ran fifty-nine thousand steps to do
+       * it, while showing nothing at all on the wall.
+       */
+      wall: (running ? nowMs : transport.startEpoch + transport.pausedAt * 1000) / 1000,
     };
   }
 
