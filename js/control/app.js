@@ -1930,6 +1930,8 @@ app.recaptureScene = (sceneId) => {
   if (!scene) return;
   app.pushUndo();
   scene.state = captureScene(app.project);
+  // Captured looks describe the whole show. See `full` in core/state.js.
+  scene.full = true;
   app.commit();
   toast(`"${scene.name}" updated from the current look.`, 'good');
 };
@@ -3236,13 +3238,29 @@ function wire() {
         return;
       }
       app.pushUndo();
+      // Read before the preset runs: the scene that was live is the one that
+      // holds whatever is about to be switched off.
+      const wasLive = app.project.scenes.find((s) => s.id === app.project.show?.activeScene);
+      const previousScene = wasLive?.hotkey || null;
       const result = applyPreset(app.project, preset.id);
       app.commit();
       if (!result) return;
+      /**
+       * Say what happened to the look that was already there.
+       *
+       * A starter replaces rather than adds — see `applyPreset` — and the
+       * layers it switched off are still in the list and still in their own
+       * scene. Somebody who has just watched their Halloween wall turn into a
+       * Christmas one needs to be told that in the same breath, or the only
+       * available conclusion is that it was deleted.
+       */
+      const replaced = result.replaced
+        ? ` The ${result.replaced} effect${result.replaced === 1 ? '' : 's'} already on the house ${result.replaced === 1 ? 'is' : 'are'} switched off, not deleted${previousScene ? ` — press ${previousScene} for the old look.` : '.'}`
+        : '';
       toast(
         result.missing.length
-          ? `Added ${result.added} effects. Nothing is tagged ${result.missing.map((t) => `#${t}`).join(' or ')} yet, so those layers have nothing to draw on.`
-          : `Added ${result.added} effects, the "${result.look}" look, and saved it all as the "${result.scene.name}" scene.`,
+          ? `Added ${result.added} effects.${replaced} Nothing is tagged ${result.missing.map((t) => `#${t}`).join(' or ')} yet, so those layers have nothing to draw on.`
+          : `Added ${result.added} effects, the "${result.look}" look, and saved it all as the "${result.scene.name}" scene.${replaced}`,
         result.missing.length ? 'bad' : 'good'
       );
     });
@@ -3265,6 +3283,8 @@ function wire() {
       name: `Scene ${app.project.scenes.length + 1}`,
       hotkey,
       state: captureScene(app.project),
+      // A captured look describes every layer. See `full` in core/state.js.
+      full: true,
     });
     app.project.scenes.push(scene);
     /**

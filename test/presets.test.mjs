@@ -17,6 +17,8 @@
 import { PRESETS } from '../js/control/presets.js';
 import { getEffect } from '../js/effects/registry.js';
 import { GRADE_PRESETS } from '../js/render/postfx.js';
+import { SHAPE_TAGS } from '../js/core/state.js';
+import { demoShapes } from '../js/control/demoHouse.js';
 
 let failures = 0;
 const ok = (name, cond, detail = '') => {
@@ -119,6 +121,41 @@ for (const preset of PRESETS) {
     unguarded.length === 0,
     unguarded.map((l) => l.name).join(', ')
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * The tags a preset asks for have to exist
+ *
+ * A preset targets by tag, and a tag is just a string — so a preset aimed at
+ * `#planter` on a house with no planter traced is not an error anywhere. It is
+ * a layer that draws nothing, or worse, one whose no-targets fallback covers
+ * the whole frame. Two things stop that being silent: the tag has to be one
+ * the tag picker offers, and the demo house has to carry it, or the demo that
+ * exists to show the preset off shows it off with the layer missing.
+ * ------------------------------------------------------------------ */
+
+console.log('\n— tags that have to exist —');
+
+{
+  const traced = new Set(demoShapes().flatMap((s) => s.tags || []));
+  const offered = new Set(SHAPE_TAGS);
+
+  for (const preset of PRESETS) {
+    const wanted = new Set(preset.build().flatMap((l) => l.targetTags || []));
+    const unknown = [...wanted].filter((t) => !offered.has(t));
+    ok(`${preset.id} targets only tags the picker offers`, unknown.length === 0, unknown.join(', '));
+
+    const untraced = [...wanted].filter((t) => !traced.has(t));
+    ok(`${preset.id} targets only tags the demo house has`, untraced.length === 0, untraced.join(', '));
+  }
+
+  // And the other direction, because `tagsUsed` is what the toast reports as
+  // missing: it must name the tags the preset actually points at.
+  for (const preset of PRESETS) {
+    const wanted = new Set(preset.build().flatMap((l) => l.targetTags || []));
+    const overclaimed = (preset.tagsUsed || []).filter((t) => !wanted.has(t));
+    ok(`${preset.id} claims only tags it uses`, overclaimed.length === 0, overclaimed.join(', '));
+  }
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');

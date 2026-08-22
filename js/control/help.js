@@ -558,8 +558,8 @@ export const HELP_SECTIONS = [
 
 <h3>Making it look like light</h3>
 <p>
-  Three helpers do most of the work of separating "light falling on brick" from "a shape stuck to it",
-  and the built-in effects lean on all three.
+  A handful of helpers do most of the work of separating "light falling on brick" from "a shape stuck
+  to it", and the built-in effects lean on all of them.
 </p>
 <table>
   <tr>
@@ -569,6 +569,17 @@ export const HELP_SECTIONS = [
       filament, a lightning channel — has a colour that follows its temperature, so drive it from one
       and let it cool. That is what makes a dying ember go deep red rather than just dim.
       1000&nbsp;K dull embers, 1850&nbsp;K candle, 2400&nbsp;K bright flame, 9000&nbsp;K lightning.
+    </td>
+  </tr>
+  <tr>
+    <th><code>fx.waterAbsorb(hex, m)</code></th>
+    <td>
+      What is left of a colour after <code>m</code> metres of water, by Beer&ndash;Lambert. Water
+      absorbs red about thirty times faster than blue, so ten metres of it takes ninety-five per cent
+      of the red and a tenth of the blue &mdash; which is the whole reason the deep end is blue, and
+      why depth reads off the colour rather than only off the brightness. That matters on a house,
+      where you cannot make the wall any darker. <code>fx.waterTransmission(m)</code> is the same
+      thing as three bare multipliers, for a per-pixel loop.
     </td>
   </tr>
   <tr>

@@ -51,9 +51,13 @@ export function applySceneToLayers(project, sceneId) {
   if (!scene) return false;
   for (const layer of project.layers) {
     const stored = scene.state?.[layer.id];
-    // A layer the scene says nothing about keeps what it has, which is the same
-    // rule the renderer follows.
-    if (!stored) continue;
+    // The same rule the renderer follows, so that clicking a scene and firing
+    // its hotkey cannot disagree: a full scene switches off what it does not
+    // mention, a partial one leaves it alone. See `full` in core/state.js.
+    if (!stored) {
+      if (scene.full) layer.enabled = false;
+      continue;
+    }
     layer.enabled = !!stored.enabled;
     layer.opacity = stored.opacity ?? 1;
     if (stored.params) layer.params = { ...layer.params, ...stored.params };
@@ -144,9 +148,35 @@ export function effectiveLayers(project, at = now()) {
     const toState = active.state?.[layer.id];
     const fromState = previous?.state?.[layer.id];
 
-    // A layer the scene says nothing about keeps its authored state.
-    if (!toState && !fromState) {
+    /**
+     * A layer the active scene says nothing about.
+     *
+     * Which of two things that means depends on what kind of scene it is, and
+     * getting it from the contents alone is not possible — see `full` in
+     * core/state.js.
+     *
+     * A **partial** scene is a one-shot: it names the layer it fires and has
+     * no opinion about anything else, so everything else keeps its authored
+     * state. That has to hold whatever the scene we came *from* said, which is
+     * the part this used to get wrong: firing a burst from a captured look
+     * took every ambient layer down the crossfade path and left it at zero, so
+     * pressing X on the demo house blacked out the entire show and showed you
+     * the bats alone. The comment in presets.js has always said "fire it in
+     * the middle of anything and only the burst changes"; now it does.
+     *
+     * A **full** scene is a captured look and is authoritative. A layer it
+     * does not mention is one that did not exist when it was saved, so it is
+     * not part of that look and fades out with the transition. Without this,
+     * a project with two starter presets in it has two scenes that both say
+     * "everything on", and switching between them does nothing at all.
+     */
+    if (!toState && !active.full) {
       out.push(layer);
+      continue;
+    }
+
+    if (!toState && !fromState) {
+      out.push({ ...layer, enabled: false });
       continue;
     }
 

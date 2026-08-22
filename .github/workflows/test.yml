@@ -1,9 +1,10 @@
-# Geometry and calibration tests, plus a parse check over every module.
+# Every test in test/, plus a parse check over every module.
 #
 # The app has no build step and no dependencies, so this needs nothing but Node.
-# The tests that matter are the ones covering the homography solve and marker
-# detection — the parts where a subtle error produces a projection that looks
-# plausible and lands in the wrong place.
+# The tests that matter most are the ones covering the homography solve and
+# marker detection — the parts where a subtle error produces a projection that
+# looks plausible and lands in the wrong place — and the whole-library sweep,
+# which is the only thing that notices an effect quietly drawing nothing.
 name: Tests
 
 on:
@@ -35,56 +36,35 @@ jobs:
           done
           exit $status
 
-      - name: Geometry and calibration tests
-        run: node test/geometry.test.mjs
-
-      - name: Motion, trigger, schedule and grading tests
-        run: node test/runtime.test.mjs
-
-      - name: Surface collision tests
-        run: node test/collide.test.mjs
-
-      - name: Facade collision and edge-blending tests
-        run: node test/obstacles.test.mjs
-
-      - name: Effect behaviour tests
-        run: node test/effects.test.mjs
-
-      - name: Starter preset tests
-        run: node test/presets.test.mjs
-
-      - name: Figure orientation tests
-        run: node test/figures.test.mjs
-
-      - name: Command palette tests
-        run: node test/palette.test.mjs
-
-      - name: Layer diagnostic tests
-        run: node test/diagnostics.test.mjs
-
-      - name: Brickwork and breach tests
-        run: node test/brickwork.test.mjs
-
-      - name: Flowers and print tests
-        run: node test/floral.test.mjs
-
-      - name: One-shot burst tests
-        run: node test/bursts.test.mjs
-
-      - name: Celebration and cyberpunk effect tests
-        run: node test/celebrations.test.mjs
-
-      - name: Depth scan pipeline tests
-        run: node test/depth.test.mjs
-
-      - name: glTF scan reader tests
-        run: node test/glb.test.mjs
-
-      - name: Depth scan storage, placement and field tests
-        run: node test/scan.test.mjs
-
-      - name: Scan pipeline against a realistic garden
-        run: node test/scanreal.test.mjs
-
-      - name: Cross-device link, clock sync and relay tests
-        run: node test/link.test.mjs
+      # Every test file, found rather than listed.
+      #
+      # This used to be one named step per test, which reads beautifully in the
+      # checks list and quietly stopped being true: two suites — the wall
+      # rectification maths and the cross-tab sync — were added, were run by
+      # hand, passed, and never ran here again. Nothing failed. Nothing said
+      # anything. They were simply not in the list, and a list of files kept by
+      # hand next to a directory of files is a list that will disagree with it.
+      #
+      # A loop cannot drift. The grouping keeps the log as readable as the
+      # separate steps were — one collapsible section per suite — and the
+      # failures are collected rather than exiting on the first, so one broken
+      # suite does not hide the state of the rest.
+      - name: Every test
+        run: |
+          status=0
+          failed=""
+          for file in $(ls test/*.test.mjs | sort); do
+            echo "::group::$file"
+            if node "$file"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error file=$file::suite failed"
+              failed="$failed $file"
+              status=1
+            fi
+          done
+          if [ -n "$failed" ]; then
+            echo "Failed:$failed"
+          fi
+          exit $status

@@ -37,6 +37,17 @@ about 3 ms, and all but eight effects under 1 ms. The dearest are the ones that
 fill large areas: rain, smoke, snow, fire, caustics, static, fog and frost. A
 typical twelve-layer show comes to five or six milliseconds.
 
+The underwater set sits in the middle of that: Shafts from the Surface is the
+dearest of them because it fills the frame, Shoal is next, and Bubbles is among
+the cheapest things in the library. Shoal is the one to watch when pointed at
+several shapes at once — a layer aimed at five windows is five shoals, not one
+spread over five — but that is a property of the layer rather than the effect,
+and it is true of Snow and Rain in exactly the same way. Everything in the set
+takes its colours through `fx.waterAbsorb`, which caches and quantises to a
+quarter of a metre for precisely this reason: a shoal of forty fish each tinted
+for its own depth would otherwise be a hundred and twenty exponentials and forty
+string builds a frame, which is more than the drawing costs.
+
 That is after fixing three things, each of which was costing more than the
 entire frame budget on its own.
 

@@ -45,6 +45,18 @@ export { createNoise, defaultNoise } from '../core/noise.js';
 export { blackbody, blackbodyCss, blackbodyBytes, mixLinear, rampAt, luminance, srgbToLinear, linearToSrgb } from './color.js';
 
 /**
+ * The other half of "colour is a physical quantity": what a medium takes out of
+ * light on the way through it.
+ *
+ * `waterAbsorb(hex, metres)` is to depth what `blackbodyCss` is to heat. Water
+ * absorbs red about thirty times faster than blue, so anything more than a
+ * couple of metres down is blue whatever colour it started — and fading a
+ * chosen blue towards black instead gives you a dimmer switch rather than a
+ * depth cue.
+ */
+export { waterAbsorb, waterTransmission } from './color.js';
+
+/**
  * Low-resolution density fields, for anything volumetric.
  *
  * Fire, smoke and fog are volumes. Drawing them as hundreds of additive circles

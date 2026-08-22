@@ -263,6 +263,30 @@ export const GRADE_PRESETS = [
     },
   },
   {
+    id: 'deep',
+    name: 'Deep',
+    description: 'Everything under water. A big soft halo, because that is what light does in water, and the red pulled out from under it.',
+    values: {
+      /**
+       * The bloom is the physics here, not the polish.
+       *
+       * Water scatters: a bright thing seen through several metres of it has a
+       * halo, and the halo is wide and soft rather than the tight ring a lens
+       * gives. So the radius goes up and the threshold comes *down*, which
+       * means even the middling values bloom a little — that is the veiling
+       * glare you get looking at anything through a few metres of sea, and it
+       * is most of why an underwater picture has no true blacks in it.
+       *
+       * Gamma above one lifts those shadows the rest of the way. A projector
+       * that leaves the bottom of the frame at zero is showing you the wall,
+       * and there is no wall down there; there is water.
+       */
+      bloom: 0.52, bloomThreshold: 0.46, bloomKnee: 0.45, bloomRadius: 2,
+      exposure: 1, contrast: 1.04, saturation: 1.15, temperature: -0.3,
+      gamma: 1.06, tonemap: true,
+    },
+  },
+  {
     id: 'saturated',
     name: 'Saturated',
     description: 'Punchy colour with a big halo. Fairy lights and chases.',

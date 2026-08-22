@@ -1,4 +1,10 @@
 .DS_Store
 node_modules/
+# `npm i -D playwright`, which is the one documented reason to run npm in here
+# at all, leaves these behind. The app itself has no dependencies and no
+# package.json, and a checkout should not grow one because somebody
+# regenerated the README pictures.
+package.json
+package-lock.json
 *.log
 .claude/

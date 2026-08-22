@@ -158,3 +158,107 @@ export function luminance(hex) {
   const [r, g, b] = parseHex(hex).map(srgbToLinear);
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
+
+/* ------------------------------------------------------------------ *
+ * Water
+ * ------------------------------------------------------------------ */
+
+/**
+ * Absorption coefficients of clear water, per metre, at the wavelengths a
+ * display's three primaries sit at — roughly 630 nm, 532 nm and 465 nm.
+ *
+ * Read off the pure-water absorption spectrum (Pope & Fry 1997). The numbers
+ * matter less than the *ratio*: water is nearly thirty times more absorbing in
+ * the red than in the blue, which is the entire reason anything more than a
+ * couple of metres under the surface is blue. It is not a tint anybody chose.
+ * A diver's torch at ten metres puts out the same white it always did; what
+ * comes back has had its red taken out of it on the way there and again on the
+ * way back.
+ */
+const WATER_ABSORPTION = [0.30, 0.047, 0.0105];
+
+/**
+ * A colour as it arrives after `metres` of water, by Beer–Lambert.
+ *
+ * `I = I0 · e^(−a·d)`, per channel, in linear light — which is the only place
+ * it means anything, because absorption is a fraction of the *energy* and an
+ * sRGB value is not energy.
+ *
+ * This is the water equivalent of `blackbodyCss`, and it earns its keep the same
+ * way. Fading a chosen blue towards black as things get deeper gives you a
+ * uniform darkening, which reads as a dimmer switch. Removing the red first
+ * gives you the thing everybody recognises from a photograph taken underwater:
+ * warm things lose their colour with distance while blue-green things barely
+ * change, so depth is legible from the colour alone rather than only from the
+ * brightness. On a projector, where you cannot make the wall darker, that
+ * distinction is the whole of it.
+ *
+ * `turbidity` scales all three coefficients together: 1 is clear open water, and
+ * anything above about 4 is a harbour. It multiplies rather than replaces
+ * because suspended matter absorbs broadly — it makes water murkier without
+ * making it a different colour of murky.
+ *
+ * Cached, and quantised to a quarter of a metre to make the cache work — see
+ * below, and `blackbodyCss`, which does the same thing for the same reason.
+ *
+ * @param {string} hex    the colour leaving the source
+ * @param {number} metres how far it travels through water
+ * @param {number} [turbidity]
+ */
+export function waterAbsorb(hex, metres, turbidity = 1) {
+  const d = Math.max(0, metres) * Math.max(0, turbidity);
+  if (!(d > 0)) return `#${parseHex(hex).map(toHexByte).join('')}`;
+
+  /**
+   * Cached and quantised, exactly as `blackbodyCss` is, and for the same
+   * reason: this is called from inside per-particle and per-gradient-stop
+   * loops. A shoal of forty fish, each tinted for its own depth, is forty
+   * parses, a hundred and twenty exponentials and forty string builds a frame,
+   * every frame — which is more than the drawing costs.
+   *
+   * A quarter of a metre is the step, which changes the red by about seven per
+   * cent and everything else by less than one. Invisible between two fish and
+   * invisible between two stops of a gradient, which are the only two places
+   * anything here compares one sample against its neighbour.
+   *
+   * Keyed on the *product* rather than on the two arguments, so a colour asked
+   * for at five metres in water twice as murky lands on the same entry as one
+   * at ten metres in clear — which is the same question and, above, is
+   * literally the same computation.
+   */
+  const key = `${hex}|${Math.round(d * 4)}`;
+  const hit = absorbCache.get(key);
+  if (hit) return hit;
+
+  const quantised = Math.round(d * 4) / 4;
+  const src = parseHex(hex);
+  const out = [0, 1, 2].map((i) =>
+    linearToSrgb(srgbToLinear(src[i]) * Math.exp(-WATER_ABSORPTION[i] * quantised))
+  );
+  const css = `#${toHexByte(out[0])}${toHexByte(out[1])}${toHexByte(out[2])}`;
+
+  // Bounded because the key holds a colour, and a colour can be bound to an
+  // LFO — which would otherwise add an entry a frame for the rest of the
+  // evening. Clearing outright rather than evicting one: this is a cache of
+  // pure functions, so the only cost of losing it is recomputing a frame's
+  // worth, and a few thousand entries is far more than any show needs at once.
+  if (absorbCache.size >= ABSORB_LIMIT) absorbCache.clear();
+  absorbCache.set(key, css);
+  return css;
+}
+
+const absorbCache = new Map();
+const ABSORB_LIMIT = 4096;
+
+/**
+ * The same attenuation as a bare multiplier, for callers already working in
+ * linear light or in bytes.
+ *
+ * Returns `[r, g, b]` factors in 0..1 — multiply your own components by them.
+ * Useful inside a per-pixel loop, where round-tripping a hex string per sample
+ * would dominate the cost of everything else in it.
+ */
+export function waterTransmission(metres, turbidity = 1) {
+  const d = Math.max(0, metres) * Math.max(0, turbidity);
+  return WATER_ABSORPTION.map((a) => Math.exp(-a * d));
+}

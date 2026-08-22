@@ -36,6 +36,15 @@ const OBSTACLE_PARAM = {
   default: 'window, door',
 };
 
+/**
+ * How long between one runner emerging and the next.
+ *
+ * Long enough that a full-strength plant visibly builds up rather than arriving,
+ * short enough that the default six are all working inside ten seconds — which
+ * matters because somebody who has just added the layer is watching it.
+ */
+const EMERGE_SECONDS = 1.4;
+
 /** The point on a shape's outline furthest down — where things climb from. */
 function groundPoint(container, rng, samples = 9) {
   let best = null;
@@ -705,6 +714,29 @@ const vine = {
      * two shoots working rather than alternating between seven and none.
      */
     const headroom = clamp((budget - state.grown) / (budget * 0.15), 0, 1);
+
+    /**
+     * Shoots emerge one at a time, not all together.
+     *
+     * The tip count is what the plant grows *to*, and it used to be what it
+     * started at: the first simulation step found an empty tip list, wanted six
+     * of them, and pushed six — so the instant you added the layer, six runners
+     * set off along the bottom of the wall at once. Each one carries a glow of
+     * several times the vine's own width and they all start from the same edge,
+     * so six of them arriving together on bare brick, through the bloom, is a
+     * bar of light across the foot of the house. It reads as one massively
+     * thick thing rather than as six thin ones, and nothing about it reads as
+     * something growing.
+     *
+     * One shoot every `EMERGE_SECONDS` instead, from the moment the plant was
+     * planted. A wall of ivy takes a minute to get going and then keeps its
+     * full complement for the rest of the evening, which is both what a plant
+     * does and what makes the first thirty seconds worth watching.
+     *
+     * A pure function of show time and `plantedAt`, so every tab agrees, and a
+     * tab that joins an hour in skips straight to the full count.
+     */
+    const emerged = 1 + Math.floor(Math.max(0, t - state.plantedAt) / EMERGE_SECONDS);
     // A floor of one while there is any room at all. Rounding a small headroom
     // still toggles between zero and one shoot, about once a second, and one
     // shoot that keeps creeping reads far better than one that keeps returning.
@@ -712,7 +744,7 @@ const vine = {
     // make more — goes down to none, and even that one fades out.
     const wanted = headroom <= 0
       ? 0
-      : Math.max(1, Math.round(clamp(p.tips, 1, 24) * headroom));
+      : Math.max(1, Math.min(emerged, Math.round(clamp(p.tips, 1, 24) * headroom)));
 
     /**
      * Shoots fade in and out rather than appearing and vanishing.
