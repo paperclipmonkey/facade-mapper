@@ -230,20 +230,22 @@ const brickwork = {
   init() {
     return { key: '' };
   },
-  draw({ g, p, shape, state, shapes, stable, share }) {
-    const { bbox } = shape;
-    if (bbox.w <= 2 || bbox.h <= 2) return;
-
-    const obstacles = collectObstacles(shapes, p.obstacles, shape.id);
-
-    /**
-     * Publish the course this wall was actually laid to.
-     *
-     * From `stable`, because that is what got baked — a mortar width bound to
-     * the microphone changes `p` sixty times a second and changes the wall
-     * never. Breach reads this so its holes land on real bricks without anybody
-     * typing the same three numbers into two panels and keeping them in step.
-     */
+  /**
+   * Publish the course this wall is laid to.
+   *
+   * From `stable`, because that is what gets baked — a mortar width bound to
+   * the microphone changes `p` sixty times a second and changes the wall never.
+   * Breach reads this so its holes land on real bricks without anybody typing
+   * the same three numbers into two panels and keeping them in step.
+   *
+   * In `publish` rather than in `draw`, because Breach reads it from its
+   * simulation, and a simulation runs before anything is painted — thousands of
+   * steps of it, all at once, in a tab that has just opened. Published from the
+   * paint, the reader in such a tab found nothing there and laid its holes to a
+   * different course from every tab that had been running. See the notice board
+   * in render/worldRenderer.js.
+   */
+  publish({ shape, stable, share }) {
     share?.set(`brickwork:${shape.id}`, {
       w: Math.max(6, stable.brickW),
       h: Math.max(3, stable.brickH),
@@ -251,6 +253,12 @@ const brickwork = {
       originX: stable.originX || 0,
       originY: stable.originY || 0,
     });
+  },
+  draw({ g, p, shape, state, shapes, stable }) {
+    const { bbox } = shape;
+    if (bbox.w <= 2 || bbox.h <= 2) return;
+
+    const obstacles = collectObstacles(shapes, p.obstacles, shape.id);
     const key = wallKey(shape, stable, obstacles);
     if (state.key !== key) {
       state.key = key;
@@ -332,23 +340,29 @@ function tentacleRibbon(g, joints, widths) {
  * Rebuilding drops the holes on the floor, which is correct: the bricks they
  * were made of no longer exist.
  *
+ * Built from `stable` — the parameters before modulation — for exactly the
+ * reason Brickwork bakes its wall from them. Bind the brick width to the
+ * microphone and keying this on the modulated value rebuilds the lattice sixty
+ * times a second, which drops every hole in the wall sixty times a second: the
+ * breach stops happening at all and the machine works hard to show it.
+ *
  * @returns {{w:number,h:number,gap:number}|null} null when there is no wall to
  *   take apart — a shape so small or so full of windows that no brick fits.
  */
-function layoutFor({ p, shape, shapes, share, state }) {
+function layoutFor({ stable, shape, shapes, share, state }) {
   const { bbox } = shape;
-  const obstacles = collectObstacles(shapes, p.obstacles, shape.id);
+  const obstacles = collectObstacles(shapes, stable.obstacles, shape.id);
 
   // The course the Brickwork layer on this shape laid, if there is one. Both
   // effects build from the same bbox with the same maths, so agreeing on these
   // few numbers is all it takes to agree on every brick.
-  const laid = p.match ? share?.get(`brickwork:${shape.id}`) : null;
-  const w = laid ? laid.w : Math.max(6, p.brickW);
-  const h = laid ? laid.h : Math.max(3, p.brickH);
-  const gap = laid ? laid.gap : Math.max(0, p.gap);
+  const laid = stable.match ? share?.get(`brickwork:${shape.id}`) : null;
+  const w = laid ? laid.w : Math.max(6, stable.brickW);
+  const h = laid ? laid.h : Math.max(3, stable.brickH);
+  const gap = laid ? laid.gap : Math.max(0, stable.gap);
   const origin = laid
     ? { x: laid.originX || 0, y: laid.originY || 0 }
-    : { x: p.originX || 0, y: p.originY || 0 };
+    : { x: stable.originX || 0, y: stable.originY || 0 };
 
   const key = [shape.id, Math.round(bbox.x), Math.round(bbox.y), Math.round(bbox.w), Math.round(bbox.h),
     w, h, gap, origin.x, origin.y,
@@ -454,7 +468,7 @@ const breach = {
     if (bbox.w <= 2 || bbox.h <= 2) return;
 
     const obstacles = collectObstacles(shapes, p.obstacles, shape.id);
-    const layout = layoutFor({ p, shape, shapes, share, state });
+    const layout = layoutFor({ stable, shape, shapes, share, state });
     if (!layout) return;
     const { w, h, gap } = layout;
     const grid = state.grid;
@@ -734,7 +748,7 @@ const breach = {
   draw({ g, p, shape, t, rng, state, shapes, stable, share }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2) return;
-    const layout = layoutFor({ p, shape, shapes, share, state });
+    const layout = layoutFor({ stable, shape, shapes, share, state });
     if (!layout) return;
     const { w, h, gap } = layout;
     const armCount = Math.round(clamp(p.arms, 0, 8));

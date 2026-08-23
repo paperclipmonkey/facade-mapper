@@ -446,7 +446,10 @@ console.log('\n— the two layers agree about the bricks —');
    * is a chore with a wrong answer waiting in it.
    *
    * They are wired through the renderer's notice board, so the test drives both
-   * effects with one shared Map exactly as the renderer does.
+   * effects with one shared Map exactly as the renderer does — publishing first
+   * for every layer, then stepping, then drawing. That order is the point: the
+   * reader's simulation runs before anything is painted, so a course published
+   * from a `draw` is not there when it is wanted.
    */
   const share = new Map();
   const brickP = { ...defaultParams('brickwork'), brickW: 96, brickH: 30, gap: 6, obstacles: '' };
@@ -463,6 +466,7 @@ console.log('\n— the two layers agree about the bricks —');
     t += 1 / 60;
     const common = { stable: null, shape: wall, shapes: () => [], t, dt: 1 / 60, rng,
       i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120, audio: { level: 0, low: 0, mid: 0, high: 0 }, share };
+    brickwork.publish({ ...common, p: brickP, stable: brickP });
     brickwork.draw({ ...common, g: recordingContext(), p: brickP, stable: brickP, state: bState });
     g = recordingContext();
     breach.step?.({ ...common, g: null, p: breachP, stable: breachP, state: xState });

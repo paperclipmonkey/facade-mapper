@@ -86,6 +86,23 @@ function normaliseEffect(def, isBuiltin = false) {
      * the same wall. See render/worldRenderer.js.
      */
     step: typeof def.step === 'function' ? def.step : null,
+    /**
+     * Optional: values this effect puts on the notice board for other layers.
+     *
+     * Run for every target before *any* layer in the frame steps or draws, so
+     * what it writes is there for a subscriber's very first simulation step —
+     * including the thousands of them a tab that has just opened runs to catch
+     * up with the show. Writing from `draw` instead, as this used to, made the
+     * board's contents a function of how many frames the tab had drawn and of
+     * which layer happened to sit lower in the stack, and two tabs that
+     * disagreed about that painted two different walls.
+     *
+     * It gets the shape, the layer and the parameters *before* modulation, and
+     * no canvas: a value two layers have to agree on is a structural fact about
+     * the show, not something that may change sixty times a second. See
+     * `share` in render/worldRenderer.js.
+     */
+    publish: typeof def.publish === 'function' ? def.publish : null,
     draw: typeof def.draw === 'function' ? def.draw : () => {},
     /**
      * Optional: when this effect is about to make a noise, in show time.

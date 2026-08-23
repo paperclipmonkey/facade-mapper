@@ -581,17 +581,76 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
     const validShapeIds = new Set(project.shapes.map((s) => s.id));
     geometry.prune(validShapeIds);
 
+    /** The shapes a layer is pointed at, as the geometry the effects see. */
+    const targetsFor = (effect, layer) => {
+      const shapes = project.shapes.length ? resolveTargets(project, layer) : [];
+      // Global effects always paint the whole frame; a shape effect with no
+      // targets does too, which is how "snow over everything" works.
+      return effect.scope === 'global' || !shapes.length
+        ? [frameShapeCache]
+        : shapes.map((s) => geometry.get(s, world));
+    };
+
+    /**
+     * The notice board, filled in before anything runs.
+     *
+     * `share` used to be written by a publisher's `draw` and read by a
+     * subscriber's `step`, on the theory that the publisher sits lower in the
+     * stack and therefore draws first, and that a reader finding last frame's
+     * values is right about everything that matters.
+     *
+     * Neither holds. Nothing orders the layers that way — put Breach under
+     * Brickwork and the reader runs first — and, far worse, *last frame* is a
+     * thing a tab that has only just opened does not have. Such a tab runs its
+     * entire catch-up, which is every simulation step of the evening so far,
+     * against an empty board: it laid its holes to a different course from the
+     * tab that had been running, and the two never came back together. On the
+     * house that was tentacles coming out of different bricks in the projector
+     * and the preview.
+     *
+     * So publishing is its own pass, before any layer steps or draws, and the
+     * board is rebuilt from scratch each frame. What a subscriber reads is then
+     * a function of the project alone — the same in every tab, at every frame
+     * rate, from the first step a tab takes.
+     */
+    share.clear();
+    for (const layer of ordered) {
+      const effect = getEffect(layer.effect);
+      if (!effect?.publish) continue;
+      /**
+       * Publishers see parameters *before* modulation, deliberately.
+       *
+       * Two layers agreeing about where the bricks are is a structural fact
+       * about the wall. Bind the mortar width to the microphone and the wall is
+       * still laid the way it was laid; a course that moved sixty times a
+       * second would rebuild both layers' caches sixty times a second and agree
+       * about nothing.
+       */
+      const stable = baseParams(effect, layer);
+      const publishTargets = targetsFor(effect, layer);
+      for (let i = 0; i < publishTargets.length; i++) {
+        try {
+          effect.publish({
+            share,
+            shape: publishTargets[i],
+            i,
+            n: publishTargets.length,
+            world,
+            layer,
+            p: stable,
+            stable,
+          });
+        } catch (err) {
+          reportError(layer.id, effect.id, err);
+        }
+      }
+    }
+
     for (const layer of ordered) {
       const effect = getEffect(layer.effect);
       if (!effect) continue;
 
-      const shapes = project.shapes.length ? resolveTargets(project, layer) : [];
-      // Global effects always paint the whole frame; a shape effect with no
-      // targets does too, which is how "snow over everything" works.
-      const targets =
-        effect.scope === 'global' || !shapes.length
-          ? [frameShapeCache]
-          : shapes.map((s) => geometry.get(s, world));
+      const targets = targetsFor(effect, layer);
 
       /**
        * The rest of the scene, for effects that have to know what else is out
@@ -672,6 +731,12 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
        * See `baseParams` for why an effect must never key a cache on `p`.
        */
       const stable = baseParams(effect, layer);
+      /**
+       * Whether anything on this layer is bound to an LFO, the audio or an
+       * expression — which decides whether the simulation has to re-resolve its
+       * parameters as it steps. See the step loop below.
+       */
+      const modulated = !!layer.bindings && Object.keys(layer.bindings).length > 0;
 
       const n = targets.length;
       for (let i = 0; i < n; i++) {
@@ -733,11 +798,12 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
            * numbers into two panels and keep them in step is not a design, it
            * is a chore with a wrong answer waiting in it.
            *
-           * Deliberately not cleared between frames. A publisher normally draws
-           * first because it sits lower in the stack, but nothing enforces
-           * that, and a reader that finds last frame's values is right about
-           * everything that matters. Keyed by the publisher, so this cannot
-           * become a general-purpose global by accident.
+           * Written only by `publish`, which runs for every layer before any
+           * of them steps or draws, and cleared at the top of each frame — so
+           * a reader sees the same board on its first simulation step as on its
+           * millionth, whatever order the layers are in and however long the
+           * tab has been open. Keyed by the publisher, so this cannot become a
+           * general-purpose global by accident.
            */
           share,
           preview,
@@ -847,6 +913,8 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
             inst.stalled = 0;
           }
           const behindBefore = targetStep - inst.step;
+          /** The frame's own parameters, for the paint after the stepping. */
+          const frameParams = ctx.p;
           const stepDt = 1 / SIM_HZ;
           ctx.dt = stepDt;
           // No canvas during simulation: `step` decides what happens, `draw`
@@ -904,6 +972,24 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
             ctx.beat = (ctx.t * (time.bpm || 120)) / 60;
             ctx.beatPhase = ctx.beat - Math.floor(ctx.beat);
             ctx.rng = makeRng(`${inst.key}#${inst.step}`);
+            /**
+             * A bound parameter is resolved at the step's own time, not the
+             * frame's.
+             *
+             * `p` used to be worked out once per frame and handed to every step
+             * that frame, which is right while a tab is keeping up and wrong the
+             * moment it is not: a tab catching up runs a whole evening of steps
+             * inside one frame, and every one of them saw the *same* value of a
+             * slider that had in fact been sweeping the whole time. So a
+             * projector that had just been opened simulated an evening at one
+             * spawn rate while the control tab had simulated it at forty, and
+             * the two showed different walls for the rest of the night.
+             *
+             * Only for layers that actually bind something — resolving is not
+             * free, and an unbound layer's parameters are the same number at
+             * every instant anyway.
+             */
+            if (modulated) ctx.p = resolveParams(effect, layer, ctx);
             try {
               effect.step(ctx);
             } catch (err) {
@@ -945,6 +1031,10 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
           ctx.beat = beat;
           ctx.beatPhase = beat - Math.floor(beat);
           ctx.age = Math.max(0, t - inst.enabledAt);
+          // Restored rather than resolved again: it was worked out at this same
+          // instant a moment ago, and a second resolve would advance the
+          // sample-and-hold of a `random` binding twice in one frame.
+          ctx.p = frameParams;
         }
 
         /**

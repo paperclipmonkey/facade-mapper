@@ -186,7 +186,14 @@ Two consequences worth designing for:
   keep it free of anything that grows without bound.
 - **Anything that writes to `state` belongs in `step`.** Including drawing into
   an accumulation canvas — that canvas *is* state. A `draw` that also grows the
-  plant paints a different plant in every tab.
+  plant paints a different plant in every tab. Sorting counts as writing:
+  `state.flakes.sort(...)` in a `draw` leaves the array in an order that depends
+  on how many frames this tab has painted, and the next `step` that shortens the
+  list then throws away different flakes in every tab. Sort a list of your own.
+- **A bound parameter is resolved at each step's own time.** `p` inside `step`
+  is the value the slider had at that step, not the value it had when the frame
+  started — so a simulation replayed by a tab catching up runs through the same
+  sweep of an LFO as one that watched it live.
 
 ## Accumulating rather than redrawing
 
@@ -266,14 +273,28 @@ the same brick wall have to agree about where the bricks are, and the only
 alternative is asking somebody to keep two panels in step by hand.
 
 Key it with your own effect id so it cannot become a general-purpose global by
-accident, and publish the values you actually drew with rather than the ones you
-were given — `stable` rather than `p`, if a modulator can move them:
+accident. Publishing has a hook of its own — `publish(ctx)` — which runs for
+every layer *before* any layer in the frame steps or draws:
 
 ```js
-share.set(`brickwork:${shape.id}`, { w, h, gap });   // publisher
-const laid = share.get(`brickwork:${shape.id}`);     // reader
+  publish({ shape, stable, share }) {                 // publisher
+    share.set(`brickwork:${shape.id}`, { w, h, gap });
+  },
+  step({ shape, stable, share, state }) {             // reader
+    const laid = share.get(`brickwork:${shape.id}`);
+  },
 ```
 
-It is not cleared between frames. A publisher normally draws first because it
-sits lower in the stack, but nothing enforces that, and a reader that finds the
-previous frame's values is right about everything that matters.
+`publish` gets the shape, the layer and `stable` — the parameters *before*
+modulation — and no canvas. That is the whole contract, and it is deliberate: a
+value two layers have to agree on is a structural fact about the show, not
+something that may be a different number sixty times a second.
+
+The board is rebuilt from scratch each frame, and publishing before anything
+runs is what makes it safe to read from `step`. Published from `draw` instead —
+as this used to be — its contents depended on how many frames the tab had
+painted and on which layer happened to sit lower in the stack. A tab that had
+been open all evening got away with reading the previous frame's values; a tab
+that had just opened ran its entire catch-up, every simulation step of the show
+so far, before the publisher had painted once. It read an empty board, laid its
+holes to a different course, and the two tabs never came back together.
