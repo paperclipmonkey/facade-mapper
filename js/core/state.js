@@ -215,6 +215,16 @@ export const RESERVED_KEYS = {
   l: 'the Path tool',
   r: 'the Rectangle tool',
   c: 'the Corners tool',
+  /**
+   * Added late, and missing from here until it was gone looking for.
+   *
+   * `W` opens the square-the-wall tool. The editor's switch handles it and
+   * breaks, so it never reaches the trigger dispatch below `default` — a
+   * trigger on `w` looked configured, was warned about by nothing, and in the
+   * dark opened a modal tool instead of firing the scare. Which is the whole
+   * of what this constant is for.
+   */
+  w: 'Square up the wall',
   b: 'Blackout',
   ' ': 'play/pause',
   0: 'zoom the stage back to fit',

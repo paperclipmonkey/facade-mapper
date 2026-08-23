@@ -127,6 +127,27 @@ ok('there are effects to check', effects.length > 50, `${effects.length} effects
       if (param.type === 'select' && !(param.options || []).includes(param.default)) {
         problems.push(`${effect.id}.${param.key} defaults to "${param.default}", not in its options`);
       }
+      /**
+       * The same complaint about a slider.
+       *
+       * A range control walks from its minimum in whole steps, so a default
+       * that does not sit on one of them is a value the slider cannot produce
+       * — you can leave it but never get back to it. Sparkler's spark size
+       * defaulted to 2.6 from a minimum of 0.5 in steps of 0.2, which lands on
+       * 2.5 and 2.7 and never on where it started.
+       */
+      if ((param.type === 'range' || param.type === 'number')
+          && typeof param.default === 'number' && param.step > 0 && param.min !== undefined) {
+        const steps = (param.default - param.min) / param.step;
+        const off = Math.abs(steps - Math.round(steps));
+        // A millionth of a step, because these are decimals in binary floats.
+        if (off > 1e-6 && off < 1 - 1e-6) {
+          problems.push(
+            `${effect.id}.${param.key} defaults to ${param.default}, which its own step of `
+            + `${param.step} from ${param.min} never lands on`
+          );
+        }
+      }
       if (param.type === 'color' && !/^#[0-9a-fA-F]{3,8}$/.test(String(param.default))) {
         problems.push(`${effect.id}.${param.key} defaults to "${param.default}", which is not a hex colour`);
       }

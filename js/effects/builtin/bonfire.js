@@ -601,7 +601,11 @@ const sparkler = {
     { key: 'fork', type: 'range', label: 'Forking', default: 0.7, min: 0, max: 1, step: 0.01 },
     { key: 'head', type: 'range', label: 'Head size', default: 10, min: 2, max: 60, step: 1 },
     { key: 'trail', type: 'range', label: 'After-image (s)', default: 0.5, min: 0, max: 3, step: 0.05 },
-    { key: 'size', type: 'range', label: 'Spark size', default: 2.6, min: 0.5, max: 12, step: 0.2 },
+    // Step 0.1, not 0.2: from a minimum of 0.5 a step of 0.2 lands on 2.5 and
+    // 2.7, so the default of 2.6 was a value the slider could not return to
+    // once anybody nudged it. Finer rather than moving the default, because
+    // this way the sparkler still starts exactly where it always has.
+    { key: 'size', type: 'range', label: 'Spark size', default: 2.6, min: 0.5, max: 12, step: 0.1 },
   ],
   init() {
     return { sparks: [], trail: null, owed: 0 };

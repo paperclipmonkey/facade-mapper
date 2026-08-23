@@ -16,7 +16,9 @@
  *   node test/triggers.test.mjs
  */
 
-import { createProject, createScene, createTrigger } from '../js/core/state.js';
+import { readFile } from 'node:fs/promises';
+
+import { createProject, createScene, createTrigger, RESERVED_KEYS } from '../js/core/state.js';
 import { createTriggerRuntime } from '../js/control/triggers.js';
 
 let failures = 0;
@@ -414,6 +416,83 @@ console.log('\n— motion —');
   advance(2);
   runtime.tick(busy);
   ok('and holds motion off afterwards', runtime.tick(busy) === false);
+}
+
+/* ------------------------------------------------------------------ *
+ * Keys the editor has already taken
+ * ------------------------------------------------------------------ */
+
+console.log('\n— the keys a trigger cannot have —');
+{
+  /**
+   * Two lists that have to agree, and did not.
+   *
+   * The editor's key handler runs first and does not fall through: a `case`
+   * that matches breaks, so it never reaches the trigger dispatch under
+   * `default`. A trigger on one of those keys is therefore simply dead — it
+   * looks configured, reads as configured, and never fires. `RESERVED_KEYS`
+   * exists so the inspector can say so, and it is only useful while it names
+   * exactly the keys the handler actually takes.
+   *
+   * It drifted. `W` was added for the square-the-wall tool and never added
+   * here, so a trigger on `w` got no warning at all and, pressed in the dark,
+   * opened a modal tool instead of firing the scare.
+   *
+   * Read out of the source because there is nowhere else to read it from — the
+   * handler is a page module that cannot be imported in Node. A scrape is a
+   * poor thing in general and the right thing here: the alternative is the
+   * hand-kept list that has already disagreed once.
+   */
+  const source = await readFile(new URL('../js/control/app.js', import.meta.url), 'utf8');
+  const from = source.indexOf('function onKeyDown(');
+  ok('the key handler is where this expects it', from >= 0);
+
+  let depth = 0;
+  let to = from;
+  for (let i = source.indexOf('{', from); i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}' && --depth === 0) { to = i; break; }
+  }
+  const handler = source.slice(from, to + 1);
+
+  /** Single-character `case` labels: the only ones a trigger key can collide with. */
+  const taken = new Set(
+    [...handler.matchAll(/case\s+'(.)'\s*:/g)].map((m) => m[1].toLowerCase())
+  );
+  // The scene digits are a regex branch rather than nine case labels.
+  if (/\/\^\[1-9\]\$\//.test(handler)) for (let d = 1; d <= 9; d++) taken.add(String(d));
+
+  ok('it takes the keys we think it does', taken.size > 8, [...taken].sort().join(' ').trim());
+
+  const reserved = new Set(Object.keys(RESERVED_KEYS));
+  const unwarned = [...taken].filter((key) => !reserved.has(key));
+  const stale = [...reserved].filter((key) => !taken.has(key));
+
+  ok('every key the editor takes is one RESERVED_KEYS warns about',
+    unwarned.length === 0,
+    unwarned.length ? `add ${unwarned.map((k) => `"${k}"`).join(', ')} to RESERVED_KEYS in core/state.js` : '');
+  ok('and it warns about no key the editor has stopped taking',
+    stale.length === 0,
+    stale.length ? `remove ${stale.map((k) => `"${k}"`).join(', ')} from RESERVED_KEYS` : '');
+
+  // Every warning has to read as a sentence, since it is shown as one.
+  const empty = Object.entries(RESERVED_KEYS).filter(([, what]) => !what || !String(what).trim());
+  ok('and every one of them says what has the key', empty.length === 0,
+    empty.map(([k]) => k).join(', '));
+
+  /**
+   * And the runtime agrees: a trigger on a taken key is refused a firing by the
+   * editor rather than by anything here, so all this file can check is that
+   * `fireByKey` would have fired it — which is what makes the warning the only
+   * thing standing between the user and a dead trigger.
+   */
+  const trigger = createTrigger({ id: 'T', source: 'hotkey', key: 'w', sceneId: 'scare', hold: 1 });
+  const app = show({ triggers: [trigger] });
+  const runtime = createTriggerRuntime({ app });
+  ok('a trigger on a reserved key is perfectly firable in itself',
+    runtime.fireByKey('w') === true);
+  ok('which is why the warning is the only thing that saves it',
+    app.project.show.activeScene === 'scare');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');
