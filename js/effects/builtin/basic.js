@@ -6,7 +6,7 @@
  * elaborate is built on the same primitives.
  */
 
-import { rgba, clamp, TAU, hexToRgb } from '../../core/math.js';
+import { rgba, clamp, TAU, hexToRgb, hashString } from '../../core/math.js';
 import { mixLinear } from '../color.js';
 import { ensureField } from '../field.js';
 
@@ -182,13 +182,25 @@ const staticNoise = {
     { key: 'rate', type: 'range', label: 'Refresh (Hz)', default: 18, min: 1, max: 60, step: 1 },
     { key: 'rolling', type: 'range', label: 'Roll bar', default: 0.3, min: 0, max: 1, step: 0.01 },
   ],
-  draw({ g, p, shape, t, rng, state }) {
+  /** A number of this instance's own, so two windows do not show one picture. */
+  init({ layer, shape }) {
+    return { salt: hashString(`static|${layer?.id || ''}|${shape?.id || ''}`) >>> 0 };
+  },
+  draw({ g, p, shape, t, state }) {
     const { bbox } = shape;
+    /**
+     * The seed is the frame number, and it used to be a draw-time draw.
+     *
+     * `rng` in `draw` is seeded from the *simulation step* the frame landed on,
+     * which is a different clock from the one the static refreshes on — so the
+     * step at which `frame` was seen to change depended on when each tab
+     * happened to paint. Two projectors covering the same window at different
+     * frame rates therefore took their seed from different steps and showed
+     * different snow, on a wall where the whole point is that they agree. The
+     * comment below has always claimed the frame number was enough; now it is
+     * the only thing used.
+     */
     const frame = Math.floor(t * p.rate);
-    if (state.frame !== frame) {
-      state.frame = frame;
-      state.seed = rng() * 1e6;
-    }
 
     const cell = Math.max(1, p.cell);
     const cols = Math.max(1, Math.ceil(bbox.w / cell));
@@ -216,7 +228,7 @@ const staticNoise = {
 
     // Cheap deterministic hash, so the same frame number gives the same snow in
     // every tab without carrying a full RNG through the inner loop.
-    let h = state.seed >>> 0;
+    let h = (Math.imul(frame + 1, 2654435761) ^ (state.salt || 0)) >>> 0;
     const next = () => {
       h = (Math.imul(h ^ (h >>> 15), 2246822519) + 0x9e3779b9) >>> 0;
       return h / 4294967296;

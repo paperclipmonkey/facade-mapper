@@ -154,7 +154,27 @@ async function tx(store, mode, fn) {
       reject(err);
       return;
     }
-    t.oncomplete = () => resolve(result && result.result !== undefined ? result.result : result);
+    /**
+     * An IndexedDB request unwrapped to what it actually holds, including when
+     * that is nothing.
+     *
+     * This used to fall back to the *request* whenever `result` was undefined,
+     * which is the one case that has a meaning: `get` on a key that is not
+     * there. So `getBlob` answered a missing blob with a truthy IDBRequest, and
+     * both of its callers check `if (!blob) throw` — the one line whose whole
+     * job is to say "that file is not on this machine". Neither ever fired.
+     * The pool went on to hand the request to `createObjectURL` and the sound
+     * player to call `arrayBuffer()` on it, so a show opened on a second
+     * computer — where, by design, none of the media came with it — reported a
+     * TypeError about a method that does not exist instead of naming the file
+     * that is missing.
+     *
+     * The fallback served nobody: `put` and `delete` are awaited for completion
+     * and their value is never read.
+     */
+    t.oncomplete = () => resolve(
+      result && typeof result === 'object' && 'result' in result ? result.result : result
+    );
     t.onerror = () => reject(t.error);
     t.onabort = () => reject(t.error);
   });

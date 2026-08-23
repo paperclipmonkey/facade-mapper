@@ -2165,6 +2165,9 @@ async function refreshCameraDevices() {
 async function startCamera() {
   try {
     const info = await camera.start($('cameraSelect').value || app.project.settings.cameraId || null);
+    // Null means a second click, or a change of device, overtook this attempt
+    // while the permission prompt was up. The answer belongs to the newer one.
+    if (!info) return;
     app.project.settings.cameraId = info.deviceId;
     const aspect = info.width / info.height;
     if (app.project.rectify?.enabled) {

@@ -318,6 +318,86 @@ console.log('\n— two tabs draw the same frame —');
     differ.length === 0, differ.slice(0, 4).join(' | '));
 }
 
+{
+  /**
+   * The other half of it: the same show time, reached differently.
+   *
+   * The check above runs two identical tabs. This one runs two tabs that are
+   * *not* identical — one that has been painting at twenty-five frames a second
+   * since the show started and one that has only just opened — and asks them
+   * for the same instant. `draw` is called once per rendered frame, so the
+   * sequence of show times it has seen is the one input the renderer cannot
+   * equalise, and anything an effect carries between draws that is not a pure
+   * function of the current time is a difference on the wall.
+   *
+   * Only effects with no `step`. An effect that declares one is *supposed* to
+   * carry state, and the renderer catches it up step by step so that it can.
+   *
+   * The journal alone is not enough here. An effect that fills a buffer and
+   * blits it records only where the blit went, so TV static differing pixel for
+   * pixel between two projectors went past it without a word — which is exactly
+   * what it was doing, because its grain was seeded from a draw-time generator
+   * indexed by the simulation step the frame happened to land on rather than
+   * from the frame number it refreshes on. So every typed array the effect
+   * leaves behind is folded in as well.
+   */
+  const AT = 0.44;
+
+  const fingerprint = (state) => {
+    const parts = [];
+    const visit = (v, depth) => {
+      if (!v || depth > 2) return;
+      if (ArrayBuffer.isView(v)) {
+        let h = 2166136261;
+        for (let i = 0; i < v.length; i++) h = Math.imul(h ^ v[i], 16777619) >>> 0;
+        parts.push(`${v.length}:${h}`);
+        return;
+      }
+      if (typeof v === 'object') for (const k of Object.keys(v)) visit(v[k], depth + 1);
+    };
+    visit(state, 0);
+    return parts.join(',');
+  };
+
+  const differ = [];
+  for (const effect of effects) {
+    if (effect.step) continue;
+    for (const shape of [SHAPES.window, SHAPES.frame]) {
+      const paint = (state, t, journal) => {
+        const g = recordingContext(() => {}, journal);
+        effect.draw(context(effect, shape, { g, t, state, rng: makeRng(`k~${Math.floor(t * 60)}`), journal }));
+      };
+      const open = () => {
+        const state = {};
+        if (effect.init) {
+          Object.assign(state, effect.init(
+            context(effect, shape, { g: null, t: 0, state, rng: makeRng('k#0') })
+          ) || {});
+        }
+        return state;
+      };
+
+      const running = open();
+      for (let k = 0; k / 25 < AT - 1e-9; k++) paint(running, k / 25, null);
+      const a = [];
+      paint(running, AT, a);
+
+      const opened = open();
+      const b = [];
+      paint(opened, AT, b);
+
+      if (`${a.join('|')}#${fingerprint(running)}` === `${b.join('|')}#${fingerprint(opened)}`) continue;
+      const at = a.findIndex((line, i) => line !== b[i]);
+      differ.push(at >= 0
+        ? `${effect.id} on ${shape.id}: call ${at} is "${a[at]}" then "${b[at]}"`
+        : `${effect.id} on ${shape.id}: same calls, different pixels`);
+      break;
+    }
+  }
+  ok('and a tab that has just opened paints what one that has been running does',
+    differ.length === 0, differ.slice(0, 4).join(' | '));
+}
+
 /* ------------------------------------------------------------------ *
  * Changing which effect a layer runs
  * ------------------------------------------------------------------ */

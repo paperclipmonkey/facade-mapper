@@ -427,7 +427,6 @@ export function createStage({ canvas, wrap, app }) {
     const cam = toCamera(ev);
     const world = clampWorld(intoWorld(cam));
     pointerWorld = world;
-    app.onPointerWorld?.(world);
 
     if (!gesture) {
       hover = app.tool === 'select' || app.tool === 'corners' || app.tool === 'square' || app.tool === 'depth'
