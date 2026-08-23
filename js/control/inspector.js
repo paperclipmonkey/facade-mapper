@@ -8,7 +8,7 @@
 
 import { el, clear, paramRow, toast, fmt } from './ui.js';
 import { SHAPE_TAGS, RESERVED_KEYS } from '../core/state.js';
-import { getEffect, listByCategory, defaultParams } from '../effects/registry.js';
+import { getEffect, listByCategory, defaultParams, adoptParams } from '../effects/registry.js';
 import { openEffectPicker } from './effectPicker.js';
 import { layerIssues } from './diagnostics.js';
 import { voiceForLayer, soundFaders, VOICES } from '../core/soundscape.js';
@@ -320,7 +320,10 @@ function renderLayer(container, app, id) {
     if (!id || id === layer.effect) return;
     app.pushUndo();
     layer.effect = id;
-    layer.params = { ...defaultParams(layer.effect), ...layer.params };
+    // Keeps what the new effect can actually use and defaults the rest. See
+    // `adoptParams`: matching on the name alone carried a width of 6 into a
+    // slider that stops at 0.3.
+    layer.params = adoptParams(layer.effect, layer.params);
     layer.bindings = {};
     app.resetLayerState(layer.id);
     app.commit();
@@ -369,9 +372,11 @@ function renderLayer(container, app, id) {
   effectSelect.addEventListener('change', () => {
     app.pushUndo();
     layer.effect = effectSelect.value;
-    // Keep any parameters the new effect happens to share (colour, speed…) and
-    // fill the rest from its defaults, so swapping effects isn't destructive.
-    layer.params = { ...defaultParams(layer.effect), ...layer.params };
+    // Keep the parameters the new effect shares — colour, speed — and take the
+    // rest from its defaults, so swapping effects is not destructive. "Shares"
+    // means a key it declares *and* a value its control could produce; see
+    // `adoptParams` for what matching on the name alone was doing instead.
+    layer.params = adoptParams(layer.effect, layer.params);
     layer.bindings = {};
     app.resetLayerState(layer.id);
     app.commit();

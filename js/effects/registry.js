@@ -230,3 +230,63 @@ export function defaultParams(effectId) {
   for (const p of def.params) out[p.key] = p.default;
   return out;
 }
+
+/**
+ * Could this control have produced this value?
+ *
+ * The same question the inspector's control answers by construction: a slider
+ * cannot leave its ends, a dropdown cannot offer an option it does not have,
+ * a colour well cannot give you anything but a colour. Anything that fails it
+ * is a value the panel would show and the renderer would not use.
+ */
+function representable(def, value) {
+  if (value === undefined) return false;
+  switch (def.type) {
+    case 'range':
+    case 'number':
+      return typeof value === 'number' && Number.isFinite(value)
+        && (def.min === undefined || value >= def.min)
+        && (def.max === undefined || value <= def.max);
+    case 'select':
+      return (def.options || []).includes(value);
+    case 'color':
+      return typeof value === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(value);
+    case 'bool':
+      return typeof value === 'boolean';
+    case 'text':
+      return typeof value === 'string';
+    default:
+      return true;
+  }
+}
+
+/**
+ * Parameters for a layer that is changing which effect it runs.
+ *
+ * Swapping an effect should not be destructive — you have set a colour and a
+ * speed and you would like to keep them — so anything the new effect also has
+ * is carried across. The trap is *how* "also has" was decided: by name alone.
+ *
+ * Names collide across a library this size, and they collide meaning nothing:
+ * five hundred and ten pairs of effects share a parameter name whose ranges,
+ * option sets or types have nothing whatever in common. Outline's `width` runs
+ * from 0.5 to 60 and defaults to 6; God Rays' runs from 0.004 to 0.3. Carrying
+ * the 6 across left the project holding 6, the inspector showing 6, and the
+ * renderer — which clamps — drawing 0.3, the far end of a slider that would not
+ * move. The old effect's *other* parameters came too, and stayed in the
+ * project, and went out on the wire, for the rest of the show.
+ *
+ * So a value is carried only if the new effect declares that key and its
+ * control could have produced the value. Everything else takes the default,
+ * which is what somebody choosing an effect expects to see.
+ */
+export function adoptParams(effectId, previous = {}) {
+  const def = getEffect(effectId);
+  if (!def) return {};
+  const out = {};
+  for (const p of def.params) {
+    const carried = previous?.[p.key];
+    out[p.key] = representable(p, carried) ? carried : p.default;
+  }
+  return out;
+}

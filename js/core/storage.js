@@ -200,14 +200,47 @@ export function exportProjectFile(project) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Is anything already saved under this id? */
+function idInUse(id, index) {
+  if (index.has(id)) return true;
+  try {
+    return localStorage.getItem(LS_PROJECT(id)) !== null;
+  } catch {
+    // Storage denied: the index is the best answer available.
+    return false;
+  }
+}
+
+/**
+ * Read a project out of a file somebody dragged in.
+ *
+ * Importing must not clobber a project already in storage under the same id,
+ * and the suffix has to keep going until it finds one that is free. One
+ * `_imported` was not enough: importing the same file twice landed on exactly
+ * the same id both times, so the second import overwrote the first — along with
+ * whatever had been done to it since. Import a friend's show, spend an evening
+ * on it, import the original again to compare, and the evening is gone.
+ *
+ * The index is not the only place to look either. It is capped at fifty
+ * entries, so a project can still be in storage after its entry has been
+ * pushed off the end, and a collision with one of those would be invisible
+ * until it happened.
+ */
 export async function importProjectFile(file) {
   const text = await file.text();
   const raw = JSON.parse(text);
   const project = migrateProject(raw);
-  // Importing must not clobber a project already in storage under the same id.
-  if (listProjects().some((e) => e.id === project.id)) {
-    project.id = `${project.id}_imported`;
-    project.name = `${project.name} (imported)`;
-  }
+
+  const index = new Set(listProjects().map((e) => e.id));
+  if (!idInUse(project.id, index)) return project;
+
+  const base = project.id;
+  let copy = 1;
+  let id = `${base}_imported`;
+  while (idInUse(id, index)) id = `${base}_imported_${++copy}`;
+
+  project.id = id;
+  // Numbered from the second, so the common case reads the way it always has.
+  project.name = copy === 1 ? `${project.name} (imported)` : `${project.name} (imported ${copy})`;
   return project;
 }

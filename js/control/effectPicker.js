@@ -73,6 +73,17 @@ export function openEffectPicker({ current, closed = true, onPick }) {
   const grid = el('div', { class: 'effect-grid' });
 
   function buildCards() {
+    /**
+     * Let go of the cards that are about to be thrown away.
+     *
+     * An IntersectionObserver holds its targets, so removing a card from the
+     * DOM does not end the observation — and this runs on every keystroke in
+     * the search box. Typing "fire" left four sets of eighty-odd detached
+     * cards, each with its own canvas, observed and unreachable for as long as
+     * the dialog stayed open. `disconnect` is the pair to the `observe` below;
+     * the observer is reusable afterwards.
+     */
+    observer.disconnect();
     clear(grid);
     cards.length = 0;
     visible.clear();

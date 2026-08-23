@@ -323,6 +323,9 @@ export function evaluateBinding(binding, base, def, ctx, bindingKey) {
       if (!compiled.call) return numericBase;
       try {
         const v = compiled.call(expressionScope(ctx, numericBase, def, stateKey));
+        // Cleared on the way through, so a fixed expression stops reporting the
+        // fault it had before — and so a saved show does not carry the message.
+        if (binding.__error) delete binding.__error;
         if (typeof v === 'number' && isFinite(v)) return v;
         if (typeof v === 'string' || typeof v === 'boolean') return v;
         return numericBase;

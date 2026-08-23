@@ -1933,24 +1933,167 @@ app.checkProjectorDrift = async (projectorId) => {
  * the core `activateScene` alone. An evening of scares must not slowly rewrite
  * the show as it runs.
  */
-app.activateScene = (sceneId) => {
+app.activateScene = async (sceneId) => {
   const scene = app.project.scenes.find((s) => s.id === sceneId);
   if (!scene) return;
-  const drifted = sceneDrift(app.project, app.project.show?.activeScene).length;
+
+  /**
+   * Ask before throwing away an evening's work.
+   *
+   * Switching scenes replaces every layer, so anything changed since the live
+   * scene was saved is gone — and it went silently, with a line in a toast
+   * about Ctrl+Z that is easy to miss and easy to lose to the next action.
+   * Making a run of good changes and then pressing another scene button is a
+   * mistake anybody makes once.
+   *
+   * Only when there is something to lose, so this never appears in the middle
+   * of a show that has not been edited; and only on this path, which is the
+   * one a person at the keyboard takes. The playlist and the triggers use the
+   * core `activateScene` and never reach here, because nobody is standing at
+   * the laptop to answer.
+   */
+  const leaving = app.project.show?.activeScene;
+  if (leaving && leaving !== sceneId) {
+    const answer = await askAboutUnsaved(leaving, scene);
+    if (answer === 'stay') return;
+    if (answer === 'save') app.recaptureScene(leaving);
+  }
+
   app.pushUndo();
   applyScene(app.project, sceneId);
   applySceneToLayers(app.project, sceneId);
   app.select(null);
   app.commit();
-  toast(
-    drifted
-      ? `${scene.name}. The ${drifted} unsaved change${drifted === 1 ? '' : 's'} to the last scene ${drifted === 1 ? 'is' : 'are'} still in Ctrl+Z.`
-      : scene.name
-  );
+  refreshSceneGuard(true);
+  toast(scene.name);
 };
 
 /** Layers whose current values differ from the scene that is live. */
 app.sceneDrift = (sceneId) => sceneDrift(app.project, sceneId);
+
+/**
+ * The scene that is live, and how far it has drifted from what was stored.
+ *
+ * One answer for everything that needs it: the transport's save button, the
+ * marker on the scene button, Ctrl+S and the guard below.
+ */
+function liveScene() {
+  const id = app.project.show?.activeScene;
+  const scene = id ? app.project.scenes.find((s) => s.id === id) : null;
+  return scene ? { scene, drift: sceneDrift(app.project, scene.id).length } : null;
+}
+
+/**
+ * Put the current look back into the scene it came from.
+ *
+ * The thing you want nine times out of ten, and until now it took finding the
+ * Scenes panel, finding the row, and finding the button on it. Ctrl+S is the
+ * shortcut everybody's hands already know.
+ */
+function saveLiveScene() {
+  const live = liveScene();
+  if (!live) {
+    toast('No scene is live. Use "Save current as scene" to make one.', 'bad');
+    return false;
+  }
+  if (!live.drift) {
+    toast(`"${live.scene.name}" is already saved.`);
+    return false;
+  }
+  app.recaptureScene(live.scene.id);
+  return true;
+}
+
+/**
+ * The transport's save button: only on screen while pressing it would do
+ * something, and naming the scene it would write to.
+ *
+ * Refreshed from the frame loop rather than from `commit`, because dragging a
+ * slider goes through `commitLive` and never redraws a panel — which is exactly
+ * when somebody is making the changes this is about. Rate-limited, since the
+ * answer costs a walk over every layer's parameters and cannot change faster
+ * than a person can move a mouse.
+ */
+let lastSceneGuardAt = 0;
+let lastSceneGuardKey = '';
+let sceneWasEdited = false;
+function refreshSceneGuard(force = false) {
+  const now = performance.now();
+  if (!force && now - lastSceneGuardAt < 250) return;
+  lastSceneGuardAt = now;
+
+  const live = liveScene();
+  const key = live ? `${live.scene.id}|${live.drift}|${live.scene.name}` : '';
+  if (key === lastSceneGuardKey) return;
+  lastSceneGuardKey = key;
+
+  const edited = !!live?.drift;
+  const button = $('btnSaveScene');
+  if (edited) {
+    button.hidden = false;
+    button.textContent = `Save “${live.scene.name}”`;
+    button.title = `${live.drift} layer${live.drift === 1 ? '' : 's'} changed since this scene was saved. Ctrl+S`;
+  } else {
+    button.hidden = true;
+  }
+
+  // The dot on the scene button is drawn by the panels, so it has to be told —
+  // but only when the answer has actually flipped, since redrawing the row on
+  // every parameter change would be a row rebuilt sixty times a second.
+  if (edited !== sceneWasEdited) {
+    sceneWasEdited = edited;
+    renderSceneButtons($('sceneButtons'), app);
+  }
+}
+
+/**
+ * The three-way question, as a promise.
+ *
+ * Resolves to 'save', 'discard' or 'stay'. Escape, the backdrop and anything
+ * else that closes the dialog mean 'stay', which is the answer that loses
+ * nothing — and it resolves immediately with 'discard' when there is nothing
+ * to lose, so the ordinary case never sees a dialog at all.
+ */
+function askAboutUnsaved(leavingId, goingTo) {
+  const leaving = app.project.scenes.find((s) => s.id === leavingId);
+  const drift = leaving ? sceneDrift(app.project, leavingId).length : 0;
+  if (!leaving || !drift) return Promise.resolve('discard');
+
+  const dialog = $('sceneGuardDialog');
+  // Already asking: a second scene button pressed while the question is up is
+  // not a second question.
+  if (dialog.open) return Promise.resolve('stay');
+
+  $('sceneGuardTitle').textContent = `Unsaved changes to “${leaving.name}”`;
+  $('sceneGuardText').textContent =
+    `${drift} layer${drift === 1 ? ' has' : 's have'} been changed since “${leaving.name}” was saved. `
+    + `Going to “${goingTo.name}” replaces ${drift === 1 ? 'it' : 'them'}.`;
+
+  return new Promise((resolve) => {
+    let answer = 'stay';
+    const pick = (value) => () => {
+      answer = value;
+      dialog.close();
+    };
+    const save = $('btnSceneGuardSave');
+    const discard = $('btnSceneGuardDiscard');
+    const stay = $('btnSceneGuardStay');
+    const onSave = pick('save');
+    const onDiscard = pick('discard');
+    const onStay = pick('stay');
+    save.addEventListener('click', onSave);
+    discard.addEventListener('click', onDiscard);
+    stay.addEventListener('click', onStay);
+    dialog.addEventListener('close', () => {
+      save.removeEventListener('click', onSave);
+      discard.removeEventListener('click', onDiscard);
+      stay.removeEventListener('click', onStay);
+      resolve(answer);
+    }, { once: true });
+    dialog.showModal();
+    save.focus();
+  });
+}
 
 app.recaptureScene = (sceneId) => {
   const scene = app.project.scenes.find((s) => s.id === sceneId);
@@ -1960,6 +2103,7 @@ app.recaptureScene = (sceneId) => {
   // Captured looks describe the whole show. See `full` in core/state.js.
   scene.full = true;
   app.commit();
+  refreshSceneGuard(true);
   toast(`"${scene.name}" updated from the current look.`, 'good');
 };
 
@@ -3144,6 +3288,10 @@ function frame() {
   const world = stage.pointerWorld;
   $('stageCoords').textContent = world ? `${world.x.toFixed(3)}, ${world.y.toFixed(3)}` : '—';
 
+  // Dragging a slider goes through `commitLive` and never redraws a panel,
+  // which is exactly when somebody is making the changes this is about.
+  refreshSceneGuard();
+
   reportHealth(performance.now() - frameStart);
 }
 
@@ -3990,6 +4138,8 @@ function wire() {
       toast(`Look: ${preset.name}`);
     },
   });
+  $('btnSaveScene').addEventListener('click', () => saveLiveScene());
+
   $('btnPalette').addEventListener('click', () => palette.open());
 
   document.addEventListener('keydown', onKeyDown);
@@ -4093,6 +4243,21 @@ function onKeyDown(ev) {
     ev.preventDefault();
     if (palette?.isOpen?.()) palette.close();
     else palette?.open();
+    return;
+  }
+
+  /**
+   * Save the live scene, from anywhere.
+   *
+   * Ahead of the typing guard for the same reason as Ctrl+K: this is the
+   * shortcut everybody's hands already know, and it should not stop working
+   * because the cursor happens to be in a name field. It also takes the key
+   * away from the browser, whose own Save is meaningless on a page with no
+   * document.
+   */
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') {
+    ev.preventDefault();
+    saveLiveScene();
     return;
   }
 

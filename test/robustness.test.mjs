@@ -35,8 +35,9 @@
  *   node test/robustness.test.mjs
  */
 
-import { listEffects, defaultParams, CATEGORIES } from '../js/effects/registry.js';
+import { listEffects, defaultParams, adoptParams, CATEGORIES } from '../js/effects/registry.js';
 import { makeRng } from '../js/core/math.js';
+import { EFFECT_TEMPLATE } from '../js/control/help.js';
 /**
  * The stand-in browser, the shapes and the runner.
  *
@@ -125,6 +126,27 @@ ok('there are effects to check', effects.length > 50, `${effects.length} effects
        */
       if (param.type === 'select' && !(param.options || []).includes(param.default)) {
         problems.push(`${effect.id}.${param.key} defaults to "${param.default}", not in its options`);
+      }
+      /**
+       * The same complaint about a slider.
+       *
+       * A range control walks from its minimum in whole steps, so a default
+       * that does not sit on one of them is a value the slider cannot produce
+       * — you can leave it but never get back to it. Sparkler's spark size
+       * defaulted to 2.6 from a minimum of 0.5 in steps of 0.2, which lands on
+       * 2.5 and 2.7 and never on where it started.
+       */
+      if ((param.type === 'range' || param.type === 'number')
+          && typeof param.default === 'number' && param.step > 0 && param.min !== undefined) {
+        const steps = (param.default - param.min) / param.step;
+        const off = Math.abs(steps - Math.round(steps));
+        // A millionth of a step, because these are decimals in binary floats.
+        if (off > 1e-6 && off < 1 - 1e-6) {
+          problems.push(
+            `${effect.id}.${param.key} defaults to ${param.default}, which its own step of `
+            + `${param.step} from ${param.min} never lands on`
+          );
+        }
       }
       if (param.type === 'color' && !/^#[0-9a-fA-F]{3,8}$/.test(String(param.default))) {
         problems.push(`${effect.id}.${param.key} defaults to "${param.default}", which is not a hex colour`);
@@ -294,6 +316,157 @@ console.log('\n— two tabs draw the same frame —');
   }
   ok('every effect draws identically in two tabs at the same show time',
     differ.length === 0, differ.slice(0, 4).join(' | '));
+}
+
+/* ------------------------------------------------------------------ *
+ * Changing which effect a layer runs
+ * ------------------------------------------------------------------ */
+
+console.log('\n— swapping one effect for another —');
+
+{
+  /**
+   * Swapping should keep what the new effect can use and default the rest.
+   *
+   * It used to keep whatever shared a *name*, which in a library this size is
+   * a trap rather than a convenience: Outline's `width` runs 0.5 to 60 and God
+   * Rays' runs 0.004 to 0.3, so the 6 went across, the project held 6, the
+   * inspector showed 6, and the renderer — which clamps — drew 0.3, the far
+   * end of a slider that would not move. The old effect's other parameters
+   * came too, and stayed in the project, and went out on the wire.
+   */
+  const pairs = [];
+  for (const from of effects) {
+    for (const to of effects) {
+      if (from === to) continue;
+      pairs.push([from, to]);
+    }
+  }
+
+  const strays = [];
+  const unusable = [];
+  const missing = [];
+  for (const [from, to] of pairs) {
+    const carried = adoptParams(to.id, defaultParams(from.id));
+    const keys = new Set(to.params.map((p) => p.key));
+
+    for (const key of Object.keys(carried)) {
+      if (!keys.has(key)) strays.push(`${from.id} -> ${to.id} kept ${key}`);
+    }
+    for (const def of to.params) {
+      if (!(def.key in carried)) { missing.push(`${from.id} -> ${to.id} lost ${def.key}`); continue; }
+      const value = carried[def.key];
+      const bad =
+        (def.type === 'range' || def.type === 'number')
+          ? typeof value !== 'number' || !Number.isFinite(value)
+            || (def.min !== undefined && value < def.min)
+            || (def.max !== undefined && value > def.max)
+          : def.type === 'select' ? !(def.options || []).includes(value)
+            : def.type === 'color' ? !/^#[0-9a-fA-F]{3,8}$/.test(String(value))
+              : def.type === 'bool' ? typeof value !== 'boolean'
+                : false;
+      if (bad) unusable.push(`${from.id} -> ${to.id}: ${def.key} = ${JSON.stringify(value)}`);
+    }
+  }
+
+  ok(`no swap carries a parameter the new effect does not have`, strays.length === 0,
+    strays.slice(0, 3).join('; '));
+  ok('and none leaves out one it does', missing.length === 0, missing.slice(0, 3).join('; '));
+  ok('and every value that lands is one the new control could produce',
+    unusable.length === 0, unusable.slice(0, 3).join('; '));
+  ok(`across all ${pairs.length} orderings of the library`, true,
+    `${effects.length} × ${effects.length - 1}`);
+
+  // The point of carrying anything at all: a value the new effect can take is
+  // kept rather than reset.
+  const shared = effects.find((e) => e.params.some((p) => p.key === 'color' && p.type === 'color'));
+  if (shared) {
+    const kept = adoptParams(shared.id, { color: '#123456' });
+    ok('a colour the new effect also has is kept, which is the whole point',
+      kept.color === '#123456', kept.color);
+  }
+  ok('and an effect nobody has heard of gets nothing',
+    Object.keys(adoptParams('no-such-effect', { color: '#fff' })).length === 0);
+}
+
+/* ------------------------------------------------------------------ *
+ * The one everybody starts from
+ * ------------------------------------------------------------------ */
+
+console.log('\n— the starter template —');
+
+{
+  /**
+   * Nothing checked this at all, and it is the first line of every custom
+   * effect anybody writes. It is a plain module with no imports of its own —
+   * the registry appends the `fx` namespace, which the template does not use —
+   * so it loads here from a data: URL and faces the same rules as the eighty
+   * built-ins.
+   *
+   * The rule it was breaking is the one the whole `step`/`draw` split exists
+   * for. Its `step` advanced `state.phase` and its `draw` ignored it, animating
+   * straight off `t` — so the state was dead, and the example taught the shape
+   * that makes two projectors disagree. It also meant every effect started from
+   * this template declared a `step`, which puts it on the catch-up path: a tab
+   * joining an hour in runs 216,000 no-op steps before it draws anything.
+   */
+  let def = null;
+  let loadError = null;
+  try {
+    const url = `data:text/javascript;base64,${Buffer.from(EFFECT_TEMPLATE).toString('base64')}`;
+    def = (await import(url)).default;
+  } catch (err) {
+    loadError = err.message;
+  }
+
+  ok('the starter template is a module that loads', !!def, loadError || '');
+
+  if (def) {
+    ok('and exports the shape the registry insists on',
+      typeof def.draw === 'function' && Array.isArray(def.params) && !!def.name);
+
+    const declared = new Set(def.params.map((p) => p.key));
+    const used = new Set(
+      [...`${def.draw}${def.step || ''}${def.init || ''}`.matchAll(/\bp\.([A-Za-z_$][\w$]*)/g)]
+        .map((m) => m[1])
+    );
+    const unused = [...declared].filter((key) => !used.has(key));
+    const undeclared = [...used].filter((key) => !declared.has(key));
+    ok('every parameter it declares is one it uses', unused.length === 0, unused.join(', '));
+    ok('and every one it uses is declared', undeclared.length === 0, undeclared.join(', '));
+
+    /**
+     * The whole point of the example. `draw` paints what `step` decided, so
+     * somebody copying it copies the split rather than the thing that looks
+     * like it works on one machine.
+     */
+    if (def.step) {
+      const written = [...`${def.step}`.matchAll(/\bstate\.([A-Za-z_$][\w$]*)\s*=/g)].map((m) => m[1]);
+      const read = new Set([...`${def.draw}`.matchAll(/\bstate\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]));
+      const ignored = written.filter((key) => !read.has(key));
+      ok('what its `step` writes is what its `draw` paints', ignored.length === 0,
+        ignored.length ? `draw never reads state.${ignored.join(', state.')}` : '');
+      ok('and its `draw` does not animate off `t` behind `step`\'s back',
+        !/\bt\b\s*[*+\-/%]|[*+\-/%]\s*\bt\b/.test(`${def.draw}`.replace(/\/\/[^\n]*/g, '')));
+    }
+
+    // And it has to survive what every other effect survives.
+    const template = {
+      id: 'starter-template',
+      params: def.params,
+      init: def.init,
+      step: def.step,
+      draw: def.draw,
+    };
+    const broken = [];
+    for (const name of Object.keys(SHAPES)) {
+      const result = exercise(template, SHAPES[name], { p: Object.fromEntries(def.params.map((p) => [p.key, p.default])) });
+      if (result.threw) broken.push(`${name}: ${result.threw}`);
+      else if (result.bad.length) broken.push(`${name}: ${result.bad[0]}`);
+    }
+    ok('and it runs on every shape a project can contain', broken.length === 0,
+      broken.slice(0, 2).join(' | '));
+  }
 }
 
 restoreRandom();

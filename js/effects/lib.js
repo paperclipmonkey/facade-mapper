@@ -89,6 +89,38 @@ export {
 } from './collide.js';
 
 /**
+ * Trace a smooth curve through a run of sampled points, into the current path.
+ *
+ * The obvious way to draw a shape you have sampled — a frond bending in the
+ * swell, the outline of a body flexing as it swims — is `lineTo` between the
+ * samples, and it is wrong in a way that is invisible on a laptop and glaring
+ * on a house: at two metres across, a curve made of twenty straight pieces is
+ * visibly made of twenty straight pieces. The whole thing reads as low
+ * resolution, which on a projector is the difference between an animal and a
+ * cardboard cut-out of one.
+ *
+ * So each sample becomes the *control* point of a quadratic and the curve
+ * passes through the midpoints between them. The same trick the drawing pad
+ * uses on a stroke, and for the same reason. It costs exactly what `lineTo`
+ * costs — one path command per point — and needs no extra samples, because the
+ * smoothness comes from the curve rather than from more of them.
+ *
+ * Takes parallel arrays so a caller can keep scratch buffers and allocate
+ * nothing per frame. `move` starts a new subpath; leave it off to continue the
+ * one already open, which is how an outline traces up one side and back down
+ * the other.
+ */
+export function curveThrough(g, xs, ys, count = xs.length, { move = false } = {}) {
+  if (count < 1) return;
+  if (move) g.moveTo(xs[0], ys[0]);
+  else g.lineTo(xs[0], ys[0]);
+  for (let i = 1; i < count - 1; i++) {
+    g.quadraticCurveTo(xs[i], ys[i], (xs[i] + xs[i + 1]) / 2, (ys[i] + ys[i + 1]) / 2);
+  }
+  if (count > 1) g.lineTo(xs[count - 1], ys[count - 1]);
+}
+
+/**
  * A scratch canvas, for effects that accumulate or that pre-bake a sprite.
  *
  * Anything that only ever adds — frost spreading, ivy growing, a wet trail on

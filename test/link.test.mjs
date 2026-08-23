@@ -93,6 +93,36 @@ ok(
  * Applying it
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Matching replies to requests
+ * ------------------------------------------------------------------ */
+
+console.log('\n— A pong is an answer to a ping —');
+{
+  const { createPingLedger } = await import('../js/core/link.js');
+
+  const ledger = createPingLedger();
+  ledger.sent(100);
+  ledger.sent(200);
+  ok('a reply to a ping we sent is taken', ledger.accept(200) === true);
+  ok('and only once, so a duplicate does not enter the estimate twice',
+    ledger.accept(200) === false);
+  ok('the other one is still outstanding', ledger.accept(100) === true);
+  /**
+   * The one that matters. A peer that puts a `link/pong` on the wire is
+   * answering nothing, and adopting the timestamp in it steps this device's
+   * show clock — while every other device carries on where it was. The server
+   * reserves the `link/` namespace so it cannot reach us; this is the half that
+   * still holds against an older server.
+   */
+  ok('a pong for a ping nobody sent is refused', ledger.accept(999) === false);
+
+  const bounded = createPingLedger(4);
+  for (let i = 0; i < 10; i++) bounded.sent(i);
+  ok('unanswered pings do not accumulate for ever', bounded.size === 4, `${bounded.size}`);
+  ok('and it is the oldest that go', bounded.accept(5) === false && bounded.accept(9) === true);
+}
+
 console.log('\n— Correcting this machine —');
 
 {
@@ -424,6 +454,36 @@ if (typeof WebSocket === 'undefined') {
   }
   const local = estimateOffset(samples);
   ok('measured against itself, the offset is nothing', Math.abs(local.offset) < 25, `${local.offset.toFixed(1)} ms`);
+
+  /**
+   * `link/` belongs to the server.
+   *
+   * Every reply the server sends carries one of these types, and the client
+   * switches on the type *before* it looks at which device a message came
+   * from — so a message a peer put on the wire under one of them is read as
+   * having come from the server. `link/pong` is the one that matters: it is fed
+   * straight into the clock estimator, which believes the timestamp in it, and
+   * show time is a subtraction from that clock. One frame from a phone and
+   * every other device paints a different moment of the same animation onto the
+   * same wall.
+   */
+  phone.inbox.length = 0;
+  projector.inbox.length = 0;
+  const spoofed = ['link/pong', 'link/welcome', 'link/peers', 'link/info'];
+  for (const type of spoofed) {
+    control.send(JSON.stringify({ type, t0: Date.now(), ts: Date.now() + 5000, id: 'spoof', peers: [], device: 'laptop-hall' }));
+  }
+  await wait(150);
+  const relayedNamespace = [...typesFor(phone), ...typesFor(projector)].filter((t) => spoofed.includes(t));
+  ok('the server does not relay a message in its own namespace',
+    relayedNamespace.length === 0, relayedNamespace.join(', '));
+
+  // And nothing about that stops the server answering the question it does own.
+  const t0b = Date.now();
+  projector.send(JSON.stringify({ type: 'link/ping', t0: t0b }));
+  await wait(120);
+  ok('while still answering a ping itself',
+    projector.inbox.some((m) => m.type === 'link/pong' && m.t0 === t0b));
 
   // Nonsense on the wire is a thing a relay meets. It must not take the show
   // down with it.

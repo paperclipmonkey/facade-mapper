@@ -161,11 +161,17 @@ node test/geometry.test.mjs    # homography, marker detection, region and mesh m
 node test/runtime.test.mjs     # motion, gating, scheduling, grading, the show clock, feeds
 node test/triggers.test.mjs    # holds, restores, timers, hotkeys and the HTTP hooks
 node test/migrate.test.mjs     # every project ever saved, arriving at a newer copy
+node test/bus.test.mjs         # cross-tab messages, the mirror, and who is alive
+node test/picker.test.mjs      # the effect gallery: cards, search, and letting go
+node test/bindings.test.mjs    # the modulation editor, and the binding it edits
+node test/mic.test.mjs         # opening the microphone, and the gap in the middle
+node test/storage.test.mjs     # saving, the show list, importing, and a full disk
 node test/collide.test.mjs     # heightfields, landing, slumping, shedding
 node test/obstacles.test.mjs   # facade collision, automatic edge blending
 node test/figures.test.mjs     # the drawn figures
 node test/link.test.mjs        # clock offset, WebSocket framing, the relay
 node test/underwater.test.mjs  # absorption, wave dispersion, buoyancy, shoaling
+node test/bees.test.mjs        # the flight, the ring buffer, and the stitched line
 node test/drawing.test.mjs     # live drawing: strokes, undo, late joiners
 node test/robustness.test.mjs  # every effect against every degenerate shape
 node test/params.test.mjs      # every effect at both ends of every slider it has
@@ -200,6 +206,34 @@ each one stands for a project somebody actually has.
 least margin for error in the app — everything it does happens once, in the
 dark, in front of people, and every failure mode is silent. It runs on a clock
 the test moves by hand, so nothing sleeps.
+
+[`bus.test.mjs`](../test/bus.test.mjs) runs against a real `BroadcastChannel`,
+which Node has. The corner worth knowing is the last one it checks: a message
+posted *before* the link's mirror is installed goes round this machine and
+stops. A page that introduces itself during boot does so a few hundred
+milliseconds before its socket opens, so on a second machine that introduction
+is never heard — which is why the remote asks again when its digest goes stale
+and why the projector keeps asking until a project arrives.
+
+[`picker.test.mjs`](../test/picker.test.mjs) drives the effect gallery against a
+stand-in DOM, counting what the IntersectionObserver is holding. Observers keep
+their targets alive, the card set is rebuilt on every keystroke in the search
+box, and nothing about the resulting leak is visible from the app.
+
+[`bindings.test.mjs`](../test/bindings.test.mjs) and
+[`mic.test.mjs`](../test/mic.test.mjs) both cover a gap rather than a
+calculation. The modulation editor is deliberately not re-rendered while
+somebody is typing in it, so its copy of the binding has to be kept honest by
+hand; the microphone is opened across a permission prompt that leaves it
+neither open nor closed for as long as it takes somebody to answer, and the
+switch beside it stays clickable throughout. Both stand in for the browser
+closely enough to be standing in the gap when the second click lands.
+
+[`storage.test.mjs`](../test/storage.test.mjs) covers the whole of the app's
+persistence, which is localStorage and nothing else: a project written over is
+a project gone. The import path is the part worth the attention, because it is
+the one place that writes a project somebody did not just have open, under an
+id it works out for itself.
 
 [`migrate.test.mjs`](../test/migrate.test.mjs) holds the narrowest gate in the
 codebase: nothing reaches the renderer without passing through `migrateProject`,

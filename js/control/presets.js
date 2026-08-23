@@ -183,7 +183,10 @@ const CHRISTMAS = () => [
     name: 'Icicles',
     tags: ['roof', 'trim'],
     opacity: 0.8,
-    params: { color: '#bfe9ff', tip: '#ffffff', count: 26, length: 0.1, variation: 0.65, width: 4, grow: 0, glint: 0.45 },
+    // Width 3, not 4: the slider stops at 3, `resolveParams` clamps to it, and
+    // 3 is therefore what this preset has always actually drawn. Storing 4 only
+    // meant a number nothing could produce and a slider pinned at its end.
+    params: { color: '#bfe9ff', tip: '#ffffff', count: 26, length: 0.1, variation: 0.65, width: 3, grow: 0, glint: 0.45 },
   }),
   layer('fairy-lights', {
     name: 'Roofline lights',
@@ -389,7 +392,12 @@ const BIRTHDAY = () => [
     tags: ['primary'],
     needsTag: 'primary',
     params: {
-      content: 'HAPPY BIRTHDAY', mode: 'box', font: 'rounded', weight: '900', size: 0.62,
+      // `system` rather than `rounded`, which is not one of the Text effect's
+      // fonts and never has been: it fell through to `system` on the wall while
+      // leaving the inspector's dropdown showing nothing at all. This is the
+      // face it has always rendered in. A genuinely rounded one would mean
+      // adding a stack to FONT_STACKS, which is a decision rather than a fix.
+      content: 'HAPPY BIRTHDAY', mode: 'box', font: 'system', weight: '900', size: 0.62,
       tracking: 0.04, color: '#ffd166', stroke: '#ff3b6b', strokeWidth: 4, glow: 20,
       align: 'centre', animation: 'wave', speed: 0.7, amount: 0.3,
     },

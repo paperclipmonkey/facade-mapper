@@ -21,11 +21,34 @@ export function createAudioAnalyser({ onLevels } = {}) {
   let timer = null;
   let gain = 1;
 
+  /**
+   * The gap between asking for the microphone and getting it.
+   *
+   * `getUserMedia` does not resolve until somebody answers the browser's
+   * permission prompt, which can be a while, and the page stays live
+   * underneath it — so the checkbox that started this can be clicked again,
+   * twice, or switched back off before the answer arrives. `analyser` is still
+   * null throughout, so it guarded none of that:
+   *
+   *   - A second click opened a second stream, context and interval. The first
+   *     set was overwritten and leaked, and `stop` could then only ever close
+   *     one of them, leaving the recording light on for the rest of the
+   *     evening.
+   *   - Switching it back off while the prompt was up stopped nothing, because
+   *     there was nothing yet to stop. Granting permission afterwards started
+   *     the microphone anyway, with the switch reading *off*.
+   *
+   * `starting` collapses concurrent calls onto one attempt; `wanted` is the
+   * switch's own position, checked again on the far side of the await so an
+   * attempt nobody is waiting for any more tidies itself away.
+   */
+  let starting = null;
+  let wanted = false;
+
   const levels = { level: 0, low: 0, mid: 0, high: 0 };
 
-  async function start() {
-    if (analyser) return true;
-    stream = await navigator.mediaDevices.getUserMedia({
+  async function open() {
+    const media = await navigator.mediaDevices.getUserMedia({
       audio: {
         // Echo cancellation and noise suppression are tuned for speech and will
         // happily gate out exactly the music we want to follow.
@@ -34,6 +57,11 @@ export function createAudioAnalyser({ onLevels } = {}) {
         autoGainControl: false,
       },
     });
+    if (!wanted) {
+      for (const track of media.getTracks()) track.stop();
+      return false;
+    }
+    stream = media;
     context = new (window.AudioContext || window.webkitAudioContext)();
     const source = context.createMediaStreamSource(stream);
     analyser = context.createAnalyser();
@@ -44,6 +72,17 @@ export function createAudioAnalyser({ onLevels } = {}) {
 
     timer = setInterval(sample, 33);
     return true;
+  }
+
+  async function start() {
+    wanted = true;
+    if (analyser) return true;
+    if (!starting) {
+      starting = open().finally(() => {
+        starting = null;
+      });
+    }
+    return starting;
   }
 
   function binRange(loHz, hiHz) {
@@ -81,6 +120,7 @@ export function createAudioAnalyser({ onLevels } = {}) {
   }
 
   function stop() {
+    wanted = false;
     clearInterval(timer);
     timer = null;
     if (stream) for (const track of stream.getTracks()) track.stop();

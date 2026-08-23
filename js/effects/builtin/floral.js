@@ -1388,6 +1388,15 @@ const ditsy = {
     { key: 'breeze', type: 'range', label: 'Breeze speed', default: 0.5, min: 0, max: 4, step: 0.01 },
     /** In turns, so a saw LFO across it comes round to where it started. */
     { key: 'phase', type: 'range', label: 'Gust phase', default: 0, min: 0, max: 1, step: 0.005 },
+    /**
+     * Also in turns: every motif, turned together.
+     *
+     * `stampPrint` has always read this — both prints come off the same engine
+     * — and only Paisley declared it, so on Ditsy the dial simply was not
+     * there and `resolveParams`, which builds its output from the schema and
+     * nothing else, could never produce the value the engine was asking for.
+     */
+    { key: 'turn', type: 'range', label: 'Turn', default: 0, min: -1, max: 1, step: 0.005 },
     { key: 'shimmer', type: 'range', label: 'Shimmer', default: 0.3, min: 0, max: 1, step: 0.01 },
     { key: 'drift', type: 'range', label: 'Drift', default: 0, min: -80, max: 80, step: 1 },
     OBSTACLE_PARAM,

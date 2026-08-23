@@ -68,6 +68,15 @@ function recordingContext() {
   const gradients = [];
   const strokes = [];
   let at = null;
+  /**
+   * Which subpath a segment belongs to, counted from `moveTo`.
+   *
+   * Grouping by it is how a test picks out one strand, one frond or one
+   * outline without having to know how many segments the effect happens to
+   * draw it with — which is a number that changes the moment a straight chain
+   * becomes a curve.
+   */
+  let sub = -1;
   let tx = 0;
   let ty = 0;
   const stack = [];
@@ -89,13 +98,28 @@ function recordingContext() {
     translate(x, y) { tx += x; ty += y; },
     beginPath() { at = null; },
     closePath() {},
-    moveTo(x, y) { at = { x: x + tx, y: y + ty }; },
+    moveTo(x, y) { at = { x: x + tx, y: y + ty }; sub++; },
     lineTo(x, y) {
       const to = { x: x + tx, y: y + ty };
-      if (at) lines.push({ x0: at.x, y0: at.y, x1: to.x, y1: to.y });
+      if (at) lines.push({ x0: at.x, y0: at.y, x1: to.x, y1: to.y, sub });
       at = to;
     },
-    quadraticCurveTo(cx, cy, x, y) { at = { x: x + tx, y: y + ty }; },
+    /**
+     * Recorded as a segment ending at the *control* point, not at the endpoint.
+     *
+     * `curveThrough` in the effect library traces a sampled path by making each
+     * sample the control point of a quadratic and passing the curve through the
+     * midpoints between them — so the control points are the samples, and the
+     * endpoints are an artefact of the technique. Recording them this way makes
+     * a curve read here exactly as the `lineTo` chain it replaced did, which is
+     * what lets these tests go on asking where each node of a frond or each
+     * point of a tentacle actually is.
+     */
+    quadraticCurveTo(cx, cy, x, y) {
+      const control = { x: cx + tx, y: cy + ty };
+      if (at) lines.push({ x0: at.x, y0: at.y, x1: control.x, y1: control.y, sub });
+      at = { x: x + tx, y: y + ty };
+    },
     bezierCurveTo(a, b, c, d, x, y) { at = { x: x + tx, y: y + ty }; },
     arc(x, y, r) { arcs.push({ x: x + tx, y: y + ty, r }); },
     ellipse(x, y, rx, ry) { arcs.push({ x: x + tx, y: y + ty, r: Math.max(rx, ry) }); },
@@ -727,7 +751,6 @@ console.log('\n— jellyfish —');
    * slider that feeds it.
    */
   const shape = makeShape(box(0, 0, WORLD.w, WORLD.h), { id: 'w' });
-  const segments = 12;
 
   /** The worst height any strand vertex reaches above the point it hangs from. */
   const worstClimb = (params) => {
@@ -736,12 +759,26 @@ console.log('\n— jellyfish —');
     for (let n = 0; n < 90; n++) {
       const t = 6 + n * ((params.pulse * 2.2) / 90);
       const g = frame('jellyfish', { shape, t, params });
-      for (let v = 0; v < g.lines.length; v++) {
-        // Every strand is one moveTo and `segments` lineTos, in order, so the
-        // vertex a strand hangs from is the start of its first segment.
-        const anchorY = g.lines[Math.floor(v / segments) * segments].y0;
-        const climb = anchorY - g.lines[v].y1;
-        if (climb > worst) { worst = climb; where = `t=${t.toFixed(2)}`; }
+
+      /**
+       * One subpath per strand, drawn before the bell.
+       *
+       * By subpath rather than by counting segments: a strand is traced as a
+       * curve now, and how many path commands that takes is the curve's
+       * business. What a strand *is* — one run from its anchor — has not
+       * changed, and this asks about that.
+       */
+      const bySub = new Map();
+      for (const seg of g.lines) {
+        if (!bySub.has(seg.sub)) bySub.set(seg.sub, []);
+        bySub.get(seg.sub).push(seg);
+      }
+      for (const strand of [...bySub.values()].slice(0, params.tentacles)) {
+        const anchorY = strand[0].y0;
+        for (const seg of strand) {
+          const climb = anchorY - seg.y1;
+          if (climb > worst) { worst = climb; where = `t=${t.toFixed(2)}`; }
+        }
       }
     }
     return { worst, where };
@@ -776,8 +813,10 @@ console.log('\n— jellyfish —');
   for (let n = 0; n < 60; n++) {
     const g = frame('jellyfish', { shape, t: 6 + (n / 60) * params.pulse, params });
     // Where the first strand's tip is relative to where that strand hangs from,
-    // so a bell that is merely translating does not count as a swing.
-    tips.push(g.lines[segments - 1].y1 - g.lines[0].y0);
+    // so a bell that is merely translating does not count as a swing. The strand
+    // is the first subpath; its tip is the last segment of it.
+    const strand = g.lines.filter((seg) => seg.sub === g.lines[0].sub);
+    tips.push(strand[strand.length - 1].y1 - strand[0].y0);
   }
   const swing = Math.max(...tips) - Math.min(...tips);
   ok('but the strands still swing through the stroke', swing > params.size * 0.25,

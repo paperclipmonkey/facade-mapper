@@ -14,8 +14,10 @@
  *   node test/presets.test.mjs
  */
 
-import { PRESETS } from '../js/control/presets.js';
+import { PRESETS, applyPreset, addDemoBursts } from '../js/control/presets.js';
+import { createProject } from '../js/core/state.js';
 import { getEffect } from '../js/effects/registry.js';
+import { BINDING_TYPES, WAVES, compileExpression } from '../js/core/modulators.js';
 import { GRADE_PRESETS } from '../js/render/postfx.js';
 import { SHAPE_TAGS } from '../js/core/state.js';
 import { demoShapes } from '../js/control/demoHouse.js';
@@ -156,6 +158,173 @@ console.log('\n— tags that have to exist —');
     const overclaimed = (preset.tagsUsed || []).filter((t) => !wanted.has(t));
     ok(`${preset.id} claims only tags it uses`, overclaimed.length === 0, overclaimed.join(', '));
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * And the values must be values the control can produce
+ * ------------------------------------------------------------------ */
+
+/**
+ * The other half of "the preset says what it means".
+ *
+ * The checks above make sure a preset only names parameters that exist. This
+ * one makes sure the *values* are ones the inspector's control could have
+ * produced, which is a different failure with the same shape: `resolveParams`
+ * clamps a number to the slider's ends and every consumer of a `select`
+ * falls back when it does not recognise the option, so a preset asking for
+ * something out of range is not an error anywhere — it is a stored value that
+ * differs from the one on the wall, with a slider pinned at its end or a
+ * dropdown showing nothing selected.
+ *
+ * Both were in here. The Christmas icicles asked for a width of 4 against a
+ * slider that stops at 3, and the birthday headline asked for a font called
+ * `rounded`, which the Text effect has never had — so it rendered in the
+ * system face while the dropdown showed no selection at all.
+ *
+ * Run against the *applied* project rather than `build()`, so anything the
+ * demo bursts add is covered by the same rule.
+ */
+console.log('\n— parameter values —');
+
+const HEX = /^#[0-9a-fA-F]{3,8}$/;
+
+function appliedProject(presetId) {
+  const project = createProject('test');
+  project.shapes = demoShapes();
+  applyPreset(project, presetId);
+  addDemoBursts(project);
+  return project;
+}
+
+for (const preset of PRESETS) {
+  const project = appliedProject(preset.id);
+  const wrong = [];
+
+  for (const layer of project.layers) {
+    const effect = getEffect(layer.effect);
+    if (!effect) continue;
+    const byKey = new Map(effect.params.map((p) => [p.key, p]));
+
+    for (const [key, value] of Object.entries(layer.params || {})) {
+      const def = byKey.get(key);
+      if (!def) continue; // Named above; not this check's business.
+      const where = `${layer.name}.${key}`;
+
+      if (def.type === 'range' || def.type === 'number') {
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          wrong.push(`${where} = ${JSON.stringify(value)} for a ${def.type}`);
+        } else if (def.min !== undefined && value < def.min) {
+          wrong.push(`${where} = ${value}, below its minimum of ${def.min}`);
+        } else if (def.max !== undefined && value > def.max) {
+          wrong.push(`${where} = ${value}, above its maximum of ${def.max}`);
+        }
+      } else if (def.type === 'select' && !(def.options || []).includes(value)) {
+        wrong.push(`${where} = ${JSON.stringify(value)}, not one of ${JSON.stringify(def.options)}`);
+      } else if (def.type === 'color' && !HEX.test(String(value))) {
+        wrong.push(`${where} = ${JSON.stringify(value)}, which is not a hex colour`);
+      } else if (def.type === 'bool' && typeof value !== 'boolean') {
+        wrong.push(`${where} = ${JSON.stringify(value)} for a switch`);
+      }
+    }
+  }
+
+  ok(`${preset.id} sets only values its controls can produce`, wrong.length === 0,
+    wrong.slice(0, 3).join('; '));
+}
+
+/* ------------------------------------------------------------------ *
+ * The modulation a preset ships with
+ * ------------------------------------------------------------------ */
+
+console.log('\n— bindings —');
+
+const BANDS = ['level', 'low', 'mid', 'high'];
+
+for (const preset of PRESETS) {
+  const project = appliedProject(preset.id);
+  const wrong = [];
+
+  for (const layer of project.layers) {
+    const effect = getEffect(layer.effect);
+    if (!effect) continue;
+    const byKey = new Map(effect.params.map((p) => [p.key, p]));
+
+    for (const [key, binding] of Object.entries(layer.bindings || {})) {
+      const where = `${layer.name}.${key}`;
+      const def = byKey.get(key);
+      if (!def) { wrong.push(`${where} modulates a parameter that does not exist`); continue; }
+      if (!BINDING_TYPES.includes(binding.type)) {
+        wrong.push(`${where} is a "${binding.type}" binding, which is not a kind`);
+        continue;
+      }
+      /**
+       * Modulation is arithmetic, and there is no arithmetic on a colour or a
+       * string. The inspector only offers a binding on the numeric kinds, so a
+       * preset carrying one anywhere else is a preset the UI could not have
+       * produced — and `resolveParams` has to catch it at render time.
+       */
+      if (!['range', 'number', 'bool'].includes(def.type)) {
+        wrong.push(`${where} modulates a ${def.type}, which cannot be modulated`);
+      }
+      if (binding.type === 'lfo' && binding.wave && !WAVES.includes(binding.wave)) {
+        wrong.push(`${where} asks for a "${binding.wave}" wave`);
+      }
+      if (binding.type === 'audio' && binding.band && !BANDS.includes(binding.band)) {
+        wrong.push(`${where} listens to a band called "${binding.band}"`);
+      }
+      if (binding.type === 'expr' && !compileExpression(binding.code || '').call) {
+        wrong.push(`${where} has an expression that will not compile`);
+      }
+      if (binding.rate !== undefined && !(Number.isFinite(binding.rate) && binding.rate > 0)) {
+        wrong.push(`${where} has a rate of ${binding.rate}`);
+      }
+      if (binding.depth !== undefined && !Number.isFinite(binding.depth)) {
+        wrong.push(`${where} has a depth of ${binding.depth}`);
+      }
+    }
+  }
+
+  ok(`${preset.id} ships modulation the app can actually run`, wrong.length === 0,
+    wrong.slice(0, 3).join('; '));
+}
+
+/* ------------------------------------------------------------------ *
+ * What a preset leaves behind, once it has been applied
+ * ------------------------------------------------------------------ */
+
+console.log('\n— the show a preset builds —');
+
+for (const preset of PRESETS) {
+  const project = appliedProject(preset.id);
+  const layerIds = new Set(project.layers.map((l) => l.id));
+  const sceneIds = new Set(project.scenes.map((s) => s.id));
+
+  const orphaned = project.scenes.flatMap((scene) =>
+    Object.keys(scene.state || {})
+      .filter((id) => !layerIds.has(id))
+      .map((id) => `${scene.name} names a layer that is not here`)
+  );
+  ok(`${preset.id} builds scenes over its own layers`, orphaned.length === 0, orphaned[0] || '');
+
+  const dangling = (project.triggers || [])
+    .filter((t) => t.sceneId && !sceneIds.has(t.sceneId))
+    .map((t) => t.name);
+  ok(`${preset.id} builds triggers over its own scenes`, dangling.length === 0, dangling.join(', '));
+
+  /**
+   * A second trigger on a key another one already has is dead: `fireByKey`
+   * takes the first that matches and does not look further. Same for two
+   * scenes on one digit.
+   */
+  const keys = (project.triggers || []).filter((t) => t.source === 'hotkey').map((t) => t.key);
+  const sharedKeys = [...new Set(keys.filter((k, i) => keys.indexOf(k) !== i))];
+  ok(`${preset.id} gives every hotkey trigger a key of its own`, sharedKeys.length === 0,
+    sharedKeys.join(', '));
+
+  const digits = project.scenes.map((s) => s.hotkey).filter(Boolean);
+  const sharedDigits = [...new Set(digits.filter((k, i) => digits.indexOf(k) !== i))];
+  ok(`${preset.id} gives every scene a digit of its own`, sharedDigits.length === 0,
+    sharedDigits.join(', '));
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');

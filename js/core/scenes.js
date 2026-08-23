@@ -84,7 +84,23 @@ export function sceneDrift(project, sceneId) {
   const changed = [];
   for (const layer of project.layers) {
     const stored = scene.state?.[layer.id];
-    if (!stored) continue;
+    /**
+     * A layer the scene says nothing about, which is not the same thing in
+     * both kinds of scene — and reading it as "no difference" either way was
+     * the one hole left in the unsaved-changes warning.
+     *
+     * A **partial** scene has no opinion about a layer it does not name, so
+     * there is genuinely nothing to differ from. A **full** one is the whole
+     * look: `applySceneToLayers` switches off what it does not mention, so a
+     * layer you added since is a difference exactly when it is switched on —
+     * and it is the difference most worth catching, because adding a layer is
+     * how you build on a look. Without this the button stayed clean, the guard
+     * stayed quiet, and pressing the next scene threw the new layer away.
+     */
+    if (!stored) {
+      if (scene.full && layer.enabled) changed.push(layer.id);
+      continue;
+    }
     if (!!layer.enabled !== !!stored.enabled) { changed.push(layer.id); continue; }
     if (Math.abs((layer.opacity ?? 1) - (stored.opacity ?? 1)) > 1e-6) { changed.push(layer.id); continue; }
     const keys = new Set([...Object.keys(stored.params || {}), ...Object.keys(layer.params || {})]);
@@ -213,10 +229,21 @@ export function effectiveLayers(project, at = now()) {
       continue;
     }
 
+    /**
+     * A layer the incoming full scene drops has somewhere to fade *to*.
+     *
+     * `blendLayerState` hands back the side it has when one is missing, which
+     * is right for the params and wrong for the opacity: the layer then sat at
+     * the outgoing scene's brightness for the whole crossfade and vanished on
+     * the last frame of it. On a four-second fade between two captured looks
+     * that reads as the fade being broken — everything else eases across and
+     * the dropped layer snaps. Giving it an explicit target at zero, carrying
+     * the outgoing params so nothing else moves, makes it leave the way the
+     * comment above has always said it does.
+     */
+    const target = toState || { enabled: false, opacity: 0, params: fromState?.params || layer.params };
     const blended =
-      f >= 1 || !fromState
-        ? toState || { enabled: false, opacity: 0, params: layer.params }
-        : blendLayerState(fromState, toState, f);
+      f >= 1 || !fromState ? target : blendLayerState(fromState, target, f);
 
     out.push({
       ...layer,
