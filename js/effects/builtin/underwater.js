@@ -52,7 +52,7 @@
 import { rgba, clamp, lerp, TAU, mixHex, makeRng, smoothstep } from '../../core/math.js';
 import { waterAbsorb } from '../color.js';
 import { collectObstacles, deflect, nearestSurface, isClear } from '../obstacles.js';
-import { glow } from '../lib.js';
+import { glow, curveThrough } from '../lib.js';
 
 /* ------------------------------------------------------------------ *
  * Depth
@@ -210,16 +210,66 @@ export function orbitalDecay(z, lambda) {
 const SHAFT_STOPS = 6;
 
 /**
- * The cross-section of a shaft, as [width, alpha] pairs.
+ * The cross-section of a shaft, as [width, alpha] pairs, widest first.
  *
- * Widths halve geometrically; alphas are `exp(−2u²)` at the half-width, which
- * is what makes the stack add up to something with no edge in it. Precomputed
- * because it never changes and this is inside a per-shaft loop.
+ * The slices are drawn additively one inside the next, so what the eye sees at
+ * a given distance from the centre is the *sum* of every slice that reaches
+ * it. Getting a Gaussian section out of that means each slice carries the
+ * **increment** between its own reach and the previous one's — not the value
+ * of the curve at its own width, which is what this used to do.
+ *
+ * That distinction is the whole difference between a shaft and a streak. With
+ * the raw values the innermost sliver carried full alpha and the stack summed
+ * to three at the centre, so the beam clipped to flat white over about a sixth
+ * of the width the slider asked for, with a faint halo outside it that read as
+ * a separate thing. On a wall that is a hard bright stripe: cellophane, not
+ * light. With increments the sum reaches one exactly at the centre and falls
+ * off across the full width, which is what a shaft of sunlight in water
+ * actually looks like.
+ *
+ * Twelve slices rather than five, because the steps are now what you would see
+ * if you saw anything: each is under a tenth of the peak, which is below the
+ * threshold at which a gradient bands. Twelve fills of a quad is nothing next
+ * to the gradient each one is filled with, which is made once per shaft.
  */
-const SHAFT_SECTION = [1, 0.68, 0.46, 0.31, 0.16].map((scale) => [
-  scale,
-  Math.exp(-2 * scale * scale) / Math.exp(-2 * 0.16 * 0.16),
-]);
+const SHAFT_SLICES_MAX = 12;
+const SHAFT_SLICES_MIN = 4;
+
+/** Normalised so the centre is 1; 2.2 puts the knee inside the stated width. */
+const shaftReach = (scale) => Math.exp(-2.2 * scale * scale);
+
+/**
+ * A section for every slice count, built once.
+ *
+ * How many slices a shaft needs is a question about how wide it is on the
+ * wall, not about the effect: the steps are only visible if there are enough
+ * pixels between them to see. A shaft forty pixels across looks identical at
+ * four slices and at twelve, and a fan of forty narrow ones would pay for the
+ * other eight on every one of them, every frame.
+ */
+const SHAFT_SECTIONS = (() => {
+  const table = [];
+  for (let slices = 0; slices <= SHAFT_SLICES_MAX; slices++) {
+    if (slices < SHAFT_SLICES_MIN) { table.push(null); continue; }
+    const out = [];
+    let previous = 0;
+    for (let i = 0; i < slices; i++) {
+      // Down to a sliver rather than to zero: the last slice is the core.
+      const scale = 1 - (i / slices) * 0.93;
+      const here = shaftReach(scale);
+      out.push([scale, here - previous]);
+      previous = here;
+    }
+    table.push(out);
+  }
+  return table;
+})();
+
+/** As many slices as the width can show, and no more. About one per ten pixels. */
+function shaftSection(widthPx) {
+  const wanted = Math.round(widthPx / 10);
+  return SHAFT_SECTIONS[clamp(wanted, SHAFT_SLICES_MIN, SHAFT_SLICES_MAX)];
+}
 
 const godrays = {
   id: 'godrays',
@@ -313,7 +363,17 @@ const godrays = {
       // The shimmer is the surface breaking up, and it is independent per shaft
       // — a fan that brightens as one reads as a lamp behind a fan blade.
       const shimmer = 1 - p.shimmer * 0.5 * (0.5 + 0.5 * noise.noise2(i * 3.7, t * 0.9));
-      const peak = 0.5 * p.intensity * shimmer * (0.6 + 0.4 * focus);
+      /**
+       * Raised to match what the section now sums to.
+       *
+       * The old stack reached three times this at the centre and was clipped
+       * there by the compositor; the new one reaches one, so the same number
+       * would have made the shafts a third of the brightness they were. This
+       * is the figure that keeps a default shaft as bright as it looked, while
+       * spending that brightness across the width instead of piling it into a
+       * sliver.
+       */
+      const peak = 0.85 * p.intensity * shimmer * (0.6 + 0.4 * focus);
 
       const grad = g.createLinearGradient(originX, top, endX, endY);
       for (let s = 0; s < SHAFT_STOPS; s++) {
@@ -337,7 +397,7 @@ const godrays = {
        * than one plank because it looks like a mistake rather than a style.
        */
       g.fillStyle = grad;
-      for (const [scale, alpha] of SHAFT_SECTION) {
+      for (const [scale, alpha] of shaftSection(w1)) {
         g.globalAlpha = alpha;
         g.beginPath();
         g.moveTo(originX - w0 * scale * 0.5, top);
@@ -1381,9 +1441,11 @@ const kelp = {
       g.lineCap = 'round';
       g.lineJoin = 'round';
       g.lineWidth = width;
+      // Through the nodes rather than between them: fourteen straight pieces
+      // is fourteen straight pieces once the frond is a metre and a half tall
+      // on a wall. See `curveThrough`.
       g.beginPath();
-      g.moveTo(nx[0], ny[0]);
-      for (let i = 1; i <= KELP_NODES; i++) g.lineTo(nx[i], ny[i]);
+      curveThrough(g, nx, ny, KELP_NODES + 1, { move: true });
       g.stroke();
 
       // Gas bladders, which is what holds a real frond up and is also the one
@@ -1417,6 +1479,17 @@ const kelp = {
  * a jellyfish-shaped balloon bobbing on a spring.
  */
 const SQUEEZE = 0.28;
+
+/**
+ * One strand's points, gathered before it is traced.
+ *
+ * Module-level and reused, because this is inside a loop over every strand of
+ * every jellyfish on screen and a fresh pair of arrays per strand would be a
+ * few hundred allocations a frame for nothing. Sized well past the twelve
+ * segments a strand is drawn with.
+ */
+const strandX = new Float64Array(64);
+const strandY = new Float64Array(64);
 
 /**
  * How far back in time strand `s` reaches, in seconds.
@@ -1617,8 +1690,11 @@ const jellyfish = {
           const span = strandLag(s, p.trail);
           g.strokeStyle = rgba(isArm ? bell : rimColour, alpha * (isArm ? 0.75 : 0.4));
           g.lineWidth = Math.max(0.6, R * (isArm ? 0.11 : 0.05));
-          g.beginPath();
-          g.moveTo(now.x + anchorX, anchorY);
+          // Gathered first, then traced as a curve: a strand is a hanging
+          // thing and a chain of chords looks like a chain. See `curveThrough`.
+          let n = 0;
+          strandX[n] = now.x + anchorX;
+          strandY[n++] = anchorY;
           for (let k = 1; k <= segments; k++) {
             const u = k / segments;
             const past = bellAt(t - span * u, j, p, world, bbox);
@@ -1646,11 +1722,11 @@ const jellyfish = {
              */
             const wash = Math.exp(-u / WASH_LENGTH);
             const swing = clamp((now.surge - past.surge) * wash, -drop, drop);
-            g.lineTo(
-              now.x - (now.cx - past.cx) + splay,
-              anchorY - (now.ty - past.ty) + drop + swing
-            );
+            strandX[n] = now.x - (now.cx - past.cx) + splay;
+            strandY[n++] = anchorY - (now.ty - past.ty) + drop + swing;
           }
+          g.beginPath();
+          curveThrough(g, strandX, strandY, n, { move: true });
           g.stroke();
         }
       }
@@ -1893,6 +1969,9 @@ const bodyCx = new Float64Array(BODY_SEGMENTS + 1);
 const bodyCy = new Float64Array(BODY_SEGMENTS + 1);
 const bodyUp = new Float64Array(BODY_SEGMENTS + 1);
 const bodyDn = new Float64Array(BODY_SEGMENTS + 1);
+/** The silhouette as one run — up the back, down the belly — for `curveThrough`. */
+const outlineX = new Float64Array(BODY_SEGMENTS * 2 + 2);
+const outlineY = new Float64Array(BODY_SEGMENTS * 2 + 2);
 
 /**
  * Spray, thrown on real ballistics from a point on the surface.
@@ -2063,10 +2142,28 @@ const dolphins = {
       skin.addColorStop(1, rgba(mixHex(belly, back, 0.22), alpha));
       g.fillStyle = skin;
 
+      /**
+       * The silhouette, as a curve rather than as twenty-two chords.
+       *
+       * A body this size on a wall is two metres of animal, and at that scale
+       * a polygon reads as a polygon — the back comes out faceted and the
+       * whole thing looks like a cut-out. Collected into one run so the head
+       * and the peduncle are curves too, and closed back to the tip of the
+       * rostrum, which is a point on the centreline and the one corner the
+       * animal actually has.
+       */
+      let n = 0;
+      outlineX[n] = bodyCx[0]; outlineY[n++] = bodyCy[0];
+      for (let k = 1; k <= BODY_SEGMENTS; k++) {
+        outlineX[n] = bodyCx[k];
+        outlineY[n++] = bodyCy[k] - bodyUp[k];
+      }
+      for (let k = BODY_SEGMENTS; k >= 1; k--) {
+        outlineX[n] = bodyCx[k];
+        outlineY[n++] = bodyCy[k] + bodyDn[k];
+      }
       g.beginPath();
-      g.moveTo(bodyCx[0], bodyCy[0]);
-      for (let k = 1; k <= BODY_SEGMENTS; k++) g.lineTo(bodyCx[k], bodyCy[k] - bodyUp[k]);
-      for (let k = BODY_SEGMENTS; k >= 1; k--) g.lineTo(bodyCx[k], bodyCy[k] + bodyDn[k]);
+      curveThrough(g, outlineX, outlineY, n, { move: true });
       g.closePath();
       g.fill();
 
@@ -2156,9 +2253,14 @@ const dolphins = {
         g.strokeStyle = rgba('#ffffff', alpha * 0.2);
         g.lineWidth = Math.max(0.6, depth * 0.16);
         g.lineCap = 'round';
+        let r = 0;
+        outlineX[r] = bodyCx[3]; outlineY[r++] = bodyCy[3] - bodyUp[3] * 0.55;
+        for (let k = 4; k <= dorsalAt + 4; k++) {
+          outlineX[r] = bodyCx[k];
+          outlineY[r++] = bodyCy[k] - bodyUp[k] * 0.6;
+        }
         g.beginPath();
-        g.moveTo(bodyCx[3], bodyCy[3] - bodyUp[3] * 0.55);
-        for (let k = 4; k <= dorsalAt + 4; k++) g.lineTo(bodyCx[k], bodyCy[k] - bodyUp[k] * 0.6);
+        curveThrough(g, outlineX, outlineY, r, { move: true });
         g.stroke();
       }
 

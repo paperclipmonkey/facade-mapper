@@ -655,6 +655,16 @@ export const HELP_SECTIONS = [
     </td>
   </tr>
   <tr>
+    <th><code>fx.curveThrough(g, xs, ys, n)</code></th>
+    <td>
+      A smooth curve through points you have sampled — a frond in the swell, the outline of a body
+      as it swims — instead of the straight chords <code>lineTo</code> would give you. At two
+      metres across, twenty chords look like twenty chords, and the whole thing reads as low
+      resolution. Each sample becomes the control point of a quadratic, so it costs exactly what
+      <code>lineTo</code> costs and needs no extra samples.
+    </td>
+  </tr>
+  <tr>
     <th><code>fx.offscreen(w, h)</code></th>
     <td>
       A scratch canvas, for effects that only ever add — growth, trails, accretion. Stroke into it

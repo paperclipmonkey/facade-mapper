@@ -130,8 +130,11 @@ volumetric.
 `isClear`, `findFreeSpot`, `nearestSurface`. For anything that travels across
 the facade and should treat the windows as solid.
 
-**Drawing** — `tracePoints`, `glow`, `verticalGradient`, `withClip`,
-`offscreen`.
+**Drawing** — `tracePoints`, `curveThrough`, `glow`, `verticalGradient`,
+`withClip`, `offscreen`. `curveThrough` is the one to reach for whenever you
+have sampled a shape rather than authored it: on a wall, a curve made of twenty
+straight pieces is visibly made of twenty straight pieces, and it costs the same
+as `lineTo` to draw it properly.
 
 ## Three rules
 
