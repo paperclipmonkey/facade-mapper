@@ -33,12 +33,15 @@
  *      a `Math.random()` or a captured `Date.now()` reached for only in the
  *      biggest branch of an effect is exactly the sort that hides behind a
  *      default.
+ *   4. **Before the show started.** Every sweep in the suite runs from `t = 0`
+ *      upwards, and a staggered layer never does — see below.
  *
  *   node test/params.test.mjs
  */
 
 import { listEffects, defaultParams } from '../js/effects/registry.js';
-import { SHAPES, exercise, restoreRandom } from './effectHarness.mjs';
+import { makeRng } from '../js/core/math.js';
+import { SHAPES, context, exercise, recordingContext, restoreRandom } from './effectHarness.mjs';
 
 let failures = 0;
 const ok = (name, cond, detail = '') => {
@@ -180,6 +183,93 @@ console.log('\n— two tabs still draw the same frame —');
   }
   ok('every effect agrees with itself at both extremes', differ.length === 0,
     differ.slice(0, 4).join(' | '));
+}
+
+/* ------------------------------------------------------------------ *
+ * Before the show started
+ * ------------------------------------------------------------------ */
+
+console.log('\n— a staggered instance, which runs at a negative show time —');
+
+{
+  /**
+   * The input every sweep in this suite has been missing.
+   *
+   * Stagger shifts each target of a layer back in time so a row of windows
+   * comes up in sequence rather than together, and the shift is the slider
+   * times the target's index. At the maximum of five seconds, a layer pointed
+   * at twelve windows puts the twelfth fifty-five seconds behind — so for the
+   * first fifty-five seconds of the evening that instance is drawn, and
+   * stepped, at a **negative** `t`.
+   *
+   * The renderer clamps `age` and does not clamp `t` or `beat`, quite rightly:
+   * `t` is where this instance is in the show and it is genuinely before the
+   * start. But every test in the library has run from zero upwards, so
+   * `Math.floor(t / interval)` for an event index, `(t * speed) % 1` for a
+   * phase and `makeRng(\`x${Math.floor(t)}\`)` for a seed have only ever been
+   * given a positive number. Nothing was wrong; nothing had looked.
+   */
+  const STAGGERS = [55, 20, 5];
+  const threw = [];
+  const nonFinite = [];
+  let combinations = 0;
+
+  /** The instance as the renderer drives it: age from zero, `t` from -stagger. */
+  const staggered = (effect, shape, stagger, seconds) => {
+    const bad = [];
+    const seen = new Set();
+    const g = recordingContext((fn, args) => {
+      if (seen.has(fn)) return;
+      seen.add(fn);
+      bad.push(`${fn}(${args.slice(0, 6).join(',')})`);
+    }, null);
+    const state = {};
+    let broke = null;
+    const at = (age, canvas, rng) => {
+      const t = age - stagger;
+      const ctx = context(effect, shape, { g: canvas, t, state, rng, journal: null });
+      ctx.t = t;
+      ctx.age = age;
+      ctx.dt = 1 / 60;
+      ctx.beat = (t * 120) / 60;
+      ctx.beatPhase = ctx.beat - Math.floor(ctx.beat);
+      return ctx;
+    };
+    try {
+      if (effect.init) Object.assign(state, effect.init(at(0, null, makeRng('stag#0'))) || {});
+      if (effect.step) {
+        for (let i = 1; i <= Math.round(seconds * 60); i++) {
+          effect.step(at(i / 60, null, makeRng(`stag#${i}`)));
+        }
+      }
+      for (const age of [0, 1 / 60, seconds / 2, seconds]) {
+        g.resetCounters();
+        effect.draw(at(age, g, makeRng(`stag~${age}`)));
+      }
+    } catch (err) {
+      broke = `${err.message} (${(err.stack || '').split('\n')[1]?.trim() || '?'})`;
+    }
+    return { bad, broke };
+  };
+
+  for (const effect of effects) {
+    for (const stagger of STAGGERS) {
+      for (const name of ['window', 'frame']) {
+        combinations++;
+        const result = staggered(effect, SHAPES[name], stagger, 2);
+        const where = `${effect.id} ${stagger}s behind, on ${name}`;
+        if (result.broke) threw.push(`${where}: ${result.broke}`);
+        else if (result.bad.length) nonFinite.push(`${where}: ${result.bad[0]}`);
+      }
+    }
+  }
+
+  ok('nothing throws before the show it is in has started', threw.length === 0,
+    threw.slice(0, 3).join(' | '));
+  ok('and nothing puts a number that is not one on the canvas', nonFinite.length === 0,
+    nonFinite.slice(0, 3).join(' | '));
+  ok(`across ${combinations} staggered instances`, true,
+    `${effects.length} effects × ${STAGGERS.length} staggers × 2 shapes`);
 }
 
 restoreRandom();
