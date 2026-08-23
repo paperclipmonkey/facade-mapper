@@ -165,7 +165,9 @@ node test/bus.test.mjs         # cross-tab messages, the mirror, and who is aliv
 node test/picker.test.mjs      # the effect gallery: cards, search, and letting go
 node test/bindings.test.mjs    # the modulation editor, and the binding it edits
 node test/mic.test.mjs         # opening the microphone, and the gap in the middle
+node test/camera.test.mjs      # opening the camera, and the same gap again
 node test/storage.test.mjs     # saving, the show list, importing, and a full disk
+node test/media.test.mjs       # the clip library, and the gap while the disk answers
 node test/collide.test.mjs     # heightfields, landing, slumping, shedding
 node test/obstacles.test.mjs   # facade collision, automatic edge blending
 node test/figures.test.mjs     # the drawn figures
@@ -220,14 +222,22 @@ stand-in DOM, counting what the IntersectionObserver is holding. Observers keep
 their targets alive, the card set is rebuilt on every keystroke in the search
 box, and nothing about the resulting leak is visible from the app.
 
-[`bindings.test.mjs`](../test/bindings.test.mjs) and
-[`mic.test.mjs`](../test/mic.test.mjs) both cover a gap rather than a
+[`bindings.test.mjs`](../test/bindings.test.mjs), [`mic.test.mjs`](../test/mic.test.mjs)
+and [`camera.test.mjs`](../test/camera.test.mjs) all cover a gap rather than a
 calculation. The modulation editor is deliberately not re-rendered while
 somebody is typing in it, so its copy of the binding has to be kept honest by
-hand; the microphone is opened across a permission prompt that leaves it
-neither open nor closed for as long as it takes somebody to answer, and the
-switch beside it stays clickable throughout. Both stand in for the browser
-closely enough to be standing in the gap when the second click lands.
+hand; the microphone and the camera are opened across a permission prompt that
+leaves them neither open nor closed for as long as it takes somebody to answer,
+and the controls beside them stay clickable throughout. Each stands in for the
+browser closely enough to be standing in the gap when the second click lands —
+which is the only way to catch a device that gets opened twice and let go of
+once, since the symptom is a recording light that never goes out.
+
+[`media.test.mjs`](../test/media.test.mjs) is the same idea one layer down, and
+about the same kind of gap: a clip lives in IndexedDB, so nothing can be handed
+over synchronously, and everything the pool does about *forgetting* one is
+synchronous. Its stand-in disk answers only when the test says so, which is the
+only way to be standing in that gap when the delete lands.
 
 [`storage.test.mjs`](../test/storage.test.mjs) covers the whole of the app's
 persistence, which is localStorage and nothing else: a project written over is

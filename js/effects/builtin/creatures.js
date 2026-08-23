@@ -531,8 +531,13 @@ const runes = {
  * are long, so the line reads as a curve rather than as the polygon it is.
  */
 const BEE_TRAIL_EVERY = 2;
-/** Samples kept per bee. Two hundred at thirty a second is nearly seven seconds. */
-const BEE_TRAIL_SAMPLES = 200;
+/**
+ * Samples kept per bee. A hundred and eighty at thirty a second is six seconds
+ * exactly — chosen to be exact, because the Trail slider's top is this number
+ * and a maximum that is not a whole number of steps above the minimum is a
+ * value the control cannot produce.
+ */
+const BEE_TRAIL_SAMPLES = 180;
 const BEE_TRAIL_SECONDS = (BEE_TRAIL_SAMPLES * BEE_TRAIL_EVERY) / 60;
 /**
  * How many alpha steps the trail fades over.

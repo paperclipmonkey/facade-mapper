@@ -21,6 +21,22 @@ export function createCamera() {
 
   let stream = null;
   let currentDeviceId = null;
+  /**
+   * Which attempt to open the camera is the current one.
+   *
+   * `getUserMedia` does not resolve until somebody answers the browser's
+   * permission prompt, and the page stays live underneath it — so the Start
+   * camera button can be clicked again, or a different device picked from the
+   * list, while `stream` is still null and the `stop()` at the top of `start`
+   * therefore has nothing to stop. Both requests were then granted, both
+   * assigned `stream`, and whichever lost the race was never let go of: a
+   * second capture pipeline running for the rest of the evening with the
+   * recording light on and nothing on screen to explain it.
+   *
+   * Bumped by `stop` as well, so switching the camera off mid-prompt abandons
+   * the attempt rather than being overtaken by it.
+   */
+  let generation = 0;
 
   async function listDevices() {
     if (!navigator.mediaDevices?.enumerateDevices) return [];
@@ -28,8 +44,13 @@ export function createCamera() {
     return devices.filter((d) => d.kind === 'videoinput');
   }
 
+  /**
+   * Open the camera, or hand back null if a later call has already superseded
+   * this one — see `generation`. The answer belongs to the newer attempt.
+   */
   async function start(deviceId = null, { width = 1920, height = 1080 } = {}) {
     stop();
+    const mine = generation;
     const constraints = {
       audio: false,
       video: deviceId
@@ -37,17 +58,25 @@ export function createCamera() {
         : { facingMode: 'environment', width: { ideal: width }, height: { ideal: height } },
     };
 
+    let media;
     try {
-      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      media = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (err) {
       if (deviceId) {
         // The saved device may have been unplugged since last time.
-        stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+        media = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
       } else {
         throw err;
       }
     }
 
+    if (mine !== generation) {
+      // Somebody asked again, or switched it off, while the prompt was up.
+      for (const track of media.getTracks()) track.stop();
+      return null;
+    }
+
+    stream = media;
     video.srcObject = stream;
     await video.play().catch(() => {});
     await waitForMetadata();
@@ -103,6 +132,7 @@ export function createCamera() {
   }
 
   function stop() {
+    generation++;
     if (stream) {
       for (const track of stream.getTracks()) track.stop();
       stream = null;

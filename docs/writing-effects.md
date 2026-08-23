@@ -47,7 +47,9 @@ export default {
 | `fx` | The helper namespace, below. |
 
 Parameter types: `range`, `number`, `color`, `bool`, `select` (with `options`),
-`text`, `media`.
+`text`, `media`, and `camera` — a picker over the attached cameras, which
+defaults to *not* the one doing the alignment. See **A second camera** in
+[the effect library](effects.md).
 
 
 ## The building's real surface

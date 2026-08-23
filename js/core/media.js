@@ -113,7 +113,21 @@ export function createMediaPool({ onError } = {}) {
     }
   }
 
+  /**
+   * Let go of one record, and mark it so a load still in flight lets go too.
+   *
+   * `load` puts the record in the map immediately and reads the bytes out of
+   * IndexedDB afterwards, so there is a window — as long as the disk takes —
+   * in which the pool can be told the media is gone while the fetch for it is
+   * still running. Nothing said so. The fetch would land on a record nobody
+   * holds any more, mint an object URL, build a `<video>`, and call `play()` on
+   * it; a detached media element goes on decoding, and nothing would ever
+   * release it because it was never in the map to be released. Import a clip,
+   * change your mind, and the machine driving the projectors is quietly
+   * decoding video for the rest of the evening.
+   */
   function release(rec) {
+    rec.dropped = true;
     if (rec.el) {
       try {
         rec.el.pause?.();
@@ -122,8 +136,11 @@ export function createMediaPool({ onError } = {}) {
       }
       rec.el.removeAttribute?.('src');
       rec.el.load?.();
+      rec.el = null;
     }
     if (rec.url) URL.revokeObjectURL(rec.url);
+    rec.url = null;
+    rec.ready = false;
   }
 
   function load(id) {
@@ -133,11 +150,14 @@ export function createMediaPool({ onError } = {}) {
     let rec = entries.get(id);
     if (rec) return rec;
 
-    rec = { entry, el: null, url: null, ready: false, failed: false };
+    rec = { entry, el: null, url: null, ready: false, failed: false, dropped: false };
     entries.set(id, rec);
 
     getBlob(BLOB_KEY(id))
       .then((blob) => {
+        // Dropped while the disk was busy. Nothing after this point would ever
+        // be let go of, so nothing after this point is built.
+        if (rec.dropped) return;
         if (!blob) throw new Error(`Media "${entry.name}" is missing from local storage`);
         rec.url = URL.createObjectURL(blob);
         if (entry.kind === 'video') {
@@ -173,6 +193,7 @@ export function createMediaPool({ onError } = {}) {
         }
       })
       .catch((err) => {
+        if (rec.dropped) return;
         rec.failed = true;
         onError?.(err.message);
       });
