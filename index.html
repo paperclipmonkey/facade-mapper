@@ -376,8 +376,39 @@
       <label class="field inline"><span>BPM</span><input type="number" id="bpm" min="20" max="300" step="1" value="120" /></label>
       <label class="field inline grow"><span>Master</span><input type="range" id="master" min="0" max="1" step="0.01" value="1" /></label>
       <button type="button" class="btn danger" id="btnBlackout" title="Blackout everything (B)">Blackout</button>
+      <!--
+        Only here while there is something to save.
+
+        A scene is a saved look, and everything you do to a layer changes the
+        live one away from what was stored. That was visible as a small chip in
+        a panel you may not have open, and it went away silently the moment you
+        pressed another scene. This is in the transport, where the scene
+        buttons already are, so the thing you are about to lose is next to the
+        button that would lose it.
+      -->
+      <button type="button" class="btn primary scene-save" id="btnSaveScene" hidden></button>
       <div class="scene-buttons" id="sceneButtons"></div>
     </footer>
+
+    <!--
+      Asked before a scene change throws work away.
+
+      Three answers rather than two, because the useful one is neither "yes"
+      nor "no": almost always you meant to keep the changes and simply had not
+      pressed anything yet. Escape and the backdrop both mean "stay", which is
+      the answer that loses nothing.
+    -->
+    <dialog id="sceneGuardDialog" class="dialog">
+      <div class="dialog-body">
+        <h2 id="sceneGuardTitle">Unsaved changes</h2>
+        <p id="sceneGuardText"></p>
+        <div class="panel-actions">
+          <button type="button" class="btn primary" id="btnSceneGuardSave">Save and switch</button>
+          <button type="button" class="btn" id="btnSceneGuardDiscard">Switch and lose them</button>
+          <button type="button" class="btn" id="btnSceneGuardStay">Stay here</button>
+        </div>
+      </div>
+    </dialog>
 
     <dialog id="helpDialog" class="dialog dialog-wide">
       <div class="dialog-body" id="helpBody"></div>

@@ -380,10 +380,18 @@ export const HELP_SECTIONS = [
   another editable — go to 1, change a few things, save; go to 2, change a few more, save.
 </p>
 <p>
-  The scene you are in is marked <em>live</em>, and picks up an <strong>edited</strong> chip and a
-  <strong>Save</strong> button the moment anything differs from what was stored. Nothing else can
-  drift, because going to a scene loads it. Switching away discards unsaved changes &mdash;
-  <kbd>Ctrl</kbd>+<kbd>Z</kbd> brings them back.
+  The scene you are in is marked <em>live</em>, and the moment anything differs from what was
+  stored it says so in three places: an <strong>edited</strong> chip and a <strong>Save</strong>
+  button on its row in the Scenes panel, a dot on its button in the transport, and a
+  <strong>Save “name”</strong> button beside those buttons that is only ever there while pressing
+  it would do something. <kbd>Ctrl</kbd>+<kbd>S</kbd> does the same from anywhere. Nothing else can
+  drift, because going to a scene loads it.
+</p>
+<p>
+  Switching away would replace those changes, so it asks first — save them, lose them, or stay
+  where you are. It only asks when there is something to lose, so a show you have not edited never
+  sees the question; and <kbd>Ctrl</kbd>+<kbd>Z</kbd> still brings back anything you do choose to
+  lose. A scene pressed from the phone does not ask, because nobody is at the laptop to answer.
 </p>
 <p>
   Triggers and the playlist deliberately do <em>not</em> load: an evening of scares must not slowly
@@ -510,6 +518,7 @@ export const HELP_SECTIONS = [
   <tr><th><kbd>1</kbd>–<kbd>9</kbd></th><td>Jump to a scene</td></tr>
   <tr><th>Pinch / <kbd>Ctrl</kbd>-wheel</th><td>Zoom the stage, about the pointer. Two-finger scroll or a middle-button drag pans. Nothing else on the page moves, and nothing about the show changes — it is only where you are looking.</td></tr>
   <tr><th><kbd>0</kbd></th><td>Zoom the stage back to fit</td></tr>
+  <tr><th><kbd>Ctrl</kbd>+<kbd>S</kbd></th><td>Save the look back into the scene that is live. Works from anywhere, including inside a text field.</td></tr>
   <tr><th><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></th><td>Undo / redo</td></tr>
 </table>
 <p>In a projector tab: <kbd>F</kbd> fullscreen, <kbd>I</kbd> status, <kbd>T</kbd> cycle test patterns.</p>

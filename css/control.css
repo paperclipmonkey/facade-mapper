@@ -322,6 +322,41 @@
 
 .scene-btn.active .hot { color: #06141c; }
 
+/**
+ * The live scene, changed since it was saved.
+ *
+ * A dot rather than a word: the buttons are already as wide as they are going
+ * to get, and the thing being said is "there is something here", which a dot
+ * says at a glance from across a dark garden.
+ */
+.scene-btn.edited { border-color: var(--warn, #ffb347); }
+
+.scene-btn .edited-dot {
+  color: var(--warn, #ffb347);
+  margin-left: 5px;
+  font-size: 14px;
+  line-height: 0;
+  vertical-align: middle;
+}
+
+.scene-btn.active .edited-dot { color: #06141c; }
+
+/**
+ * The save button, which is only ever on screen when pressing it would do
+ * something. It sits ahead of the scene buttons, so the thing you are about to
+ * lose is next to the button that would lose it.
+ */
+.scene-save {
+  margin-left: auto;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* With the save button up it owns the gap, so the scenes sit beside it. */
+.scene-save:not([hidden]) + .scene-buttons { margin-left: 8px; }
+
 /* ------------------------------------------------------------------ */
 /* Inspector                                                           */
 /* ------------------------------------------------------------------ */

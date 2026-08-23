@@ -463,6 +463,39 @@ console.log('\n— scenes load, and say when they have drifted —');
   applySceneToLayers(project, one.id);
   ok('a layer the scene predates is left alone', c.params.level === 0.4);
   ok('and is not counted as drift', sceneDrift(project, one.id).length === 0);
+
+  /**
+   * Saving the look back into the scene it came from.
+   *
+   * This is what Ctrl+S and the transport's Save button do, and it is the
+   * whole point of noticing drift in the first place: a run of good changes
+   * used to be one scene button away from gone, with nothing on screen saying
+   * so louder than a chip in a panel you may not have open.
+   */
+  a.params.level = 0.11;
+  b.enabled = false;
+  ok('editing after a load drifts again', sceneDrift(project, one.id).length === 2);
+  ok('and the scene still holds what was stored', one.state[a.id].params.level === 0.2);
+
+  one.state = captureScene(project);
+  ok('recapturing clears the drift', sceneDrift(project, one.id).length === 0);
+  ok('and the scene now holds what is on the wall', one.state[a.id].params.level === 0.11);
+  ok('while the other scene is untouched by any of it', two.state[a.id].params.level === 0.75);
+
+  /**
+   * Only the live scene can have drifted, which is what lets the transport
+   * mark exactly one button. Every other scene is what it was stored as,
+   * because going to one loads it.
+   */
+  applySceneToLayers(project, two.id);
+  ok('going to another scene leaves nothing drifted there',
+    sceneDrift(project, two.id).length === 0);
+  ok('and the one just left still holds exactly what was saved into it',
+    one.state[a.id].params.level === 0.11);
+  // It "differs" from the layers now, of course — but it is not the live one,
+  // so nobody asks and nothing is marked.
+  ok('which is not the same as the live scene having drifted',
+    sceneDrift(project, one.id).length > 0 && sceneDrift(project, two.id).length === 0);
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILURE(S)`}`);

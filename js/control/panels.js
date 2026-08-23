@@ -386,9 +386,26 @@ export function renderSceneButtons(node, app) {
   clear(node);
   for (const scene of app.project.scenes) {
     const active = app.project.show?.activeScene === scene.id;
-    const button = el('button', { type: 'button', class: `scene-btn${active ? ' active' : ''}` }, [
+    /**
+     * Only the live scene can have drifted.
+     *
+     * Every other scene is exactly what it was stored as, because switching to
+     * one loads it onto the layers. So this is a statement about the one thing
+     * on screen that is not saved — and it is on the transport rather than in a
+     * panel, because the transport is where the button that would throw it away
+     * also is.
+     */
+    const edited = active ? app.sceneDrift(scene.id).length : 0;
+    const button = el('button', {
+      type: 'button',
+      class: `scene-btn${active ? ' active' : ''}${edited ? ' edited' : ''}`,
+      title: edited
+        ? `${edited} unsaved change${edited === 1 ? '' : 's'}. Ctrl+S saves them back into "${scene.name}".`
+        : scene.name,
+    }, [
       scene.hotkey ? el('span', { class: 'hot', text: scene.hotkey }) : null,
       scene.name,
+      edited ? el('span', { class: 'edited-dot', text: '•', 'aria-label': 'unsaved changes' }) : null,
     ]);
     button.addEventListener('click', () => app.activateScene(scene.id));
     node.appendChild(button);
