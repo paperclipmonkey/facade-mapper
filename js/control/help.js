@@ -649,7 +649,10 @@ export const HELP_SECTIONS = [
       Collision against the <em>openings</em> rather than the ledges, for anything that travels
       across the facade. <code>fx.collectObstacles</code> resolves a tag list like
       <code>"window, door"</code> into shapes to treat as solid; <code>deflect</code> bounces a
-      mover off one, or keeps it inside the shape you are drawing into.
+      mover off one, or keeps it inside the shape you are drawing into — and with
+      <code>{ slide: true }</code> it grazes along the surface instead of rebounding, which is
+      what anything that swims or walks wants, and the only version that cannot get stuck
+      buzzing between two surfaces too close together to fit through.
       <code>fx.nearestSurface</code> is what lets growth <em>follow</em> a window frame rather than
       merely avoid it. Bouncing Balls, Serpent and Creeping Vine are built on these.
     </td>

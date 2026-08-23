@@ -44,6 +44,7 @@ import { getEffect, defaultParams } from '../js/effects/registry.js';
 import { boundingBox, buildPathSampler, polygonCentroid, pointInPolygon, makeRng, hexToRgb }
   from '../js/core/math.js';
 import { defaultNoise } from '../js/core/noise.js';
+import { isClear } from '../js/effects/obstacles.js';
 
 let failures = 0;
 const ok = (name, cond, detail = '') => {
@@ -167,7 +168,7 @@ const WORLD = { w: 1920, h: 1080 };
  * Run an effect the way the renderer does: `step` at a fixed 60 Hz with a
  * generator reseeded from the step index, then one `draw`.
  */
-function run(effectId, { shape, params = {}, seconds = 1, seed = 'test', others = [] }) {
+function run(effectId, { shape, params = {}, seconds = 1, seed = 'test', others = [], watch = null }) {
   const effect = getEffect(effectId);
   if (!effect) throw new Error(`no effect ${effectId}`);
   const p = { ...defaultParams(effectId), ...params };
@@ -192,6 +193,10 @@ function run(effectId, { shape, params = {}, seconds = 1, seed = 'test', others 
   for (let i = 1; i <= steps; i++) {
     const t = i / 60;
     effect.step?.({ ...base, g: null, t, age: t, rng: makeRng(`${seed}:${i}`) });
+    // Several of these are about what happens *during* a run rather than about
+    // where it ends up — a fish pinned against a sill for ten seconds is back
+    // in open water by the time the last frame is drawn.
+    watch?.(state, i);
   }
 
   const g = recordingContext();
@@ -567,10 +572,23 @@ console.log('\n— the shoal —');
   ok('they stay together without piling up',
     rms > 26 * 1.5 && rms < 26 * 22, `rms spread ${rms.toFixed(0)} px at 26 px long`);
 
+  /**
+   * Nothing stalls and nothing runs away — against the bounds the effect
+   * actually promises rather than round numbers near them.
+   *
+   * The floor is Speed × 0.45 for a sardine and that again × the body plan's
+   * cruise, so the slowest thing a shoal legitimately contains is a deep-bodied
+   * fish holding station at 0.45 × 0.62 of the slider. The old figure of 0.4
+   * sat *above* that, so an angelfish idling exactly where it was designed to
+   * counted as stalled — which it duly did, once the fish stopped being flung
+   * about by rebounds and started holding a speed.
+   */
   const speeds = state.fish.map((f) => Math.hypot(f.vx, f.vy));
+  const slowest = 190 * 0.45 * 0.62;
+  const fastest = 190 * 2.6;
   ok('and none of them stalls or runs away',
-    speeds.every((s) => s > 190 * 0.4 && s < 190 * 2.7),
-    `${Math.min(...speeds).toFixed(0)}–${Math.max(...speeds).toFixed(0)} px/s`);
+    speeds.every((s) => s >= slowest - 1e-6 && s <= fastest + 1e-6),
+    `${Math.min(...speeds).toFixed(0)}–${Math.max(...speeds).toFixed(0)} px/s, against ${slowest.toFixed(0)}–${fastest.toFixed(0)}`);
 
   // A fish flashes when it banks, so at any instant some of them are turning
   // and some are not. All zero would mean the term never fires; all high would
@@ -591,6 +609,158 @@ console.log('\n— the shoal —');
   ok('two tabs draw the same shoal', key(a.state) === key(b.state));
   ok('and the same fish', JSON.stringify(a.g.lines) === JSON.stringify(b.g.lines),
     `${a.g.lines.length} segments`);
+}
+
+/* ------------------------------------------------------------------ *
+ * The shoal, and the four things that made it buzz
+ *
+ * From a photograph of the effect on a real house: a dense pile of white bars
+ * jammed against the door and the planter, vibrating. Four causes, all of them
+ * invisible in a still of the demo and all of them the same story — a force
+ * with nothing bounding it meeting a constraint that could only be satisfied
+ * by moving the fish somewhere else.
+ * ------------------------------------------------------------------ */
+
+console.log('\n— what made the shoal buzz —');
+
+{
+  /** The photographed facade: a door inside its frame, a bay, a planter. */
+  const wall = makeShape(box(0, 0, WORLD.w, WORLD.h), { id: 'wall' });
+  const openings = [
+    makeShape(box(380, 430, 360, 620), { id: 'doorOuter', tags: ['door'] }),
+    makeShape(box(455, 500, 210, 550), { id: 'door', tags: ['door'] }),
+    makeShape(box(1080, 470, 520, 430), { id: 'living', tags: ['window'] }),
+    makeShape(box(830, 560, 150, 170), { id: 'flowers', tags: ['window'] }),
+    makeShape(box(430, 30, 250, 220), { id: 'upstairs', tags: ['window'] }),
+  ];
+
+  let sentSolid = 0;
+  let unplaceable = 0;
+  let samples = 0;
+  let saturated = 0;
+  let hottest = 0;
+  const straight = [];
+  let mark = null;
+  let last = null;
+  let path = null;
+
+  const { state, p } = run('shoal', {
+    shape: wall,
+    seconds: 90,
+    others: openings,
+    params: { count: 42, size: 30, obstacles: 'window, door' },
+    watch(s, i) {
+      if (i < 600) return;                        // let it settle first
+      if (!isClear(wall, openings, s.targetX, s.targetY)) sentSolid++;
+      if (!mark) {
+        mark = s.fish.map((f) => ({ x: f.x, y: f.y }));
+        last = mark;
+        path = s.fish.map(() => 0);
+      }
+      for (let k = 0; k < s.fish.length; k++) {
+        const f = s.fish[k];
+        samples++;
+        hottest = Math.max(hottest, f.turn);
+        if (f.turn >= 7) saturated++;
+        if (f.wedged > 0) unplaceable++;
+        path[k] += Math.hypot(f.x - last[k].x, f.y - last[k].y);
+      }
+      last = s.fish.map((f) => ({ x: f.x, y: f.y }));
+      if (i % 12 === 0) {
+        for (let k = 0; k < s.fish.length; k++) {
+          // Net travel over a fifth of a second divided by the distance
+          // actually swum: one for a straight line, nothing at all for a fish
+          // buzzing on the spot.
+          if (path[k] > 1) straight.push(Math.hypot(s.fish[k].x - mark[k].x, s.fish[k].y - mark[k].y) / path[k]);
+        }
+        mark = s.fish.map((f) => ({ x: f.x, y: f.y }));
+        path = s.fish.map(() => 0);
+      }
+    },
+  });
+
+  const steps = 90 * 60 - 600;
+  /**
+   * The one that made the pile.
+   *
+   * The shoal is drawn towards a slowly wandering attractor, and nothing ever
+   * stopped that attractor being *inside* the bay window. On the facade in the
+   * photograph it was, half the time — so for half the evening every fish was
+   * being steered into the glass while the avoidance shoved it back out, and
+   * the two settled against each other rather than cancelling. Forty fish
+   * holding station on one sill, drawn additively, is the white smear.
+   */
+  ok('the shoal is never sent somewhere solid', sentSolid === 0,
+    `${(sentSolid / steps * 100).toFixed(0)}% of the show`);
+
+  ok('and no fish is left somewhere it cannot legally be',
+    unplaceable === 0, `${unplaceable} fish-steps`);
+
+  /**
+   * The one that made the bars.
+   *
+   * Nothing bounded how fast a fish could come round: the avoidance term is a
+   * couple of thousand pixels per second per second, which against a cruising
+   * speed is a fifth of a radian in one step, or twelve radians a second — and
+   * twelve was exactly the ceiling the flash scale saturated at. So every fish
+   * near an opening sat at maximum flank flash for as long as it was there,
+   * which is a row of white strip lights rather than a shoal.
+   */
+  ok('none of them turns faster than its body would let it',
+    hottest < 10, `hottest ${hottest.toFixed(1)} rad/s`);
+  ok('so almost none of them is ever pinned at full flash',
+    saturated / samples < 0.005, `${(saturated / samples * 100).toFixed(1)}% of fish-steps`);
+
+  const sorted = [...straight].sort((a, b) => a - b);
+  const worst = sorted[Math.floor(0.01 * (sorted.length - 1))];
+  ok('and none of them buzzes on the spot',
+    worst > 0.5, `worst percentile travels ${(worst * 100).toFixed(0)}% of the way it swam`);
+
+  const inOpening = state.fish.filter((f) =>
+    openings.some((o) => pointInPolygon({ x: f.x, y: f.y }, o.points)));
+  ok('after a minute and a half not one of them is inside anything',
+    inOpening.length === 0, `${inOpening.length} of ${p.count}`);
+}
+
+{
+  /**
+   * The fins sit on the fish.
+   *
+   * `rim` exists in the effect precisely because `body` is the *control* point
+   * of the curve that makes the flank and the silhouette peaks at about half
+   * of it — and the pectoral was hung at nine tenths of `body` anyway, which
+   * starts outside the animal and reaches most of a body-depth past it. On a
+   * deep-bodied fish that is a spike as long as the fish is tall, sticking out
+   * below it, and it is why a shoal at any size worth looking at read as a
+   * drift of leaves with thorns on.
+   *
+   * The stand-in context ignores `rotate`, so everything a fish draws is
+   * recorded in its own coordinates offset by where it is — which is what
+   * makes this measurable at all.
+   */
+  const wall = makeShape(box(0, 0, WORLD.w, WORLD.h), { id: 'wall' });
+  const { g, state, p } = run('shoal', {
+    shape: wall,
+    seconds: 4,
+    params: { count: 1, size: 200, species: 'angelfish', flash: 0 },
+  });
+
+  const fish = state.fish[0];
+  const len = p.size * fish.scale;
+  const rim = len * 0.78 * 0.5;         // half the drawn depth: see `rim` in the effect
+  const subs = new Map();
+  for (const seg of g.lines) {
+    for (const pt of [{ x: seg.x0, y: seg.y0 }, { x: seg.x1, y: seg.y1 }]) {
+      const reach = Math.abs(pt.y - fish.y);
+      subs.set(seg.sub, Math.max(subs.get(seg.sub) ?? 0, reach));
+    }
+  }
+  // Subpath 0 is the tail and 1 is the body outline, whose recorded vertices
+  // are quadratic control points rather than places the ink goes. Everything
+  // after them — dorsal, anal, pectoral, bars — is drawn where it is drawn.
+  const fins = [...subs].filter(([sub]) => sub >= 2).map(([, reach]) => reach);
+  ok('a fish has fins rather than spikes', fins.length > 0 && Math.max(...fins) < rim * 1.6,
+    `furthest ${(Math.max(...fins) / rim).toFixed(2)} rim from the midline, against a flank at 1.00`);
 }
 
 /* ------------------------------------------------------------------ *

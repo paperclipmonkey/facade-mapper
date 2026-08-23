@@ -128,7 +128,11 @@ volumetric.
 
 **Getting round things** — `collectObstacles`, `surfaceNormal`, `deflect`,
 `isClear`, `findFreeSpot`, `nearestSurface`. For anything that travels across
-the facade and should treat the windows as solid.
+the facade and should treat the windows as solid. `deflect(points, mover,
+radius, restitution, wantInside, { slide: true })` grazes along the surface
+instead of rebounding off it — right for anything that swims or walks, and the
+only version that cannot end up buzzing between two surfaces too close together
+for the mover to fit through.
 
 **Drawing** — `tracePoints`, `curveThrough`, `glow`, `verticalGradient`,
 `withClip`, `offscreen`. `curveThrough` is the one to reach for whenever you

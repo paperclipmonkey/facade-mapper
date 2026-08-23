@@ -49,9 +49,9 @@
  * through the bay window.
  */
 
-import { rgba, clamp, lerp, TAU, mixHex, makeRng, smoothstep } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, mixHex, makeRng, smoothstep, pointInPolygon } from '../../core/math.js';
 import { waterAbsorb } from '../color.js';
-import { collectObstacles, deflect, nearestSurface, isClear } from '../obstacles.js';
+import { collectObstacles, deflect, surfaceNormal, nearestSurface, isClear, findFreeSpot } from '../obstacles.js';
 import { glow, curveThrough } from '../lib.js';
 
 /* ------------------------------------------------------------------ *
@@ -656,11 +656,22 @@ function angleDelta(from, to) {
  * So `cruise` is not decoration either. A deep-bodied fish in the same shoal
  * as a sardine, swimming at the same speed, is the tell that these are three
  * paint jobs rather than three animals.
+ *
+ * `radius` is the other half of that same trade-off and the half that was
+ * missing: how tight a circle the body can hold, in body lengths. Without it
+ * the silhouettes claimed a difference the swimming did not have, and worse,
+ * nothing bounded how fast a fish could come round at all — the avoidance term
+ * is a couple of thousand pixels per second per second, which against a
+ * cruising speed is a fifth of a radian in a single step, or twelve radians a
+ * second. No animal does that, and a shoal working past a bay window was
+ * therefore full of fish snapping instantaneously through ninety degrees, which
+ * is both the vibration and, since the flash is keyed to turning, the reason
+ * every one of them was lit up like a strip light while it happened.
  */
 const SPECIES = {
-  sardine: { depth: 0.28, fork: 1, dorsal: 0.5, cruise: 1, bars: 0 },
-  reef: { depth: 0.46, fork: 0.5, dorsal: 0.8, cruise: 0.82, bars: 0.55 },
-  angelfish: { depth: 0.78, fork: 0.05, dorsal: 1.1, cruise: 0.62, bars: 0.9 },
+  sardine: { depth: 0.28, fork: 1, dorsal: 0.5, cruise: 1, bars: 0, radius: 2.2 },
+  reef: { depth: 0.46, fork: 0.5, dorsal: 0.8, cruise: 0.82, bars: 0.55, radius: 1.3 },
+  angelfish: { depth: 0.78, fork: 0.05, dorsal: 1.1, cruise: 0.62, bars: 0.9, radius: 0.8 },
 };
 const SPECIES_NAMES = Object.keys(SPECIES);
 
@@ -670,6 +681,16 @@ function speciesFor(choice, tint) {
   return SPECIES[SPECIES_NAMES[Math.min(SPECIES_NAMES.length - 1,
     Math.floor(tint * SPECIES_NAMES.length))]];
 }
+
+/**
+ * Fish graze the facade rather than bouncing off it. See `slide` in
+ * effects/obstacles.js — one object, hoisted, because it is passed forty-odd
+ * times a step and a literal here would allocate on every one of them.
+ */
+const GRAZE = { slide: true };
+
+/** Scratch for the look-ahead point, so a per-fish probe allocates nothing. */
+const PROBE = { x: 0, y: 0 };
 
 const shoal = {
   id: 'shoal',
@@ -733,6 +754,8 @@ const shoal = {
         /** A little size and speed variation, or it is a school of clones. */
         scale: 0.75 + rng() * 0.5,
         tint: rng(),
+        /** Consecutive steps with nowhere legal to be. See the escape below. */
+        wedged: 0,
       });
     }
     if (state.fish.length > target) state.fish.length = target;
@@ -747,8 +770,43 @@ const shoal = {
      * every tab agrees about where they went without anything being broadcast.
      */
     const roam = Math.max(0.001, p.wander);
-    state.targetX = container.bbox.x + container.bbox.w * (0.5 + 0.42 * noise.noise2(t * 0.05 * roam, 11.3));
-    state.targetY = container.bbox.y + container.bbox.h * (0.5 + 0.38 * noise.noise2(4.7, t * 0.045 * roam));
+    let roamX = container.bbox.x + container.bbox.w * (0.5 + 0.42 * noise.noise2(t * 0.05 * roam, 11.3));
+    let roamY = container.bbox.y + container.bbox.h * (0.5 + 0.38 * noise.noise2(4.7, t * 0.045 * roam));
+
+    /**
+     * And it is not allowed to be inside the bay window.
+     *
+     * Nothing stopped it being, and for the third of the time it was the whole
+     * shoal was being steered *into* the glass while the avoidance below shoved
+     * it back out. The two settle against each other rather than cancelling:
+     * every fish ends up pressed on the sill, holding station, buzzing, and
+     * since they are drawn additively the pile reads as one white smear with
+     * fins. It is the standoff that looks broken, not either force.
+     *
+     * Sliding it out to the nearest edge keeps the tour going — the shoal
+     * rounds the window instead of parking on it — and costs one surface query
+     * a step rather than one per fish.
+     */
+    const span = Math.hypot(container.bbox.w, container.bbox.h);
+    // Twice, because a house has shapes inside shapes — a door in its frame —
+    // and stepping out of the inner one puts the target in the outer.
+    for (let tries = 0; tries < 3 && !isClear(container, obstacles, roamX, roamY); tries++) {
+      const surf = nearestSurface(obstacles, roamX, roamY, span);
+      if (!surf) break;
+      // `n` points from the surface towards the target, so it is the way out
+      // when the target is outside and the way in when it has crossed.
+      const out = surf.inside ? -1 : 1;
+      roamX = surf.px + surf.nx * out * size * 3;
+      roamY = surf.py + surf.ny * out * size * 3;
+    }
+    // And if there is nowhere near it to move it to — a target deep inside a
+    // nest of overlapping shapes — the shoal carries on towards wherever it
+    // was already going until the wander takes the destination somewhere it
+    // can actually be. Never towards the middle of a window.
+    if (isClear(container, obstacles, roamX, roamY) || !state.targetX) {
+      state.targetX = roamX;
+      state.targetY = roamY;
+    }
 
     /**
      * Being startled, which is what a shoal is *for*.
@@ -853,6 +911,30 @@ const shoal = {
       const speed = Math.hypot(f.vx, f.vy) || 1;
       const probeX = f.x + (f.vx / speed) * look;
       const probeY = f.y + (f.vy / speed) * look;
+
+      /**
+       * The edge of the wall is a wall too.
+       *
+       * Only the obstacles were ever probed, so a fish saw the bay window
+       * coming and never saw the end of the building: it arrived at the
+       * boundary at full speed and was put back by the hard constraint at the
+       * foot of this loop. That is not a fish noticing anything — it is a
+       * ricochet, or, now that a fish grazes rather than bounces, a slide that
+       * carries it along the edge for as long as the shoal is heading that way.
+       * Either is a row of fish pressed against the top of the frame.
+       */
+      PROBE.x = probeX;
+      PROBE.y = probeY;
+      const edge = surfaceNormal(container.points, probeX, probeY);
+      if (edge.dist < look) {
+        // `n` points from the edge towards the probe: inwards while the probe
+        // is still over the wall, outwards once it has left.
+        const inward = pointInPolygon(PROBE, container.points) ? 1 : -1;
+        const urgency = (1 - edge.dist / look) * 2600;
+        f.ax += edge.nx * inward * urgency;
+        f.ay += edge.ny * inward * urgency;
+      }
+
       const surf = nearestSurface(obstacles, probeX, probeY, look);
       if (surf) {
         const urgency = (1 - surf.dist / look) * 2600;
@@ -872,15 +954,15 @@ const shoal = {
         f.ay += surf.ny * sign * urgency + ty * urgency * 0.8;
       }
 
-      const before = Math.atan2(f.vy, f.vx);
+      const heading = Math.atan2(f.vy, f.vx);
       f.vx += f.ax * dt;
       f.vy += f.ay * dt;
 
       // A deep-bodied fish holding station beside a sardine at the same speed
       // is the tell that these are three paint jobs rather than three animals.
-      const cruise = speciesFor(p.species, f.tint).cruise;
-      const top = maxSpeed * cruise;
-      const floor = minSpeed * cruise;
+      const kind = speciesFor(p.species, f.tint);
+      const top = maxSpeed * kind.cruise;
+      const floor = minSpeed * kind.cruise;
       const sp = Math.hypot(f.vx, f.vy);
       if (sp > top) {
         f.vx *= top / sp;
@@ -890,24 +972,35 @@ const shoal = {
         f.vy *= floor / sp;
       }
 
-      f.x += f.vx * dt;
-      f.y += f.vy * dt;
-
-      // Hard constraints last, so nothing this step can leave a fish inside a
-      // window: the accelerations above are a suggestion, these are the wall.
-      deflect(container.points, f, size * 0.35, 0.25, true);
-      for (const o of obstacles) {
-        const { bbox } = o;
-        if (
-          f.x < bbox.x - size
-          || f.x > bbox.x + bbox.w + size
-          || f.y < bbox.y - size
-          || f.y > bbox.y + bbox.h + size
-        ) continue;
-        deflect(o.points, f, size * 0.35, 0.25, false);
+      /**
+       * And it cannot come round faster than its body will let it.
+       *
+       * Everything above is a force, and a force applied to a light thing
+       * turns it arbitrarily fast: the avoidance term alone swung a fish a
+       * fifth of a radian in one step. Nothing said it could not, so near a
+       * sill a fish would flip end for end frame after frame — the vibration
+       * in the photograph — and because a mirror flank flashes when it banks,
+       * every fish doing it sat at maximum flash the whole time.
+       *
+       * A turning circle is the one constraint that fixes both, and it is the
+       * one the body plans already imply: radius equals speed over angular
+       * rate, so a fish holding a circle `radius` body lengths across can
+       * manage `v / (radius · length)` radians a second and no more. The
+       * sardine that turns like a bus now turns like a bus. Faster fish turn
+       * *wider*, which is why a startled shoal bursts outwards in an arc
+       * instead of scattering like billiard balls.
+       */
+      const held = Math.hypot(f.vx, f.vy);
+      if (held > 1e-6) {
+        const most = (held / Math.max(1, size * f.scale * kind.radius)) * dt;
+        const swing = angleDelta(heading, Math.atan2(f.vy, f.vx));
+        if (Math.abs(swing) > most) {
+          const capped = heading + Math.sign(swing) * most;
+          f.vx = Math.cos(capped) * held;
+          f.vy = Math.sin(capped) * held;
+        }
       }
 
-      const after = Math.atan2(f.vy, f.vx);
       /**
        * The flank flash, and why it is keyed to turning rather than to speed.
        *
@@ -918,11 +1011,68 @@ const shoal = {
        * silver flicker that runs through a shoal as it changes direction, and
        * it is the single most recognisable thing a shoal does.
        *
+       * Measured here, over the *steering* — before the hard constraints below
+       * get a say. A wall does not bank a fish, it stops one, and reading the
+       * heading after a deflect calls a rebound a turn: half a radian in a
+       * sixtieth of a second, which is thirty radians per second against a
+       * scale that saturates at seven. So every fish held against a sill was
+       * pinned at maximum flash for as long as it stayed there — which is why
+       * the shoal in the photograph is a row of white bars rather than fish.
+       *
        * Smoothed, because the flash outlasts the instant of the turn — it is a
        * broad specular lobe, not a delta function.
        */
-      const rate = Math.abs(angleDelta(before, after)) / Math.max(1e-4, dt);
+      const rate = Math.abs(angleDelta(heading, Math.atan2(f.vy, f.vx))) / Math.max(1e-4, dt);
       f.turn = lerp(f.turn, Math.min(12, rate), 0.25);
+
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+
+      // Hard constraints last, so nothing this step can leave a fish inside a
+      // window: the accelerations above are a suggestion, these are the wall.
+      // Grazing rather than bouncing, because a fish that meets a sill swims
+      // along it — see `slide` in effects/obstacles.js for why the alternative
+      // buzzes.
+      deflect(container.points, f, size * 0.35, 0.25, true, GRAZE);
+      for (const o of obstacles) {
+        const { bbox } = o;
+        if (
+          f.x < bbox.x - size
+          || f.x > bbox.x + bbox.w + size
+          || f.y < bbox.y - size
+          || f.y > bbox.y + bbox.h + size
+        ) continue;
+        deflect(o.points, f, size * 0.35, 0.25, false, GRAZE);
+      }
+
+      /**
+       * And a way out for one that cannot be put anywhere legal at all.
+       *
+       * The constraints are applied one after another and each is satisfied on
+       * its own, so a fish in a space narrower than two of them — the ring
+       * between a door and its frame, the gap where a window meets the edge of
+       * the wall — is placed by the last one to run and is illegal again by the
+       * time the first runs next step. Sliding stops it *arriving* there, but a
+       * shape can be re-tagged or a fish startled into one, and there is no
+       * position that satisfies everything to converge on.
+       *
+       * Half a second of being unplaceable is proof rather than bad luck, so it
+       * is moved somewhere it fits and given a fresh heading. Once every few
+       * minutes at worst, on one fish out of forty, in a shoal that is already
+       * moving.
+       */
+      if (isClear(container, obstacles, f.x, f.y)) {
+        f.wedged = 0;
+      } else if (++f.wedged > 30) {
+        const spot = findFreeSpot(container, obstacles, rng);
+        f.x = spot.x;
+        f.y = spot.y;
+        const away = rng() * TAU;
+        f.vx = Math.cos(away) * p.speed;
+        f.vy = Math.sin(away) * p.speed;
+        f.turn = 0;
+        f.wedged = 0;
+      }
       // Beat phase advances with distance covered, so a fish that speeds up
       // beats its tail faster rather than swimming with the same stroke.
       f.beat += (Math.hypot(f.vx, f.vy) / Math.max(1, size)) * dt * 9;
@@ -957,7 +1107,20 @@ const shoal = {
 
       const back = waterAbsorb(mixHex(p.color, p.belly, f.tint * 0.25), metres, p.turbidity);
       const flank = waterAbsorb(p.belly, metres, p.turbidity);
-      const shine = clamp((f.turn / 7) * p.flash, 0, 1);
+      /**
+       * How much of the flank is pointed at you, and it has a floor under it.
+       *
+       * Straight and level is not a flash: an ordinary correction while
+       * cruising among forty others is a couple of radians a second and should
+       * show nothing at all, or every fish shines all the time and the shoal is
+       * a field of white lozenges. What earns one is a *bank* — the hard turn
+       * into a startle, the roll round the corner of a sill — so the response
+       * starts above the cruising rate and goes as the square of it, which
+       * makes the flash a flicker running through the shoal rather than a state
+       * each fish is in.
+       */
+      const bank = clamp((f.turn - 0.5) / 5, 0, 1);
+      const shine = clamp(bank * bank * p.flash, 0, 1);
 
       g.save();
       g.translate(f.x, f.y);
@@ -990,14 +1153,25 @@ const shoal = {
       // Body: nose to peduncle, curved along the beat.
       const grad = g.createLinearGradient(0, -body, 0, body);
       grad.addColorStop(0, rgba(back, 0.9));
-      grad.addColorStop(0.45, rgba(flank, 0.55 + shine * 0.45));
+      grad.addColorStop(0.45, rgba(flank, 0.55 + shine * 0.35));
       grad.addColorStop(1, rgba(back, 0.9));
       g.fillStyle = grad;
+      /**
+       * The shoulder goes forward of the middle.
+       *
+       * Both control points sat at x = 0, which puts the deepest part of the
+       * fish exactly half way along it and makes the head and the tail taper
+       * identically — a leaf, and it read as one. An actual fish carries its
+       * depth about a third back from the nose and then tapers a long way to
+       * the peduncle, so moving the controls forward buys a fuller head and a
+       * longer run to the tail from the same four path commands.
+       */
+      const shoulder = half * 0.22;
       g.beginPath();
       g.moveTo(half, 0);
-      g.quadraticCurveTo(0, -body * (1 + bend * 0.4), -half * 0.6, -body * 0.25);
+      g.quadraticCurveTo(shoulder, -body * (1 + bend * 0.4), -half * 0.6, -body * 0.25);
       g.lineTo(-half * 0.6, body * 0.25);
-      g.quadraticCurveTo(0, body * (1 - bend * 0.4), half, 0);
+      g.quadraticCurveTo(shoulder, body * (1 - bend * 0.4), half, 0);
       g.closePath();
       g.fill();
 
@@ -1024,10 +1198,22 @@ const shoal = {
         g.closePath();
         g.fill();
       }
+      /**
+       * The pectoral, which was in the water beside the fish rather than on it.
+       *
+       * `rim`, not `body` — the exact mistake `rim` is defined three dozen
+       * lines above to prevent. `body` is the *control point* of the curve that
+       * makes the flank and the silhouette peaks at about half of it, so a fin
+       * hung at nine tenths of `body` starts outside the animal and reaches
+       * nearly a whole body-depth past it. On a deep-bodied fish that is a
+       * spike as long as the fish is tall, sticking out below it at an angle,
+       * and it is why a shoal at any size worth looking at read as a drift of
+       * leaves with thorns on rather than as fish.
+       */
       g.beginPath();
-      g.moveTo(half * 0.05, body * 0.3);
-      g.lineTo(-half * 0.3, body * (0.9 - bend * 0.6));
-      g.lineTo(-half * 0.15, body * 0.2);
+      g.moveTo(half * 0.05, rim * 0.5);
+      g.lineTo(-half * 0.3, rim * (1.15 - bend * 0.3));
+      g.lineTo(-half * 0.15, rim * 0.35);
       g.closePath();
       g.fill();
 
@@ -1035,8 +1221,12 @@ const shoal = {
       // brightening. A mirror gives you an image of the source, and the source
       // here is a band of sky seen through a rough surface.
       if (shine > 0.02) {
-        g.strokeStyle = rgba('#ffffff', shine * 0.85);
-        g.lineWidth = Math.max(0.8, body * 0.3);
+        g.strokeStyle = rgba('#ffffff', shine * 0.7);
+        // A line down the flank, not a bar through the fish. At three tenths of
+        // the body — and round-capped — the highlight was wider than the gap
+        // between the dorsal and the belly and longer than the animal, so a
+        // flashing fish was a glowing capsule with fins attached to it.
+        g.lineWidth = Math.max(0.8, body * 0.16);
         g.lineCap = 'round';
         g.beginPath();
         g.moveTo(half * 0.55, -body * 0.05);

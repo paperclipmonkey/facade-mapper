@@ -119,7 +119,7 @@ export function surfaceNormal(points, x, y) {
  *
  * Mutates `m` ({ x, y, vx, vy }) and returns true if it touched.
  */
-export function deflect(points, m, radius, restitution, wantInside) {
+export function deflect(points, m, radius, restitution, wantInside, options) {
   const inside = pointInPolygon(m, points);
   if (inside === wantInside) {
     // On the right side already — only a near miss needs handling, and only
@@ -127,13 +127,13 @@ export function deflect(points, m, radius, restitution, wantInside) {
     if (radius <= 0) return false;
     const s = surfaceNormal(points, m.x, m.y);
     if (s.dist >= radius) return false;
-    return resolve(m, s, inside, radius, restitution, wantInside);
+    return resolve(m, s, inside, radius, restitution, wantInside, options);
   }
   const s = surfaceNormal(points, m.x, m.y);
-  return resolve(m, s, inside, radius, restitution, wantInside);
+  return resolve(m, s, inside, radius, restitution, wantInside, options);
 }
 
-function resolve(m, s, inside, radius, restitution, wantInside) {
+function resolve(m, s, inside, radius, restitution, wantInside, { slide = false } = {}) {
   // `s.n` points from the surface towards the mover. Where the mover *should*
   // be is the same direction when it is already on the right side, and the
   // opposite when it has strayed through.
@@ -146,8 +146,29 @@ function resolve(m, s, inside, radius, restitution, wantInside) {
 
   const along = m.vx * nx + m.vy * ny;
   if (along < 0) {
-    m.vx = (m.vx - 2 * along * nx) * restitution;
-    m.vy = (m.vy - 2 * along * ny) * restitution;
+    if (slide) {
+      /**
+       * Take off the part that is driving into the surface and keep the rest,
+       * which is the velocity *along* it.
+       *
+       * The difference between a thing that bounces and a thing that swims,
+       * and it decides whether a mover can get stuck. A mirrored bounce sends
+       * it back the way it came at whatever fraction of its speed the
+       * restitution allows — fine against one wall, and in a corner, a gap
+       * between two windows, or the ring between a door and its frame it is a
+       * machine for producing oscillation: hit A, rebound into B, rebound into
+       * A, once per step, for ever. Worse when the mover has a minimum speed,
+       * because the near-stop after each bounce is then wound straight back up
+       * in whatever direction the last rebound faced. Sliding cannot do that:
+       * the normal component is removed rather than reversed, so a mover meets
+       * a surface once and leaves along it.
+       */
+      m.vx -= along * nx;
+      m.vy -= along * ny;
+    } else {
+      m.vx = (m.vx - 2 * along * nx) * restitution;
+      m.vy = (m.vy - 2 * along * ny) * restitution;
+    }
   }
   return true;
 }

@@ -645,6 +645,26 @@ a second. That silver flicker running through a shoal as it changes direction is
 the most recognisable thing a shoal does, and it comes out of one term keyed to
 the turn rate.
 
+**A fish has a turning circle**, and it is the other half of the same idea.
+Everything steering a shoal — cohesion, separation, the swerve away from a
+sill — is a *force*, and a force applied to something light turns it as fast as
+you like: the avoidance term alone used to swing a fish a fifth of a radian in
+one frame, which is no animal at all. Radius is speed over angular rate, so a
+fish holding a circle a couple of body lengths across can manage `v / (r · L)`
+radians a second and no more. That one constraint is what makes a startled
+shoal burst outward in an arc instead of scattering like billiard balls, and it
+is also what stopped every fish near a window sitting at maximum flank flash:
+before it, they were turning fast enough to saturate the flash the whole time
+they were there.
+
+**They graze the house rather than bouncing off it.** A fish that meets a sill
+swims along it. That is not decoration: a mirrored bounce sends a mover back
+the way it came, and between two surfaces closer together than the mover is
+wide — the ring between a door and its frame, the gap where a window meets the
+edge of the wall — it will cross between them for ever, once a frame, going
+nowhere. Removing the part of the velocity that heads into the surface, rather
+than reversing it, cannot do that.
+
 **A fish's shape is a choice, and Shoal's Body plan is that choice.** Fast open
 water wants a fusiform body and a deeply forked tail — a long thin foil that
 shed little energy sideways, superb over distance and hopeless at turning. A

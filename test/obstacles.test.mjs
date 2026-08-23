@@ -136,6 +136,60 @@ console.log('\n— obstacles —');
 }
 
 /* ------------------------------------------------------------------ *
+ * Grazing rather than bouncing
+ *
+ * A ball and a fish want opposite things from the same surface, and the
+ * difference decides whether either can get stuck. A mirrored bounce sends the
+ * mover back the way it came; put two of them a little way apart and it will
+ * cross between them for ever, once per step, going nowhere. That is fine for
+ * a ball, which is supposed to rattle around, and it is the whole of the
+ * "trapped and vibrating" a shoal did in the ring between a door and its frame
+ * — made worse by a minimum swimming speed, which winds the near-stop after
+ * each bounce straight back up in whatever direction the rebound faced.
+ * ------------------------------------------------------------------ */
+
+console.log('\n— grazing —');
+{
+  const room = rect(0, 0, 1000, 500);
+
+  // Coming at the right-hand wall at forty-five degrees.
+  const grazed = { x: 1010, y: 250, vx: 200, vy: 200 };
+  deflect(room, grazed, 10, 0.25, true, { slide: true });
+  ok('a slide drops the part heading into the surface', near(grazed.vx, 0), `vx ${grazed.vx}`);
+  ok('  and keeps the part running along it', near(grazed.vy, 200), `vy ${grazed.vy}`);
+  ok('  putting the mover back inside all the same', near(grazed.x, 990), `x ${grazed.x}`);
+
+  const bounced = { x: 1010, y: 250, vx: 200, vy: 200 };
+  deflect(room, bounced, 10, 0.25, true);
+  ok('where a bounce sends it back the way it came', bounced.vx < 0, `vx ${bounced.vx}`);
+
+  /**
+   * And the difference that matters: a corridor narrower than the mover's own
+   * radius, which is what a fish finds between two windows or inside a door
+   * frame. There is no position that satisfies both walls, so the two
+   * constraints hand the mover back and forth every step.
+   */
+  const corridor = [rect(0, 0, 1000, 240), rect(0, 260, 1000, 240)];
+  const travel = (options) => {
+    const m = { x: 100, y: 250, vx: 300, vy: 40 };
+    const startX = m.x;
+    for (let i = 0; i < 600; i++) {
+      m.x += m.vx / 60;
+      m.y += m.vy / 60;
+      for (const wall of corridor) deflect(wall, m, 20, 0.25, false, options);
+    }
+    return m.x - startX;
+  };
+
+  const bouncing = travel(undefined);
+  const sliding = travel({ slide: true });
+  ok('a bouncer in a gap it does not fit through goes nowhere',
+    Math.abs(bouncing) < 200, `${bouncing.toFixed(0)}px in ten seconds`);
+  ok('and a grazer runs straight down it',
+    sliding > 2500, `${sliding.toFixed(0)}px in ten seconds`);
+}
+
+/* ------------------------------------------------------------------ *
  * Free space
  * ------------------------------------------------------------------ */
 
