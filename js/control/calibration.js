@@ -300,6 +300,14 @@ export async function runCalibration({
   // One robustness pass: drop the worst correspondence and re-solve if that
   // clearly helps. A single bad detection (a reflection, a passing car) is the
   // common failure, and it's cheap to shrug off.
+  /**
+   * Which detection the robustness pass threw out, if it threw one out.
+   *
+   * Kept, rather than only counted, because the mesh below is built from the
+   * detections and has to be built from the same ones the matrix was. See where
+   * it is used.
+   */
+  let discarded = null;
   if (found.length > 5 && quality.maxNorm > 0.012) {
     const errors = src.map((s, i) => {
       const p = applyH(H, s.x, s.y);
@@ -314,6 +322,7 @@ export async function runCalibration({
       if (retryQuality.meanNorm < quality.meanNorm * 0.7) {
         H = retry;
         quality = { ...retryQuality, discarded: 1 };
+        discarded = found[worst];
       }
     }
   }
@@ -327,8 +336,20 @@ export async function runCalibration({
   // The region is the slice of *world* space this projector reaches, so it has
   // to be computed from the matrix the renderer will actually use.
   const effective = rectifyH ? mat3Mul(H, rectifyH) : H;
+  /**
+   * The mesh is built from the dots the matrix was solved from, and only those.
+   *
+   * A dot the robustness pass threw out is one the solve decided was a
+   * reflection or a passing car. Its residual against the matrix that no longer
+   * includes it is enormous — that is *why* it was thrown out — and the mesh is
+   * exactly a map of residuals, so leaving it in did two things at once: it set
+   * the "this wall is not flat" flag on a wall that is perfectly flat, and it
+   * put a local bulge into the correction at the one place on the building
+   * where the measurement was known to be wrong.
+   */
+  const usable = discarded ? detections.filter((d) => d !== discarded) : detections;
   const mesh = axis.length > 3
-    ? residualMesh(detections, H, axis, computeRegion(effective), rectifyH)
+    ? residualMesh(usable, H, axis, computeRegion(effective), rectifyH)
     : null;
 
   return {

@@ -161,6 +161,8 @@ node test/geometry.test.mjs    # homography, marker detection, region and mesh m
 node test/runtime.test.mjs     # motion, gating, scheduling, grading, the show clock, feeds
 node test/triggers.test.mjs    # holds, restores, timers, hotkeys and the HTTP hooks
 node test/migrate.test.mjs     # every project ever saved, arriving at a newer copy
+node test/bus.test.mjs         # cross-tab messages, the mirror, and who is alive
+node test/picker.test.mjs      # the effect gallery: cards, search, and letting go
 node test/collide.test.mjs     # heightfields, landing, slumping, shedding
 node test/obstacles.test.mjs   # facade collision, automatic edge blending
 node test/figures.test.mjs     # the drawn figures
@@ -200,6 +202,19 @@ each one stands for a project somebody actually has.
 least margin for error in the app — everything it does happens once, in the
 dark, in front of people, and every failure mode is silent. It runs on a clock
 the test moves by hand, so nothing sleeps.
+
+[`bus.test.mjs`](../test/bus.test.mjs) runs against a real `BroadcastChannel`,
+which Node has. The corner worth knowing is the last one it checks: a message
+posted *before* the link's mirror is installed goes round this machine and
+stops. A page that introduces itself during boot does so a few hundred
+milliseconds before its socket opens, so on a second machine that introduction
+is never heard — which is why the remote asks again when its digest goes stale
+and why the projector keeps asking until a project arrives.
+
+[`picker.test.mjs`](../test/picker.test.mjs) drives the effect gallery against a
+stand-in DOM, counting what the IntersectionObserver is holding. Observers keep
+their targets alive, the card set is rebuilt on every keystroke in the search
+box, and nothing about the resulting leak is visible from the app.
 
 [`migrate.test.mjs`](../test/migrate.test.mjs) holds the narrowest gate in the
 codebase: nothing reaches the renderer without passing through `migrateProject`,

@@ -142,9 +142,23 @@ async function calibrateAgainst(Hgt, opts = {}) {
         const c = applyH(inv, s, t);
         if (!c) continue;
         if (opts.hideMarkers?.includes(frame.index)) continue;
+        /**
+         * One dot seen somewhere it is not.
+         *
+         * A reflection in a window, a passing car, a streetlight coming on
+         * between two captures: the detector finds the brightest thing in the
+         * frame and it is not the marker. This is the failure the solve's
+         * robustness pass exists for.
+         */
+        let cx = c.x;
+        let cy = c.y;
+        if (opts.moveMarker?.index === frame.index) {
+          cx += opts.moveMarker.dx;
+          cy += opts.moveMarker.dy;
+        }
         // Outside the camera's field of view: nothing lands on the sensor.
-        if (c.x < 0 || c.x > 1 || c.y < 0 || c.y > 1) continue;
-        const bx = c.x * W, by = c.y * Hh, r = 8;
+        if (cx < 0 || cx > 1 || cy < 0 || cy > 1) continue;
+        const bx = cx * W, by = cy * Hh, r = 8;
         for (let y = Math.max(0, by - 30); y < Math.min(Hh, by + 30); y++) {
           for (let x = Math.max(0, bx - 30); x < Math.min(W, bx + 30); x++) {
             const d = Math.hypot(x - bx, y - by);
@@ -174,6 +188,49 @@ async function calibrateAgainst(Hgt, opts = {}) {
   ok('calibration reports a quality rating', ['excellent', 'good', 'usable'].includes(result.quality.rating),
      `rating "${result.quality.rating}", mean ${result.quality.meanPx.toFixed(2)} px`);
   ok('calibration found all nine markers', result.markers.filter((m) => m.camera).length === 9);
+}
+
+/* ---- 3b. One dot the solve threw away ---- */
+{
+  /**
+   * A flat wall, one bad detection, and a correction mesh that must not
+   * contain it.
+   *
+   * The solve already handles the dot itself: it drops the worst
+   * correspondence and re-solves, which is why `discarded` comes back as 1 and
+   * the matrix is still good. The mesh is the part that used to get it wrong.
+   * It is built from the residuals — how far each dot fell from where the
+   * matrix says it should have — and it was being built from *every* dot,
+   * including the one just judged to be a reflection. Its residual against a
+   * matrix that no longer includes it is enormous by construction, so it did
+   * two things at once: it declared a perfectly flat wall to be not flat, and
+   * it put a local bulge into the correction at the one place on the building
+   * where the measurement was known to be wrong. Measured, that bulge was
+   * about forty-seven pixels of a 1920-wide output.
+   *
+   * A four-by-four grid, because the mesh only exists past three.
+   */
+  const Hflat = [1.06, 0.05, -0.02, -0.03, 1.02, 0.01, 0.05, -0.03, 1];
+
+  const clean = await calibrateAgainst(Hflat, { gridSize: 4 });
+  const cleanMax = clean.mesh ? Math.max(...clean.mesh.offsets.map(Math.abs)) : 0;
+  ok('a flat wall corrects by no more than the detector is noisy', cleanMax < 0.003,
+     `${(cleanMax * 1920).toFixed(1)} px of a 1920-wide output`);
+
+  const withReflection = await calibrateAgainst(Hflat, {
+    gridSize: 4,
+    moveMarker: { index: 5, dx: 0.05, dy: 0.04 },
+  });
+  ok('a dot seen in the wrong place is thrown out of the solve',
+     withReflection.quality.discarded === 1);
+  ok('and the matrix is still right', withReflection.quality.maxPx < 6,
+     `${withReflection.quality.maxPx.toFixed(2)} px`);
+  ok('and it is thrown out of the correction mesh as well, so a flat wall stays flat',
+     !withReflection.mesh
+       || Math.max(...withReflection.mesh.offsets.map(Math.abs)) < 0.003,
+     withReflection.mesh
+       ? `${(Math.max(...withReflection.mesh.offsets.map(Math.abs)) * 1920).toFixed(1)} px`
+       : 'no mesh');
 }
 
 /* ---- 4. Failure handling ---- */

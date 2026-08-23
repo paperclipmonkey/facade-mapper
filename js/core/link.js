@@ -42,6 +42,47 @@ const BACKLOG_LIMIT = 256 * 1024;
 const SAMPLE_WINDOW = 8;
 
 /**
+ * The pings this device is still waiting for an answer to.
+ *
+ * A pong is only a measurement of *our* round trip if it is answering a ping we
+ * actually sent, and matching them up is what an NTP client does for the same
+ * reason: the reply carries the server's clock, and adopting a number that came
+ * from somewhere else moves show time on this device — which is a subtraction
+ * from that clock — while every other device carries on where it was.
+ *
+ * The server reserves the `link/` namespace so a peer cannot put a pong on the
+ * wire in the first place; this is the half that still holds against an older
+ * server, and it drops a duplicated or replayed reply as well, which would
+ * otherwise enter the estimate twice as the fastest round trip it has seen.
+ *
+ * Bounded, and by dropping the oldest: an unanswered ping is a packet that was
+ * lost, and after a few more have been sent it is no longer worth an entry.
+ */
+export function createPingLedger(limit = 16) {
+  const outstanding = new Set();
+  return {
+    /** Record a ping about to go out. */
+    sent(t0) {
+      outstanding.add(t0);
+      // Insertion order, so the first key is the oldest.
+      while (outstanding.size > limit) {
+        for (const oldest of outstanding) {
+          outstanding.delete(oldest);
+          break;
+        }
+      }
+    },
+    /** True once, for the reply to a ping we sent. */
+    accept(t0) {
+      return outstanding.delete(t0);
+    },
+    get size() {
+      return outstanding.size;
+    },
+  };
+}
+
+/**
  * This browser profile's identity on the link.
  *
  * Not a machine id and not trying to be. Its one job is letting the server skip
@@ -96,6 +137,7 @@ export function createLink(bus, { role = 'unknown', subscribe = null, label = ''
   let pingTimer = null;
   let burstTimer = null;
   let samples = [];
+  let pings = createPingLedger();
 
   const state = {
     /** 'off' | 'checking' | 'unavailable' | 'connecting' | 'linked' */
@@ -137,11 +179,17 @@ export function createLink(bus, { role = 'unknown', subscribe = null, label = ''
 
   /* --- Clock ------------------------------------------------------- */
 
-  const ping = () => send({ type: 'link/ping', t0: Date.now() });
+  const ping = () => {
+    const t0 = Date.now();
+    if (!send({ type: 'link/ping', t0 })) return;
+    pings.sent(t0);
+  };
 
   const onPong = (msg) => {
     const t1 = Date.now();
     if (!Number.isFinite(msg.t0) || !Number.isFinite(msg.ts)) return;
+    // Only the answer to a ping this tab actually sent. See `createPingLedger`.
+    if (!pings.accept(msg.t0)) return;
     samples.push({ t0: msg.t0, ts: msg.ts, t1 });
     if (samples.length > SAMPLE_WINDOW) samples.shift();
     const estimate = estimateOffset(samples);
@@ -159,6 +207,7 @@ export function createLink(bus, { role = 'unknown', subscribe = null, label = ''
    */
   const startSync = () => {
     samples = [];
+    pings = createPingLedger();
     let burst = 0;
     stopSync();
     ping();

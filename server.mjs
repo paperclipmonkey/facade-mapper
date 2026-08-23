@@ -486,6 +486,29 @@ export function createLinkServer({ root = ROOT, key = null, name = os.hostname()
       return;
     }
 
+    /**
+     * `link/` is the server's own namespace, and nothing else may put a message
+     * into it.
+     *
+     * Everything above this line is a question the server answers itself, and
+     * every reply it sends carries a `link/` type. A client's message with one
+     * of those types is therefore either a bug or a lie, and relaying it hands
+     * one device the ability to speak as the server to every other:
+     *
+     *  - `link/pong` is fed straight into the clock estimator, which believes
+     *    the timestamp in it. One frame and every other device's show clock
+     *    steps sideways — and show time is a subtraction from that clock, so
+     *    two projectors on one wall paint different frames of the animation.
+     *    That is the one this actually protects.
+     *  - `link/peers` replaces the device list; `link/welcome` replaces a
+     *    device's idea of its own connection id, which is what it filters
+     *    itself out of that list by.
+     *
+     * Dropped rather than answered: a relay has no opinion about a message it
+     * will not forward, and this is the same wifi anybody's phone is on.
+     */
+    if (msg.type.startsWith('link/')) return;
+
     relay(client, msg, text);
   }
 

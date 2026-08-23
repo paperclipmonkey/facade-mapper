@@ -43,7 +43,31 @@ const clock = createClock();
  * all: the project, the transport and, crucially, the clock all arrive over it.
  * Opened from GitHub Pages it finds nothing and stays quiet.
  */
-const link = createLink(bus, { role: 'projector', label: 'Projector' });
+const link = createLink(bus, {
+  role: 'projector',
+  label: 'Projector',
+  /**
+   * Say hello again the moment the socket comes up.
+   *
+   * Everything this tab posts before that moment goes to BroadcastChannel and
+   * nowhere else — the link mirrors *posts*, and it has nothing to mirror them
+   * onto until it is connected. Boot is well inside that window: the socket
+   * opens a few hundred milliseconds after the page does, and the announcement
+   * that asks the control tab to resend the show has already been and gone.
+   *
+   * On the control machine that costs nothing, because BroadcastChannel got
+   * there first. On a second laptop it was the whole show: the project is only
+   * broadcast when it *changes*, so a projector tab that missed the one message
+   * asking for it sat on the picker saying "no project found" until somebody
+   * went indoors and moved something. Announcing on connect — and again every
+   * few seconds while there is still no project, see `announce` — is what turns
+   * that into a second or two of blank wall.
+   */
+  onStatus: (state) => {
+    if (state.status === 'linked') announce();
+    updateStatus();
+  },
+});
 
 let project = null;
 let projectorId = new URLSearchParams(location.search).get('p');
@@ -114,6 +138,17 @@ function announce() {
   bus.post(MSG.HELLO, {
     tabId: bus.tabId,
     projectorId,
+    /**
+     * Still asking, for as long as there is nothing to render.
+     *
+     * `requestState` makes the control tab resend the project, the clock and
+     * the digest, and a tab that has none of them is by definition not being
+     * told things — so it keeps asking rather than asking once and hoping. It
+     * stops the instant a project arrives, which is what keeps this from being
+     * a request to rebroadcast the whole show every four seconds for the rest
+     * of the evening.
+     */
+    requestState: !project,
     width: output.width,
     height: output.height,
     cssWidth: window.innerWidth,
@@ -1040,9 +1075,10 @@ async function boot() {
     }, 6000);
   }
 
+  // The control tab may have started before this tab, so this asks it to
+  // resend the show — see `requestState` in `announce`, which keeps asking
+  // until one arrives.
   announce();
-  // The control tab may have started before this tab; ask it to resend state.
-  bus.post(MSG.HELLO, { tabId: bus.tabId, projectorId, requestState: true, width: output.width, height: output.height });
 
   requestAnimationFrame(frame);
   setInterval(announce, 4000);
