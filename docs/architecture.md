@@ -163,6 +163,8 @@ node test/triggers.test.mjs    # holds, restores, timers, hotkeys and the HTTP h
 node test/migrate.test.mjs     # every project ever saved, arriving at a newer copy
 node test/bus.test.mjs         # cross-tab messages, the mirror, and who is alive
 node test/picker.test.mjs      # the effect gallery: cards, search, and letting go
+node test/bindings.test.mjs    # the modulation editor, and the binding it edits
+node test/mic.test.mjs         # opening the microphone, and the gap in the middle
 node test/storage.test.mjs     # saving, the show list, importing, and a full disk
 node test/collide.test.mjs     # heightfields, landing, slumping, shedding
 node test/obstacles.test.mjs   # facade collision, automatic edge blending
@@ -216,6 +218,15 @@ and why the projector keeps asking until a project arrives.
 stand-in DOM, counting what the IntersectionObserver is holding. Observers keep
 their targets alive, the card set is rebuilt on every keystroke in the search
 box, and nothing about the resulting leak is visible from the app.
+
+[`bindings.test.mjs`](../test/bindings.test.mjs) and
+[`mic.test.mjs`](../test/mic.test.mjs) both cover a gap rather than a
+calculation. The modulation editor is deliberately not re-rendered while
+somebody is typing in it, so its copy of the binding has to be kept honest by
+hand; the microphone is opened across a permission prompt that leaves it
+neither open nor closed for as long as it takes somebody to answer, and the
+switch beside it stays clickable throughout. Both stand in for the browser
+closely enough to be standing in the gap when the second click lands.
 
 [`storage.test.mjs`](../test/storage.test.mjs) covers the whole of the app's
 persistence, which is localStorage and nothing else: a project written over is

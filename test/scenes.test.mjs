@@ -34,6 +34,7 @@ import {
   activateScene,
   applySceneToLayers,
   effectiveLayers,
+  sceneDrift,
 } from '../js/core/scenes.js';
 import { demoShapes } from '../js/control/demoHouse.js';
 
@@ -416,6 +417,97 @@ console.log('\n— and a loaded scene lets go of the layers —');
     ended.length === project.layers.length
       && ended.every((l, i) => l === project.layers[i]),
     'the same objects, not copies');
+}
+
+/* ------------------------------------------------------------------ *
+ * A layer the incoming look drops has to leave like everything else
+ * ------------------------------------------------------------------ */
+
+console.log('\n— crossfading away from a layer the next look never had —');
+
+{
+  const project = traced();
+  const a = createLayer('fill', { name: 'A', enabled: true });
+  project.layers.push(a);
+  const one = createScene({ name: 'One', state: captureScene(project), full: true });
+
+  const b = createLayer('wash', { name: 'B', enabled: true });
+  project.layers.push(b);
+  // Two is a whole look that simply does not contain A.
+  const two = createScene({
+    name: 'Two',
+    state: { [b.id]: { enabled: true, opacity: 1, params: {} } },
+    full: true,
+  });
+  project.scenes.push(one, two);
+
+  activateScene(project, one.id, { fade: 0 });
+  activateScene(project, two.id, { fade: 4 });
+
+  const at = (f) => {
+    const ls = effectiveLayers(project, project.show.sceneChangeAt + f * 4000);
+    return ls.find((l) => l.id === a.id)?.opacity ?? 0;
+  };
+
+  /**
+   * It used to sit at full brightness for the whole fade and vanish on the last
+   * frame, because `blendLayerState` hands back the side it has when one is
+   * missing — right for the params, wrong for the opacity. On a four-second
+   * crossfade between two captured looks that reads as the fade being broken.
+   */
+  ok('it dims through the crossfade rather than snapping off at the end',
+    at(0.25) > 0.6 && at(0.25) < 0.9 && at(0.5) > 0.35 && at(0.5) < 0.65 && at(0.75) < 0.4,
+    `${at(0.25).toFixed(2)} / ${at(0.5).toFixed(2)} / ${at(0.75).toFixed(2)}`);
+  ok('and is gone by the end of it', at(1.5) < 0.001, at(1.5).toFixed(3));
+}
+
+/* ------------------------------------------------------------------ *
+ * Drift, which is what warns you before a switch throws work away
+ * ------------------------------------------------------------------ */
+
+console.log('\n— what counts as an unsaved change —');
+
+{
+  const project = traced();
+  const a = createLayer('fill', { name: 'A', enabled: true });
+  project.layers.push(a);
+  const look = createScene({ name: 'Look', state: captureScene(project), full: true });
+  const oneShot = createScene({
+    name: 'Burst',
+    state: { [a.id]: { enabled: true, opacity: 1, params: { ...a.params } } },
+    full: false,
+  });
+  project.scenes.push(look, oneShot);
+
+  ok('a scene nothing has touched has not drifted',
+    sceneDrift(project, look.id).length === 0);
+
+  const added = createLayer('snow', { name: 'B', enabled: true });
+  project.layers.push(added);
+
+  /**
+   * The hole the unsaved-changes warning had left in it. Adding a layer is how
+   * you build on a look, and a whole-show scene switches off what it does not
+   * mention — so the new layer is exactly the work that pressing the next
+   * scene throws away, and the button said nothing.
+   */
+  ok('adding a layer to a whole-show scene is an unsaved change',
+    sceneDrift(project, look.id).includes(added.id),
+    sceneDrift(project, look.id).join(', ') || 'nothing');
+
+  added.enabled = false;
+  ok('but only while it is switched on',
+    !sceneDrift(project, look.id).includes(added.id));
+
+  added.enabled = true;
+  // A one-shot has no opinion about anything it does not name, so there is
+  // genuinely nothing for the new layer to differ from.
+  ok('and a one-shot is not disturbed by it',
+    sceneDrift(project, oneShot.id).length === 0,
+    sceneDrift(project, oneShot.id).join(', ') || 'nothing');
+
+  ok('an edit to a layer the scene does name still counts',
+    (() => { a.opacity = 0.4; return sceneDrift(project, look.id).includes(a.id); })());
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');

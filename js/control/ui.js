@@ -7,7 +7,7 @@
  * whole reason the schema exists rather than hand-written markup per effect.
  */
 
-import { describeBinding, BINDING_TYPES, WAVES } from '../core/modulators.js';
+import { describeBinding, BINDING_TYPES, WAVES, compileExpression } from '../core/modulators.js';
 import { listCameras } from './feeds.js';
 
 export function el(tag, attrs = {}, children = []) {
@@ -308,9 +308,23 @@ export function paramRow(def, value, binding, handlers) {
       title: bound ? `Modulated: ${describeBinding(binding)}` : 'Add modulation',
       text: bound ? '~' : '+',
     });
+    /**
+     * What the parameter is bound to *now*, not when the row was drawn.
+     *
+     * Editing a binding deliberately does not re-render the inspector — that
+     * would tear down the editor mid-edit — so `binding` is frozen at whatever
+     * it was when this row was built, and reopening the editor rebuilt it from
+     * that. Bind a slider to an LFO, set its rate, fold the editor away, open
+     * it again: the dropdown said *off* while the button next to it still said
+     * modulated, and the first thing you touched wrote that lie back over the
+     * LFO you had just set up.
+     */
+    let live = binding;
+
     // Keep the button's own appearance in sync without re-rendering the whole
     // inspector, which would collapse the editor mid-edit.
     const onBindingChange = (next) => {
+      live = next;
       bindBtn.classList.toggle('bound', !!next);
       bindBtn.textContent = next ? '~' : '+';
       bindBtn.title = next ? `Modulated: ${describeBinding(next)}` : 'Add modulation';
@@ -323,7 +337,7 @@ export function paramRow(def, value, binding, handlers) {
         editor.remove();
         return;
       }
-      row.after(bindingEditor(def, binding, { ...handlers, onBindingChange }));
+      row.after(bindingEditor(def, live, { ...handlers, onBindingChange }));
     });
     row.appendChild(bindBtn);
   } else {
@@ -340,6 +354,15 @@ function bindingEditor(def, binding, handlers) {
 
   const update = (patch) => {
     Object.assign(current, patch);
+    /**
+     * Whatever went wrong last time went wrong with the *previous* expression.
+     *
+     * `evaluateBinding` files the message on the binding itself, and nothing
+     * used to take it off again — so one typo left the red line under the box
+     * for the rest of the session however many times you fixed the code, and a
+     * show saved in that state carried the message with it.
+     */
+    delete current.__error;
     handlers.onBindingChange(current.type === 'const' ? null : { ...current });
     rebuild();
   };
@@ -450,7 +473,10 @@ function bindingEditor(def, binding, handlers) {
               'plus <code>sin cos noise fbm clamp lerp smoothstep rand saw tri square TAU</code>.',
           })
         );
-        if (current.__error) body.append(el('p', { class: 'code-status bad', text: current.__error }));
+        // A syntax error is knowable the moment you stop typing, so say so then
+        // rather than waiting for the renderer to try it and report back.
+        const problem = compileExpression(current.code || '0').error || current.__error;
+        if (problem) body.append(el('p', { class: 'code-status bad', text: problem }));
         break;
       }
       default:
