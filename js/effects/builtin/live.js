@@ -154,7 +154,11 @@ function ribbon(pts, count, sx, sy, halfWidth, from) {
  */
 export function paintStroke(g, stroke, size, params, alpha, from = 0) {
   const pts = stroke.pts;
-  const count = pts.length / 3;
+  // Floored, because a fractional count makes `count - 1` a fractional index
+  // and `pts[i * 3]` then reads the middle of a triple. The store hands out
+  // whole triples; this is the belt to that brace, since the array is the one
+  // piece of an effect's input that arrives over the network.
+  const count = Math.floor(pts.length / 3);
   if (count === 0 || alpha <= 0.002) return;
 
   const sx = size.w / DRAW_SCALE;

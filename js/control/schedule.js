@@ -57,6 +57,10 @@ export function describeSchedule(schedule) {
   const on = parseTime(schedule.on);
   const off = parseTime(schedule.off);
   if (on === null || off === null) return 'Times must look like 18:00.';
+  // The same case `scheduleWantsOn` refuses to act on. Without saying so here,
+  // the panel reads "Lit 18:00–18:00, every day" for a schedule that is in
+  // fact doing nothing at all.
+  if (on === off) return 'On and off are the same time, so nothing happens.';
 
   const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const days = Array.isArray(schedule.days) ? schedule.days : [];

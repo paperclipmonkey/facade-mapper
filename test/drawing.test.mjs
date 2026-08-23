@@ -194,6 +194,48 @@ console.log('\n— A tab that arrived late —');
   ok('and leaves an empty surface', drawingFor('empty').strokes.length === 0);
 }
 
+{
+  /**
+   * A snapshot whose points do not divide by three.
+   *
+   * The incremental path has always trimmed a partial point off the end of a
+   * message — "a partial point at the end of a message is dropped", above —
+   * and the snapshot path did not, which matters because a snapshot is the one
+   * message that can arrive from a device that is not the drawing page: any
+   * tab holding a copy of the ink can answer "what is already on the wall" for
+   * a projector that joined late.
+   *
+   * Every consumer walks the array three at a time. A trailing pair is not a
+   * point, it is one read past the end of the last one — the renderer drew a
+   * round cap at a coordinate made of one point's `y` and its pressure — and
+   * the surface's own point count came out fractional, which is the number the
+   * store trims the evening's drawing against.
+   */
+  resetDrawings();
+  applyDrawMessage({
+    kind: 'full',
+    surface: 'wall',
+    strokes: [
+      { id: 'ragged', color: '#fff', width: 3, at: 1, done: true, pts: [0, 0, 200, 5000, 5000, 200, 9999] },
+      { id: 'shorter', color: '#fff', width: 3, at: 1, done: true, pts: [1, 2] },
+    ],
+  });
+  const surface = drawingFor('wall');
+  ok('a snapshot is trimmed to whole points, exactly like a message',
+    surface.strokes.map((s) => s.pts.length).join(',') === '6,0',
+    surface.strokes.map((s) => s.pts.length).join(','));
+  ok('so the point count is a count of points',
+    Number.isInteger(surface.points) && surface.points === 2, `${surface.points}`);
+
+  // And a `pts` that is not a list at all, which is what a hand-written message
+  // or a truncated one looks like.
+  resetDrawings();
+  applyDrawMessage({ kind: 'full', surface: 'wall', strokes: [{ id: 'a', pts: 'nope' }, { id: 'b' }] });
+  ok('a snapshot with no points where points should be still loads',
+    drawingFor('wall').strokes.every((s) => Array.isArray(s.pts) && s.pts.length === 0));
+  ok('and counts nothing', drawingFor('wall').points === 0);
+}
+
 /* ------------------------------------------------------------------ *
  * Not for ever
  * ------------------------------------------------------------------ */

@@ -158,7 +158,9 @@ plausible-looking output:
 
 ```bash
 node test/geometry.test.mjs    # homography, marker detection, region and mesh maths
-node test/runtime.test.mjs     # motion detection, trigger gating, scheduling, grading
+node test/runtime.test.mjs     # motion, gating, scheduling, grading, the show clock, feeds
+node test/triggers.test.mjs    # holds, restores, timers, hotkeys and the HTTP hooks
+node test/migrate.test.mjs     # every project ever saved, arriving at a newer copy
 node test/collide.test.mjs     # heightfields, landing, slumping, shedding
 node test/obstacles.test.mjs   # facade collision, automatic edge blending
 node test/figures.test.mjs     # the drawn figures
@@ -166,6 +168,7 @@ node test/link.test.mjs        # clock offset, WebSocket framing, the relay
 node test/underwater.test.mjs  # absorption, wave dispersion, buoyancy, shoaling
 node test/drawing.test.mjs     # live drawing: strokes, undo, late joiners
 node test/robustness.test.mjs  # every effect against every degenerate shape
+node test/params.test.mjs      # every effect at both ends of every slider it has
 node test/renderer.test.mjs    # the simulation clock, catch-up and the transport
 node test/soundscape.test.mjs  # which layer sounds like what, the mixer, cue timing
 ```
@@ -182,6 +185,27 @@ enforced by the author remembering it, and each has a failure mode that is
 invisible until it is on a wall. The NaN one is the worst: a canvas given NaN
 draws nothing at all and says nothing, so the layer simply vanishes while the
 list goes on reporting it as running.
+
+[`params.test.mjs`](../test/params.test.mjs) is the same sweep at the values
+nobody has ever looked at. The defaults are what the author had on screen while
+writing the effect; the ends of the sliders are one drag away in the inspector
+and have never been seen by anybody. So every parameter is pushed to its own
+minimum and maximum — every option of every dropdown, both states of every
+switch — then all of them together, then checked for still drawing the same
+frame in two tabs. Both suites share the stand-in browser in
+[`effectHarness.mjs`](../test/effectHarness.mjs), which is where the shapes live:
+each one stands for a project somebody actually has.
+
+[`triggers.test.mjs`](../test/triggers.test.mjs) covers the runtime with the
+least margin for error in the app — everything it does happens once, in the
+dark, in front of people, and every failure mode is silent. It runs on a clock
+the test moves by hand, so nothing sleeps.
+
+[`migrate.test.mjs`](../test/migrate.test.mjs) holds the narrowest gate in the
+codebase: nothing reaches the renderer without passing through `migrateProject`,
+and everything past it is written against a project that is *complete*. It is
+also the function that has to survive being handed a file somebody dragged in,
+which is any JSON at all.
 
 `geometry.test.mjs` includes an end-to-end calibration against a simulated
 projector and camera. The motion tests are worth reading if you plan to rely on

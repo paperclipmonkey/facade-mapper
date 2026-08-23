@@ -2768,7 +2768,15 @@ function renderLinkDialog() {
 }
 
 function runRemoteAction(payload) {
-  const action = REMOTE_ACTIONS[payload?.action];
+  // Own properties only. A plain object literal inherits `constructor`,
+  // `toString`, `valueOf` and the rest from `Object.prototype`, so a bare
+  // lookup answers "yes, that is a verb" for half a dozen names that are not
+  // in the list above — and the list above is the security model for a link
+  // that is only as private as the wifi it runs on.
+  const name = payload?.action;
+  const action = typeof name === 'string' && Object.hasOwn(REMOTE_ACTIONS, name)
+    ? REMOTE_ACTIONS[name]
+    : null;
   if (!action) {
     console.warn('[remote] ignoring unknown action', payload?.action);
     return;

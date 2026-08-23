@@ -174,9 +174,87 @@ const LOWER = { x: 0.2, y: 0.55, w: 0.6, h: 0.45 };
   ok('weekend-only skips a Tuesday', scheduleWantsOn(weekend, at(2, 20, 0)) === false);
   ok('weekend-only runs on a Saturday', scheduleWantsOn(weekend, at(6, 20, 0)) === true);
 
+  /**
+   * A window of no length.
+   *
+   * `scheduleWantsOn` returns null for it — there is no answer to give, so
+   * blackout is left alone — and the panel used to describe it as "Lit
+   * 18:00–18:00, every day", which is a schedule that reads as configured,
+   * looks configured, and does nothing at all.
+   */
+  const zero = { enabled: true, on: '18:00', off: '18:00', days: every };
+  ok('a window that opens and shuts at the same minute has no answer',
+    scheduleWantsOn(zero, at(1, 18, 0)) === null);
+  ok('and the panel says so rather than claiming the house is lit',
+    !/Lit/.test(describeSchedule(zero)), describeSchedule(zero));
+
   ok('describes a plain window', describeSchedule(evening).includes('18:00–22:30'));
   ok('flags an overnight window', describeSchedule(overnight).includes('past midnight'));
   ok('names weekends', describeSchedule(weekend).includes('weekends'));
+  ok('and names the days when it is neither', describeSchedule({
+    enabled: true, on: '18:00', off: '22:00', days: [6, 1, 0],
+  }).includes('Sun, Mon, Sat'));
+  ok('a schedule switched off says the show simply runs',
+    /whenever/.test(describeSchedule({ enabled: false })));
+  ok('and a mistyped time says which shape it wanted',
+    describeSchedule({ enabled: true, on: 'dusk', off: '22:00' }).includes('18:00'));
+}
+
+/* ------------------------------------------------------------------ *
+ * The show clock
+ * ------------------------------------------------------------------ */
+
+console.log('\n— the show clock —');
+{
+  const { createClock, formatTime } = await import('../js/core/clock.js');
+
+  ok('a fresh clock is stopped at zero', formatTime(0) === '00:00.0');
+  ok('it counts in tenths', formatTime(5.04) === '00:05.0' && formatTime(5.06) === '00:05.1');
+  /**
+   * The readout used to show `00:60.0`.
+   *
+   * The minutes came off the unrounded number and the seconds off the rounded
+   * one, so for the last twentieth of every minute the two disagreed — in the
+   * control tab and on the phone, once a minute, all evening.
+   */
+  ok('the last twentieth of a minute reads as the next minute, not as sixty seconds',
+    formatTime(59.96) === '01:00.0', formatTime(59.96));
+  ok('and the tenth before it still reads as fifty-nine',
+    formatTime(59.94) === '00:59.9', formatTime(59.94));
+  ok('which holds at every minute boundary',
+    formatTime(119.99) === '02:00.0' && formatTime(3599.99) === '60:00.0');
+  ok('no readout ever shows a seconds field of sixty',
+    Array.from({ length: 4000 }, (_, i) => formatTime(i * 0.03))
+      .every((text) => !/:60/.test(text)));
+  ok('and nothing before the start of the show is negative', formatTime(-5) === '00:00.0');
+
+  const clock = createClock();
+  ok('a new clock is not running', clock.getTransport().running === false);
+  clock.play();
+  ok('playing starts it', clock.getTransport().running === true);
+  clock.pause();
+  const paused = clock.getTransport();
+  ok('pausing freezes it', paused.running === false);
+  ok('and remembers where it got to', clock.timeNow() === paused.t);
+  clock.stop();
+  ok('stopping sends it back to the beginning',
+    clock.getTransport().running === false && clock.timeNow() === 0);
+
+  /**
+   * `tick` while paused reports the instant show time *is*, not the instant it
+   * is being asked. Everything that turns a stored wall-clock stamp into a show
+   * time subtracts one from the other, and a pause slides them apart.
+   */
+  clock.play();
+  const running = clock.tick();
+  ok('a running clock reports a wall instant alongside the show time',
+    Math.abs(running.wall - Date.now() / 1000) < 1, `${running.wall}`);
+  clock.pause();
+  const a = clock.tick();
+  const b = clock.tick();
+  ok('a paused clock does not move', a.t === b.t && a.wall === b.wall);
+  ok('and its dt is zero, so nothing simulates while it is stopped', b.dt === 0);
+  ok('while frame time keeps running, for the UI', b.frameDt >= 0);
 }
 
 /* ---- Grading ---- */
@@ -260,6 +338,83 @@ console.log('\n— trigger webhooks —');
 
   ok('an empty url does nothing at all',
     (await fireWebhook({ url: '' }, { key: 'k5' })).skipped === true);
+}
+
+/* ------------------------------------------------------------------ *
+ * Camera feeds, and letting go of them
+ * ------------------------------------------------------------------ */
+
+console.log('\n— extra camera feeds —');
+{
+  /**
+   * A camera left open holds its light on and shows in the browser's tab
+   * indicator, which is alarming if the layer that opened it was deleted an
+   * hour ago. An MJPEG `<img>` is worse: it holds a connection open, pulling
+   * frames, for the rest of the evening.
+   *
+   * Stopping the tracks is not enough on its own — the element goes on holding
+   * the dead stream — and there are two shapes of entry here, a device feed
+   * and a network one, which is how one of them came to be missed.
+   */
+  const made = [];
+  const element = (tag) => {
+    const el = {
+      tag, src: '', srcObject: null, attributes: new Set(), loaded: 0,
+      playsInline: false, muted: false, autoplay: false, loop: false, crossOrigin: '',
+      addEventListener() {},
+      removeAttribute(name) { el.attributes.add(name); el.src = ''; },
+      load() { el.loaded++; },
+      play: () => Promise.resolve(),
+    };
+    made.push(el);
+    return el;
+  };
+
+  globalThis.document = { createElement: element };
+  globalThis.Image = function Image() {
+    const img = { src: '', attributes: new Set(), addEventListener() {}, removeAttribute(name) { img.attributes.add(name); img.src = ''; } };
+    made.push(img);
+    return img;
+  };
+
+  const tracks = [{ stopped: false, stop() { this.stopped = true; } }];
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { mediaDevices: { getUserMedia: () => Promise.resolve({ getTracks: () => tracks }) } },
+    configurable: true,
+    writable: true,
+  });
+
+  const { feed, streamFeed, releaseFeed, pruneFeeds, releaseAllFeeds } =
+    await import('../js/control/feeds.js');
+
+  ok('a feed is not ready on the frame it is asked for', feed('cam-1') === null);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const camera = feed('cam-1');
+  ok('and is there once the camera has opened', camera !== null && camera.tag === 'video');
+  ok('asking again does not open a second stream', feed('cam-1') === camera && made.filter((m) => m.tag === 'video').length === 1);
+
+  releaseFeed('cam-1');
+  ok('releasing it stops the camera', tracks[0].stopped === true);
+  ok('and lets the element go of the stream too',
+    camera.srcObject === null && camera.attributes.has('src'), JSON.stringify([...camera.attributes]));
+  ok('after which it is opened afresh rather than handed back', feed('cam-1') === null);
+  releaseAllFeeds();
+
+  const url = 'http://192.168.1.9/video.cgi?action=stream';
+  ok('a network stream is not ready either', streamFeed(url) === null);
+  const img = made[made.length - 1];
+  ok('an MJPEG url goes in an image, which is drawable and needs no library', img.src === url);
+  releaseFeed(url);
+  ok('and releasing it drops the connection', img.attributes.has('src') && img.src === '');
+
+  streamFeed('http://example.invalid/loop.mp4');
+  const video = made[made.length - 1];
+  ok('anything else goes in a video', video.tag === 'video');
+  pruneFeeds(new Set());
+  ok('pruning closes what nothing points at any more', video.attributes.has('src'));
+
+  delete globalThis.document;
+  delete globalThis.Image;
 }
 
 /* ------------------------------------------------------------------ *

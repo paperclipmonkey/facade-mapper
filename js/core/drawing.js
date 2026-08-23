@@ -54,6 +54,21 @@ const MAX_POINTS = 120000;
  */
 const MAX_SURFACES = 32;
 
+/**
+ * A point list truncated to whole (x, y, pressure) triples.
+ *
+ * Every consumer walks the array three at a time, so a partial point at the end
+ * is not a point — it is one read past the end of the last one. Anything
+ * arriving from off the machine goes through here.
+ */
+function whole(pts) {
+  if (!Array.isArray(pts)) return [];
+  const usable = pts.length - (pts.length % 3);
+  const out = new Array(usable);
+  for (let i = 0; i < usable; i++) out[i] = pts[i] | 0;
+  return out;
+}
+
 /** Message kinds this store knows about. */
 const KINDS = new Set(['begin', 'points', 'end', 'undo', 'clear', 'full']);
 
@@ -220,7 +235,14 @@ export function applyDrawMessage(msg) {
         erase: !!s.erase,
         at: Number(s.at) || now(),
         done: s.done !== false,
-        pts: Array.isArray(s.pts) ? s.pts.map((v) => v | 0) : [],
+        // Triples here as well as in `points`, and for exactly the same
+        // reason: the renderer walks the array three at a time and a trailing
+        // pair is read as the start of a point that is not there — it drew a
+        // round cap at a coordinate made of one point's `y` and its pressure.
+        // A snapshot this tab made is always well-formed; one that arrived over
+        // the wifi from something that is not the drawing page is whatever it
+        // says it is.
+        pts: whole(s.pts),
       }));
       surface.points = surface.strokes.reduce((sum, s) => sum + s.pts.length / 3, 0);
       surface.revision++;
