@@ -705,6 +705,34 @@ neon tube. Text longer than its path is shrunk to fit rather than running off
 the end; turn **Shrink to fit path** off if you meant to scroll it along with
 **Position on path**.
 
+### Bees, and the line they leave
+
+**Bees** is about the path rather than the animal. Nobody at the end of a garden
+can resolve a striped body two inches long; what carries from thirty feet is the
+flight — a dart, a hover, a right-angle turn, another dart — so each bee draws
+the dashed line of where it has just been, and the bee itself is six ellipses on
+the end of it. Put a few on a whole wall and the building acquires a slow,
+legible sort of activity that no looping animation gives you, because the line
+is different every time.
+
+**Bees** is how many, and it is the parameter with the most character in it: one
+is a single insect somebody notices; twenty is a swarm working a hedge. **Trail**
+is how many seconds of line stay behind, **Dash** and **Gap** are its stitch in
+world pixels, and **Dartiness** is how hard a bee corners — low is a bumblebee
+drifting, high is a honeybee that changes its mind every half second.
+
+They do not stay. **Time on the wall** is how long a bee explores before it
+climbs out of the frame, and **Time away** is how long before it comes back —
+staggered per bee, so the wall is never empty and never full. The bee genuinely
+flies out and genuinely flies back in, which is why the line never has a seam in
+it: there is no teleport to hide.
+
+Worth knowing if you bind anything: the trail is *remembered* rather than
+computed, so it is simulated at a fixed sixty steps a second like everything
+else that accumulates, and a projector tab opened halfway through the evening
+replays its way to exactly the line the other tabs are drawing. See
+[writing effects](writing-effects.md#simulating-at-a-fixed-rate).
+
 ### A second camera
 
 **Live Camera** has its own **Camera** setting, and it defaults to *not* the one

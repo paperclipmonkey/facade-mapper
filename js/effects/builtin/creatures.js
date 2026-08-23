@@ -509,4 +509,348 @@ const runes = {
   },
 };
 
-export default [bats, fireworks, pumpkin, runes];
+/* ------------------------------------------------------------------ *
+ * Bees
+ *
+ * The thing that makes a bee a bee is the *path*, not the animal. Nobody at the
+ * far side of a garden can resolve a striped body two inches long; what reads
+ * from thirty feet is the flight — a dart, a hover, a right-angle turn, another
+ * dart — and the dashed line is that flight made visible. So the drawing here
+ * is mostly bookkeeping about where each bee has been, and the bee itself is
+ * six ellipses on the end of it.
+ *
+ * Which means the trail is state, and state has to be simulated rather than
+ * derived from `t`: two tabs drawing at different rates would otherwise file
+ * different numbers of points and draw two different lines on the same wall.
+ * Hence `step`, a ring buffer per bee, and nothing allocated after the flock is
+ * cast. See docs/writing-effects.md.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Steps between trail samples. Two is thirty a second — finer than the dashes
+ * are long, so the line reads as a curve rather than as the polygon it is.
+ */
+const BEE_TRAIL_EVERY = 2;
+/** Samples kept per bee. Two hundred at thirty a second is nearly seven seconds. */
+const BEE_TRAIL_SAMPLES = 200;
+const BEE_TRAIL_SECONDS = (BEE_TRAIL_SAMPLES * BEE_TRAIL_EVERY) / 60;
+/**
+ * How many alpha steps the trail fades over.
+ *
+ * A canvas gradient runs along a *line*, not along a path, so a trail that
+ * fades behind the bee has to be stroked in pieces. Five is enough that the
+ * steps are not visible on a wall and few enough that the dash phase — carried
+ * across the joins in `strokeTrail` so the stitch stays continuous — is only
+ * carried four times.
+ */
+const BEE_TRAIL_BANDS = 5;
+
+/** A bee, with its own ring buffer. Allocated once, when the flock is cast. */
+function castBee(rng, bbox, linger) {
+  return {
+    x: bbox.x + rng() * bbox.w,
+    y: bbox.y + rng() * bbox.h,
+    vx: 0,
+    vy: 0,
+    /** Where it is heading, and when it will lose interest in going there. */
+    tx: bbox.x + rng() * bbox.w,
+    ty: bbox.y + rng() * bbox.h,
+    dwell: 0,
+    /**
+     * 0 exploring, 1 climbing out, 2 coming back.
+     *
+     * Three rather than two, because "on the wall" has to mean on the wall: with
+     * only *here* and *gone*, the seconds it spends crossing the empty air on
+     * either side come out of its time among the flowers, and on a big shape
+     * that is all of them — it turns for home, runs out of clock before it
+     * arrives, and turns straight back round. One bee, permanently in the sky.
+     */
+    mode: 0,
+    /** Seconds left in this mode. Staggered, so they do not all leave together. */
+    timer: 0.5 + rng() * Math.max(0.5, linger),
+    pace: 0.7 + rng() * 0.6,
+    seed: rng() * 100,
+    xs: new Float64Array(BEE_TRAIL_SAMPLES),
+    ys: new Float64Array(BEE_TRAIL_SAMPLES),
+    /** One past the newest sample, and how many of the buffer are real. */
+    head: 0,
+    filled: 0,
+  };
+}
+
+/** Pick somewhere new to be: a flower on the wall, or the sky. */
+function beeTarget(bee, bbox, rng) {
+  if (bee.mode === 1) {
+    /**
+     * A point on a circle round the shape, in the direction it is already
+     * flying. Measured from the middle of the shape rather than from the bee,
+     * so asking again while it is on its way out gives the same answer instead
+     * of moving the goalposts a shape's width further off every time.
+     *
+     * Far enough to be past the clip and therefore invisible, which is what
+     * lets the trail stay one unbroken polyline: the bee genuinely flies away
+     * and genuinely flies back, so there is no teleport to hide and no seam in
+     * the dashes where one visit ends and the next begins.
+     */
+    const cx = bbox.x + bbox.w / 2;
+    const cy = bbox.y + bbox.h / 2;
+    const dx = bee.x - cx;
+    const dy = bee.y - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    const reach = Math.hypot(bbox.w, bbox.h) * 0.8;
+    bee.tx = cx + (dx / len) * reach;
+    bee.ty = cy + (dy / len) * reach;
+    return;
+  }
+  bee.tx = bbox.x + (0.06 + rng() * 0.88) * bbox.w;
+  bee.ty = bbox.y + (0.06 + rng() * 0.88) * bbox.h;
+  bee.dwell = 0.35 + rng() * 1.6;
+}
+
+/** Is it over the shape at all? What decides that it has arrived. */
+function overWall(bee, bbox) {
+  return bee.x >= bbox.x && bee.x <= bbox.x + bbox.w
+    && bee.y >= bbox.y && bee.y <= bbox.y + bbox.h;
+}
+
+/**
+ * One band of trail, continuing the dash pattern where the last one stopped.
+ *
+ * Returns the length stroked, so the caller can carry the phase on. Without
+ * that the pattern restarts at every band and the line reads as five separate
+ * dashed lines that happen to touch.
+ */
+function strokeTrail(g, bee, from, to, start, travelled, period) {
+  let idx = (start + from) % BEE_TRAIL_SAMPLES;
+  let px = bee.xs[idx];
+  let py = bee.ys[idx];
+  g.lineDashOffset = period > 0 ? travelled % period : 0;
+  g.beginPath();
+  g.moveTo(px, py);
+  let run = 0;
+  for (let i = from + 1; i <= to; i++) {
+    idx = (start + i) % BEE_TRAIL_SAMPLES;
+    const x = bee.xs[idx];
+    const y = bee.ys[idx];
+    g.lineTo(x, y);
+    run += Math.hypot(x - px, y - py);
+    px = x;
+    py = y;
+  }
+  g.stroke();
+  return run;
+}
+
+/**
+ * Six ellipses, drawn nose-first along the direction of travel.
+ *
+ * The wings go down before the body so the body sits over them, and they are
+ * plain translucent shapes rather than anything blurred: a real wing beats two
+ * hundred times a second and no projector is going to show that, so what sells
+ * it is a soft shape that changes size, not a shape that flaps.
+ */
+function drawBee(g, x, y, angle, len, flap, colour, ink) {
+  const w = len * 0.44;
+  g.save();
+  g.translate(x, y);
+  g.rotate(angle);
+
+  g.fillStyle = 'rgba(255,255,255,0.32)';
+  for (const side of [-1, 1]) {
+    g.beginPath();
+    g.ellipse(-len * 0.04, side * w * 0.6, len * 0.34, Math.max(0.01, w * 0.4 * flap), side * -0.5, 0, TAU);
+    g.fill();
+  }
+
+  g.fillStyle = colour;
+  g.beginPath();
+  g.ellipse(0, 0, len * 0.5, w * 0.5, 0, 0, TAU);
+  g.fill();
+
+  g.fillStyle = ink;
+  for (const at of [-0.24, -0.04]) {
+    g.beginPath();
+    g.ellipse(len * at, 0, len * 0.07, w * 0.45, 0, 0, TAU);
+    g.fill();
+  }
+  // The head, at the front, which is the only thing saying which way it faces.
+  g.beginPath();
+  g.ellipse(len * 0.44, 0, len * 0.13, w * 0.34, 0, 0, TAU);
+  g.fill();
+
+  g.restore();
+}
+
+const bees = {
+  id: 'bees',
+  name: 'Bees',
+  category: 'atmosphere',
+  scope: 'shape',
+  description:
+    'Bees exploring the wall, each drawing the dashed line of its own flight behind it. They dart, hover, turn, and after a while fly off — the line they left fades out after them.',
+  params: [
+    { key: 'color', type: 'color', label: 'Bee', default: '#f7c545' },
+    { key: 'ink', type: 'color', label: 'Stripes', default: '#2a1a07' },
+    { key: 'trailColor', type: 'color', label: 'Trail', default: '#ffe9ad' },
+    { key: 'count', type: 'range', label: 'Bees', default: 6, min: 1, max: 40, step: 1 },
+    { key: 'size', type: 'range', label: 'Bee size', default: 0.05, min: 0.008, max: 0.25, step: 0.002 },
+    { key: 'speed', type: 'range', label: 'Speed', default: 0.5, min: 0.05, max: 2.5, step: 0.01 },
+    /** How hard it corners. Low is a lazy drift, high is the right-angle dart. */
+    { key: 'dart', type: 'range', label: 'Dartiness', default: 0.6, min: 0, max: 1, step: 0.01 },
+    { key: 'wander', type: 'range', label: 'Wander', default: 0.45, min: 0, max: 1, step: 0.01 },
+    { key: 'memory', type: 'range', label: 'Trail (s)', default: 2.4, min: 0.2, max: BEE_TRAIL_SECONDS, step: 0.1 },
+    { key: 'dash', type: 'range', label: 'Dash', default: 8, min: 1, max: 60, step: 0.5 },
+    { key: 'gap', type: 'range', label: 'Gap', default: 7, min: 1, max: 60, step: 0.5 },
+    { key: 'trailWidth', type: 'range', label: 'Trail width', default: 2.5, min: 0.5, max: 12, step: 0.25 },
+    { key: 'linger', type: 'range', label: 'Time on the wall (s)', default: 18, min: 2, max: 300, step: 1 },
+    { key: 'away', type: 'range', label: 'Time away (s)', default: 8, min: 0, max: 300, step: 1 },
+  ],
+  /**
+   * Silent, deliberately.
+   *
+   * There is no bee in the voice list, and the nearest thing to one is the
+   * neon hum, which is mains at fifty hertz and sounds like a substation.
+   */
+  sound: null,
+  init() {
+    return { bees: null, count: 0, tick: 0 };
+  },
+  step({ p, shape, dt, rng, state, noise }) {
+    const { bbox } = shape;
+    if (bbox.w <= 2 || bbox.h <= 2) return;
+
+    const count = clamp(Math.round(p.count), 1, 64);
+    if (state.count !== count || !state.bees) {
+      state.count = count;
+      state.bees = Array.from({ length: count }, () => castBee(rng, bbox, p.linger));
+      for (const bee of state.bees) beeTarget(bee, bbox, rng);
+      state.tick = 0;
+    }
+
+    state.tick++;
+    const file = state.tick % BEE_TRAIL_EVERY === 0;
+
+    const cruise = Math.max(1, p.speed) * bbox.h * 0.25;
+    // Dartiness is how fast it can change its mind, which on a bee is most of
+    // the character: the same top speed with a slack turn is a bumblebee and
+    // with a hard one is a honeybee working a hedge.
+    const turn = lerp(1.4, 9, clamp(p.dart, 0, 1));
+
+    for (const bee of state.bees) {
+      bee.timer -= dt;
+      if (bee.mode === 0) {
+        // Exploring: a new flower every so often, and away when its time is up.
+        bee.dwell -= dt;
+        if (bee.dwell <= 0) beeTarget(bee, bbox, rng);
+        if (bee.timer <= 0) {
+          bee.mode = 1;
+          bee.timer = Math.max(0.4, p.away);
+          beeTarget(bee, bbox, rng);
+        }
+      } else if (bee.mode === 1) {
+        // Out in the sky, holding one destination rather than a series of them.
+        if (bee.timer <= 0) {
+          bee.mode = 2;
+          // Generous, and only a backstop: it is how long a bee is allowed to
+          // spend failing to find its way back before it is simply here again.
+          bee.timer = 20;
+          beeTarget(bee, bbox, rng);
+        }
+      } else if (overWall(bee, bbox) || bee.timer <= 0) {
+        // Home. The clock on its stay starts now, not when it turned round.
+        bee.mode = 0;
+        bee.timer = Math.max(0.5, p.linger);
+        beeTarget(bee, bbox, rng);
+      }
+
+      const dx = bee.tx - bee.x;
+      const dy = bee.ty - bee.y;
+      const range = Math.hypot(dx, dy);
+      if (range > 0.001) {
+        bee.vx += (dx / range) * turn * cruise * dt;
+        bee.vy += (dy / range) * turn * cruise * dt;
+      }
+
+      // The jitter that stops a dart being a straight line. Noise rather than
+      // rng so it is smooth in time, and keyed on the bee so no two share it.
+      const jitter = clamp(p.wander, 0, 1) * cruise * 3;
+      bee.vx += noise.noise2(bee.seed, state.tick * 0.05) * jitter * dt;
+      bee.vy += noise.noise2(bee.seed + 40, state.tick * 0.05) * jitter * dt;
+
+      // Drag, so the two forces above settle at a speed instead of running away.
+      const drag = Math.exp(-2.6 * dt);
+      bee.vx *= drag;
+      bee.vy *= drag;
+
+      // Crossing the empty air is a commute, not a search: a bee on its way out
+      // or on its way back travels, and only slows down once it is working.
+      const top = cruise * bee.pace * (bee.mode === 0 ? 1 : 2.6);
+      const speed = Math.hypot(bee.vx, bee.vy);
+      if (speed > top && speed > 0) {
+        bee.vx *= top / speed;
+        bee.vy *= top / speed;
+      }
+
+      bee.x += bee.vx * dt;
+      bee.y += bee.vy * dt;
+
+      if (file) {
+        bee.xs[bee.head] = bee.x;
+        bee.ys[bee.head] = bee.y;
+        bee.head = (bee.head + 1) % BEE_TRAIL_SAMPLES;
+        if (bee.filled < BEE_TRAIL_SAMPLES) bee.filled++;
+      }
+    }
+  },
+  draw({ g, p, shape, t, state }) {
+    const { bbox } = shape;
+    if (!state.bees || bbox.w <= 2 || bbox.h <= 2) return;
+
+    const dash = Math.max(0.5, p.dash);
+    const gap = Math.max(0.5, p.gap);
+    const period = dash + gap;
+    const keep = clamp(Math.round(p.memory * (60 / BEE_TRAIL_EVERY)), 2, BEE_TRAIL_SAMPLES);
+
+    g.save();
+    g.clip(shape.path);
+
+    g.setLineDash([dash, gap]);
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    g.lineWidth = Math.max(0.25, p.trailWidth);
+    g.strokeStyle = p.trailColor;
+
+    for (const bee of state.bees) {
+      const n = Math.min(keep, bee.filled);
+      if (n < 2) continue;
+      const start = (bee.head - n + BEE_TRAIL_SAMPLES * 2) % BEE_TRAIL_SAMPLES;
+      const bands = Math.min(BEE_TRAIL_BANDS, n - 1);
+      let travelled = 0;
+      let from = 0;
+      for (let b = 0; b < bands; b++) {
+        const to = Math.round(((b + 1) * (n - 1)) / bands);
+        if (to <= from) continue;
+        g.globalAlpha = (b + 1) / bands;
+        travelled += strokeTrail(g, bee, from, to, start, travelled, period);
+        from = to;
+      }
+    }
+
+    g.setLineDash([]);
+    g.lineDashOffset = 0;
+    g.globalAlpha = 1;
+
+    const len = Math.max(1, bbox.h * clamp(p.size, 0.001, 1));
+    for (const bee of state.bees) {
+      const angle = Math.atan2(bee.vy, bee.vx);
+      // Not a flap — see drawBee. Something small and fast so the wing is never
+      // quite a fixed shape.
+      const flap = 0.45 + 0.55 * Math.abs(Math.sin(t * 26 + bee.seed));
+      drawBee(g, bee.x, bee.y, angle, len, flap, p.color, p.ink);
+    }
+
+    g.restore();
+  },
+};
+
+export default [bats, bees, fireworks, pumpkin, runes];

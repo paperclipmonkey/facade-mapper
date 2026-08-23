@@ -171,6 +171,7 @@ node test/obstacles.test.mjs   # facade collision, automatic edge blending
 node test/figures.test.mjs     # the drawn figures
 node test/link.test.mjs        # clock offset, WebSocket framing, the relay
 node test/underwater.test.mjs  # absorption, wave dispersion, buoyancy, shoaling
+node test/bees.test.mjs        # the flight, the ring buffer, and the stitched line
 node test/drawing.test.mjs     # live drawing: strokes, undo, late joiners
 node test/robustness.test.mjs  # every effect against every degenerate shape
 node test/params.test.mjs      # every effect at both ends of every slider it has
