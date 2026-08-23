@@ -121,6 +121,37 @@ function projectWith(effectId, params, extra = {}) {
 }
 
 /**
+ * Several layers on one shape, in the order given, bottom of the stack first.
+ *
+ * Wanted because a layer that reads what another one publishes cannot be tested
+ * on its own: the whole question is what it finds on the notice board, and an
+ * effect with nobody to talk to always finds the same nothing.
+ */
+function projectOf(specs, idSeed = null) {
+  const project = createProject('sync');
+  const shape = createShape(SHAPE, { name: 'Wall' });
+  shape.tags = ['wall'];
+  project.shapes = [shape];
+  project.layers = specs.map(({ effect, params, bindings }, order) => {
+    const layer = createLayer(effect, {
+      targets: [shape.id],
+      params: { ...defaultParams(effect), ...params },
+      order,
+    });
+    /**
+     * A layer's id seeds every generator the instance uses, so naming it is
+     * how a test picks a particular snowfall rather than whichever one this
+     * run happened to get — and how a failure can be reproduced by running the
+     * file again.
+     */
+    if (idSeed !== null) layer.id = `sync_${idSeed}_${order}`;
+    if (bindings) layer.bindings = bindings;
+    return layer;
+  });
+  return project;
+}
+
+/**
  * Render a project from show time zero to `until` in steps of 1/fps, and hand
  * back everything the last frame drew.
  *
@@ -412,6 +443,192 @@ console.log('\n— a projector tab opened hours into the evening —\n');
       throughout.split('\n').filter(Boolean).length > 10,
       `${throughout.split('\n').filter(Boolean).length} ops`);
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * One layer reading what another publishes
+ * ------------------------------------------------------------------ */
+
+console.log('\n— two layers that have to agree about the same wall —\n');
+{
+  /**
+   * Breach takes bricks out of the wall Brickwork laid, and finds out which
+   * bricks those are from the renderer's notice board.
+   *
+   * That board used to be written from Brickwork's `draw` and read from
+   * Breach's `step` — and a simulation runs before anything is painted. A tab
+   * that had been open all evening got away with it, reading last frame's
+   * entry; a tab that had just opened ran its entire catch-up, every step of
+   * the show so far, before Brickwork had painted once. It laid its holes to a
+   * different course and the two tabs never came back together: tentacles came
+   * out of different bricks in the projector and in the preview.
+   *
+   * Both orders, because nothing makes the publisher sit lower in the stack.
+   * Breach under Brickwork was the same bug without the catch-up: the reader
+   * simply ran first, every frame, for ever.
+   */
+  const layers = (order) => {
+    const brick = { effect: 'brickwork', params: {} };
+    const breach = { effect: 'breach', params: { rate: 30, holes: 2, arms: 1 } };
+    return order === 'brickwork first' ? [brick, breach] : [breach, brick];
+  };
+  for (const order of ['brickwork first', 'breach first']) {
+    const project = projectOf(layers(order));
+    const throughout = runTab(project, { until: 45, fps: 60, startAt: 0, include: 'frame' });
+    const justOpened = runTab(project, { until: 45, fps: 60, startAt: 43, include: 'frame' });
+    ok(`${order}: a tab opened two seconds ago breaches the same bricks`,
+      justOpened === throughout, firstDifference(throughout, justOpened));
+    ok(`${order}: and there is a hole in the wall to compare`,
+      throughout.split('\n').filter(Boolean).length > 10,
+      `${throughout.split('\n').filter(Boolean).length} ops`);
+  }
+
+  /**
+   * And the two orders agree with *each other*, which is the sharper form of
+   * the same question: where a layer sits in the stack decides what it is
+   * painted over, and must decide nothing whatever about what it simulates.
+   *
+   * Compared as a bag of drawing operations rather than as a sequence, because
+   * the sequence is exactly what stacking order is *supposed* to change — the
+   * wall is blitted before the holes are cut in one and after them in the
+   * other. What may not change is which marks get made, and every mark here
+   * carries its own coordinates, so a hole in a different brick shows up as a
+   * different bag however it is sorted.
+   */
+  const marks = (out) => out.split('\n').filter(Boolean).sort().join('\n');
+  // The *same* project restacked, not two built alike: a layer's id seeds its
+  // generator, and two freshly created layers are two different layers.
+  const restacked = projectOf(layers('brickwork first'));
+  const first = marks(runTab(restacked, { until: 20, fps: 60, include: 'frame' }));
+  restacked.layers[0].order = 1;
+  restacked.layers[1].order = 0;
+  const second = marks(runTab(restacked, { until: 20, fps: 60, include: 'frame' }));
+  ok('the same two layers breach the same bricks in either order',
+    first === second, firstDifference(first, second));
+}
+
+/* ------------------------------------------------------------------ *
+ * Every stateful effect, in a tab that opened late
+ * ------------------------------------------------------------------ */
+
+console.log('\n— every effect that carries state, in a tab opened two seconds ago —\n');
+{
+  /**
+   * The sweep above proves an effect agrees with itself at four frame rates.
+   * This one asks the harder question: does it agree with a tab that was not
+   * there for the first twelve seconds and had to replay them?
+   *
+   * A different question because a catch-up is not simply a slow frame. It runs
+   * hundreds of steps between paints, so anything an effect gets from outside
+   * its own state — the notice board, a modulated parameter, whatever the last
+   * `draw` left behind — is being read in a state no ordinary frame ever puts
+   * it in. Both faults this file was extended for were invisible to the
+   * frame-rate sweep and obvious here.
+   *
+   * Twelve seconds rather than the forty the two named effects below get: long
+   * enough for a spawn rate of a few a second to have populated a wall, short
+   * enough to sweep the whole library for the price of one of them.
+   */
+  let drew = 0;
+  let swept = 0;
+  for (const effect of listEffects().sort((a, b) => a.id.localeCompare(b.id))) {
+    if (!effect.step || effect.category === 'media' || WALL_CLOCK.has(effect.id)) continue;
+    swept++;
+    const project = projectOf([{ effect: effect.id, params: OVERRIDES[effect.id] || {} }],
+      `late_${effect.id}`);
+    const throughout = runTab(project, { until: 14, fps: 60, startAt: 0, include: 'frame' });
+    const justOpened = runTab(project, { until: 14, fps: 60, startAt: 12, include: 'frame' });
+    const ops = throughout.split('\n').filter(Boolean).length;
+    if (ops > 0) drew++;
+    ok(`${effect.id}: a tab opened two seconds ago (${ops} ops)`,
+      justOpened === throughout, firstDifference(throughout, justOpened));
+  }
+  /**
+   * Most of them have to have painted something, or the sweep is comparing two
+   * empty pictures and agreeing about nothing. Not all: a one-shot has finished
+   * by twelve seconds, which is the correct thing for it to have done.
+   */
+  ok('and most of them painted something to compare', drew > swept * 0.7,
+    `${drew} of ${swept} drew at t=14`);
+}
+
+/* ------------------------------------------------------------------ *
+ * A parameter that is moving while the tab catches up
+ * ------------------------------------------------------------------ */
+
+console.log('\n— a bound parameter, at four frame rates —\n');
+{
+  /**
+   * A slider bound to an LFO is a different number at every instant, and a
+   * simulation is a function of the numbers it was given at each step.
+   *
+   * The parameters used to be resolved once a frame and handed to every step
+   * that frame — right while a tab keeps up, and wrong the moment it does not.
+   * A tab catching up runs a whole evening of steps inside one frame, and every
+   * one of them saw the same value of a slider that had in fact been sweeping
+   * the whole time; a tab drawing at 24fps saw each value two or three steps
+   * running. So the same show simulated differently on every machine as soon as
+   * anything was bound to anything.
+   *
+   * Swept over the whole library rather than a chosen few, for the reason the
+   * sweep above exists: the next effect to be written is covered on the day it
+   * is written.
+   */
+  const bindable = (effect) =>
+    effect.params.find((d) => d.type === 'range' && d.key !== 'seed' && d.max > d.min);
+
+  let swept = 0;
+  for (const effect of listEffects().sort((a, b) => a.id.localeCompare(b.id))) {
+    if (!effect.step || effect.category === 'media' || WALL_CLOCK.has(effect.id)) continue;
+    const def = bindable(effect);
+    if (!def) continue;
+    swept++;
+    /**
+     * Three named seeds rather than one, because this class of fault is
+     * usually latent: Snow only culled the wrong flakes once the count had
+     * swept far enough down to cull any, and a single arbitrary snowfall found
+     * it about one run in four. Named, so a failure here is the same failure
+     * tomorrow.
+     */
+    let bad = null;
+    for (const seed of ['a', 'b', 'c']) {
+      const project = projectOf([{
+        effect: effect.id,
+        params: OVERRIDES[effect.id] || {},
+        // Unipolar and a quarter of the range, so it sweeps the slider hard
+        // without ever pinning it at an end where every value is the same value.
+        bindings: {
+          [def.key]: {
+            type: 'lfo', wave: 'sine', rate: 0.37, unipolar: true,
+            depth: (def.max - def.min) * 0.25,
+          },
+        },
+      }], `${effect.id}_${def.key}_${seed}`);
+      const reference = runTab(project, { until: 5, fps: 60 });
+      const slower = runTab(project, { until: 5, fps: 24 });
+      if (reference !== slower && !bad) bad = [seed, firstDifference(reference, slower)];
+    }
+    ok(`${effect.id}: ${def.key} bound to an LFO`, !bad,
+      bad ? `seed ${bad[0]} — ${bad[1]}` : '');
+  }
+  ok('the sweep covered the effects that carry state', swept > 15, `${swept} effects`);
+
+  /**
+   * And across a real catch-up, where the frozen value used to be frozen for
+   * an hour rather than for a frame.
+   */
+  const project = projectOf([{
+    effect: 'breach',
+    params: { rate: 30, holes: 2, arms: 1 },
+    bindings: { rate: { type: 'lfo', wave: 'sine', rate: 0.11, depth: 25, unipolar: true } },
+  }]);
+  const throughout = runTab(project, { until: 45, fps: 60, startAt: 0, include: 'frame' });
+  const justOpened = runTab(project, { until: 45, fps: 60, startAt: 43, include: 'frame' });
+  ok('a tab opened two seconds ago catches up through the same sweep',
+    justOpened === throughout, firstDifference(throughout, justOpened));
+  ok('and there is something on the wall to compare',
+    throughout.split('\n').filter(Boolean).length > 10,
+    `${throughout.split('\n').filter(Boolean).length} ops`);
 }
 
 /* ------------------------------------------------------------------ *

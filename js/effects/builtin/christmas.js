@@ -190,9 +190,25 @@ const snow = {
     g.save();
     g.clip(shape.path);
 
-    // Sorting back to front costs nothing at these counts and means near flakes
-    // correctly occlude far ones. Sorted once per frame, in place.
-    state.flakes.sort((a, b) => a.z - b.z);
+    /**
+     * Sorting back to front costs nothing at these counts and means near flakes
+     * correctly occlude far ones.
+     *
+     * Into a list of its own, emphatically not in place. `state.flakes` is
+     * simulation state, and the simulation shortens it from the end when the
+     * flake count comes down — so sorting it here made *which flakes survive* a
+     * question of how many times this tab had painted. Two tabs at different
+     * frame rates then culled different flakes and snowed differently for the
+     * rest of the evening, which only showed up with the count bound to
+     * something, because nothing else ever shortens the list.
+     *
+     * The list is kept on the state and refilled rather than rebuilt, so a
+     * couple of thousand flakes do not allocate an array a frame.
+     */
+    const order = state.order || (state.order = []);
+    order.length = state.flakes.length;
+    for (let i = 0; i < state.flakes.length; i++) order[i] = state.flakes[i];
+    order.sort((a, b) => a.z - b.z);
 
     // The drift sits on the house, so it belongs between the flakes falling
     // behind it and the ones falling in front. Splitting the pass at the depth
@@ -214,7 +230,7 @@ const snow = {
       }
     };
 
-    for (const flake of state.flakes) {
+    for (const flake of order) {
       const z = flake.z;
       const r = p.size * z * 0.5;
 
