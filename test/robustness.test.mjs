@@ -37,6 +37,7 @@
 
 import { listEffects, defaultParams, CATEGORIES } from '../js/effects/registry.js';
 import { makeRng } from '../js/core/math.js';
+import { EFFECT_TEMPLATE } from '../js/control/help.js';
 /**
  * The stand-in browser, the shapes and the runner.
  *
@@ -294,6 +295,86 @@ console.log('\n— two tabs draw the same frame —');
   }
   ok('every effect draws identically in two tabs at the same show time',
     differ.length === 0, differ.slice(0, 4).join(' | '));
+}
+
+/* ------------------------------------------------------------------ *
+ * The one everybody starts from
+ * ------------------------------------------------------------------ */
+
+console.log('\n— the starter template —');
+
+{
+  /**
+   * Nothing checked this at all, and it is the first line of every custom
+   * effect anybody writes. It is a plain module with no imports of its own —
+   * the registry appends the `fx` namespace, which the template does not use —
+   * so it loads here from a data: URL and faces the same rules as the eighty
+   * built-ins.
+   *
+   * The rule it was breaking is the one the whole `step`/`draw` split exists
+   * for. Its `step` advanced `state.phase` and its `draw` ignored it, animating
+   * straight off `t` — so the state was dead, and the example taught the shape
+   * that makes two projectors disagree. It also meant every effect started from
+   * this template declared a `step`, which puts it on the catch-up path: a tab
+   * joining an hour in runs 216,000 no-op steps before it draws anything.
+   */
+  let def = null;
+  let loadError = null;
+  try {
+    const url = `data:text/javascript;base64,${Buffer.from(EFFECT_TEMPLATE).toString('base64')}`;
+    def = (await import(url)).default;
+  } catch (err) {
+    loadError = err.message;
+  }
+
+  ok('the starter template is a module that loads', !!def, loadError || '');
+
+  if (def) {
+    ok('and exports the shape the registry insists on',
+      typeof def.draw === 'function' && Array.isArray(def.params) && !!def.name);
+
+    const declared = new Set(def.params.map((p) => p.key));
+    const used = new Set(
+      [...`${def.draw}${def.step || ''}${def.init || ''}`.matchAll(/\bp\.([A-Za-z_$][\w$]*)/g)]
+        .map((m) => m[1])
+    );
+    const unused = [...declared].filter((key) => !used.has(key));
+    const undeclared = [...used].filter((key) => !declared.has(key));
+    ok('every parameter it declares is one it uses', unused.length === 0, unused.join(', '));
+    ok('and every one it uses is declared', undeclared.length === 0, undeclared.join(', '));
+
+    /**
+     * The whole point of the example. `draw` paints what `step` decided, so
+     * somebody copying it copies the split rather than the thing that looks
+     * like it works on one machine.
+     */
+    if (def.step) {
+      const written = [...`${def.step}`.matchAll(/\bstate\.([A-Za-z_$][\w$]*)\s*=/g)].map((m) => m[1]);
+      const read = new Set([...`${def.draw}`.matchAll(/\bstate\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]));
+      const ignored = written.filter((key) => !read.has(key));
+      ok('what its `step` writes is what its `draw` paints', ignored.length === 0,
+        ignored.length ? `draw never reads state.${ignored.join(', state.')}` : '');
+      ok('and its `draw` does not animate off `t` behind `step`\'s back',
+        !/\bt\b\s*[*+\-/%]|[*+\-/%]\s*\bt\b/.test(`${def.draw}`.replace(/\/\/[^\n]*/g, '')));
+    }
+
+    // And it has to survive what every other effect survives.
+    const template = {
+      id: 'starter-template',
+      params: def.params,
+      init: def.init,
+      step: def.step,
+      draw: def.draw,
+    };
+    const broken = [];
+    for (const name of Object.keys(SHAPES)) {
+      const result = exercise(template, SHAPES[name], { p: Object.fromEntries(def.params.map((p) => [p.key, p.default])) });
+      if (result.threw) broken.push(`${name}: ${result.threw}`);
+      else if (result.bad.length) broken.push(`${name}: ${result.bad[0]}`);
+    }
+    ok('and it runs on every shape a project can contain', broken.length === 0,
+      broken.slice(0, 2).join(' | '));
+  }
 }
 
 restoreRandom();

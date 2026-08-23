@@ -35,10 +35,16 @@ export default {
   // \`dt\` and no canvas — which is what makes two projectors covering the same
   // wall paint the same animation. Move particles here; paint them in \`draw\`.
   step({ p, shape, t, dt, state, rng, noise }) {
-    state.phase = (state.phase || 0) + p.speed * dt;
+    state.phase = (state.phase || 0) + p.speed * dt * 0.1;
   },
 
-  draw({ g, p, shape, t, dt, i, n, state, rng, noise }) {
+  // Paints what \`step\` decided, and writes nothing. Reading \`state\` here and
+  // advancing it there is the whole split: an effect that instead animated
+  // straight off \`t\` while declaring a \`step\` would look right on one machine
+  // and pay for a catch-up it never uses. If yours has nothing to remember,
+  // delete \`step\` and use \`t\` — that is the right shape for a great many of
+  // them.
+  draw({ g, p, shape, i, n, state, rng, noise }) {
     const { bbox, path, sampler } = shape;
 
     g.save();
@@ -47,7 +53,7 @@ export default {
     for (let k = 0; k < p.count; k++) {
       // sampler.at(u) walks the outline at constant speed, wrapping on closed
       // shapes. This is how chases and light strings work.
-      const at = sampler.at((t * p.speed * 0.1 + k / p.count) % 1);
+      const at = sampler.at(((state.phase || 0) + k / p.count) % 1);
       g.fillStyle = p.color;
       g.beginPath();
       g.arc(at.x, at.y, bbox.h * 0.02, 0, Math.PI * 2);
