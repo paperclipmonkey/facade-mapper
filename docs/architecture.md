@@ -163,6 +163,7 @@ node test/triggers.test.mjs    # holds, restores, timers, hotkeys and the HTTP h
 node test/migrate.test.mjs     # every project ever saved, arriving at a newer copy
 node test/bus.test.mjs         # cross-tab messages, the mirror, and who is alive
 node test/picker.test.mjs      # the effect gallery: cards, search, and letting go
+node test/storage.test.mjs     # saving, the show list, importing, and a full disk
 node test/collide.test.mjs     # heightfields, landing, slumping, shedding
 node test/obstacles.test.mjs   # facade collision, automatic edge blending
 node test/figures.test.mjs     # the drawn figures
@@ -215,6 +216,12 @@ and why the projector keeps asking until a project arrives.
 stand-in DOM, counting what the IntersectionObserver is holding. Observers keep
 their targets alive, the card set is rebuilt on every keystroke in the search
 box, and nothing about the resulting leak is visible from the app.
+
+[`storage.test.mjs`](../test/storage.test.mjs) covers the whole of the app's
+persistence, which is localStorage and nothing else: a project written over is
+a project gone. The import path is the part worth the attention, because it is
+the one place that writes a project somebody did not just have open, under an
+id it works out for itself.
 
 [`migrate.test.mjs`](../test/migrate.test.mjs) holds the narrowest gate in the
 codebase: nothing reaches the renderer without passing through `migrateProject`,
