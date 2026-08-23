@@ -124,9 +124,24 @@ export function releaseFeed(deviceId) {
   const entry = feeds.get(deviceId);
   if (!entry) return;
   entry.stream?.getTracks?.().forEach((t) => t.stop());
-  // A network stream keeps pulling until its source is cleared, and an MJPEG
-  // `<img>` will happily hold a connection open for the rest of the evening.
-  if (entry.el) entry.el.src = '';
+  /**
+   * Both shapes of entry, because there are two.
+   *
+   * A camera device keeps its `<video>` under `video`; a network stream keeps
+   * its `<img>` or `<video>` under `el`. Only `el` was being cleared, so a
+   * released camera left an element still holding the (now dead) MediaStream —
+   * and a network stream keeps pulling until its source is gone, an MJPEG
+   * `<img>` happily holding a connection open for the rest of the evening.
+   *
+   * `removeAttribute` rather than `src = ''`, which in some browsers is a
+   * request for the page's own URL.
+   */
+  const el = entry.el || entry.video;
+  if (el) {
+    if ('srcObject' in el) el.srcObject = null;
+    el.removeAttribute?.('src');
+    el.load?.();
+  }
   feeds.delete(deviceId);
 }
 

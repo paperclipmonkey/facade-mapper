@@ -408,6 +408,16 @@ export function migrateProject(raw) {
   p.layers = (Array.isArray(raw.layers) ? raw.layers : []).map((l) => ({
     ...createLayer(l.effect || 'fill'),
     ...l,
+    /**
+     * Restated after the spread, not only before it.
+     *
+     * `createLayer`'s fallback covers a layer with no `effect` key at all; the
+     * spread then puts a stored `effect: null` straight back over the top of
+     * it. The registry answers `null` for that, the renderer skips the layer,
+     * and the layer list goes on saying it is switched on — the exact silence
+     * this whole function exists to prevent.
+     */
+    effect: l.effect || 'fill',
     params: { ...(l.params || {}) },
     bindings: { ...(l.bindings || {}) },
   }));
@@ -430,11 +440,24 @@ export function migrateProject(raw) {
     return scene;
   });
 
-  p.triggers = (Array.isArray(raw.triggers) ? raw.triggers : []).map((t) => ({
-    ...createTrigger(),
-    ...t,
-    region: { ...createTrigger().region, ...(t.region || {}) },
-  }));
+  p.triggers = (Array.isArray(raw.triggers) ? raw.triggers : []).map((t) => {
+    const base = createTrigger();
+    const merged = { ...base, ...t };
+    merged.region = { ...base.region, ...(t.region || {}) };
+    /**
+     * The hooks are merged a level down, like the region and for the same
+     * reason: a trigger saved with one of them configured carries only that
+     * one, and `{ ...base, ...t }` replaces the pair wholesale rather than
+     * filling the gap. The inspector papers over the result by rebuilding a
+     * missing hook when you open it, which means the hole is invisible until
+     * somebody fires the trigger without having opened it.
+     */
+    merged.http = {
+      before: { ...base.http.before, ...(t.http?.before || {}) },
+      after: { ...base.http.after, ...(t.http?.after || {}) },
+    };
+    return merged;
+  });
 
   p.userEffects = Array.isArray(raw.userEffects) ? raw.userEffects : [];
   p.media = Array.isArray(raw.media) ? raw.media : [];

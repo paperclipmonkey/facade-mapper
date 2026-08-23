@@ -124,9 +124,19 @@ export function createClock() {
   return { tick, setTransport, getTransport, play, pause, stop, timeNow };
 }
 
+/**
+ * Show time as mm:ss.t.
+ *
+ * Rounded to tenths *before* it is split, which is not fussiness. Splitting
+ * first takes the minutes from the unrounded number and the seconds from the
+ * rounded one, and for the last twentieth of every minute those two disagree:
+ * 59.96 seconds is nought minutes and sixty-point-nought seconds, so the
+ * readout in the control tab and on the phone showed `00:60.0` for a frame or
+ * two, once a minute, all evening.
+ */
 export function formatTime(seconds) {
-  const s = Math.max(0, seconds || 0);
-  const m = Math.floor(s / 60);
-  const rem = s - m * 60;
+  const tenths = Math.round(Math.max(0, seconds || 0) * 10);
+  const m = Math.floor(tenths / 600);
+  const rem = (tenths - m * 600) / 10;
   return `${String(m).padStart(2, '0')}:${rem.toFixed(1).padStart(4, '0')}`;
 }

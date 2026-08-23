@@ -60,14 +60,36 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange 
       sound?.play(trigger.sound, { volume: trigger.soundVolume ?? 1 });
     }
 
+    /**
+     * A hold this firing is cutting short.
+     *
+     * Its scene is superseded either way — that is what firing a second
+     * trigger means — but its `after` hook is not about the scene. That hook
+     * is what puts the *rest* of the house back: the gutter off red, the fog
+     * machine off, the inflatable back on. Dropping the hold without it left
+     * every one of those in the scare state for the remainder of the evening,
+     * with nothing on screen to say so, because the moment that would have
+     * fired it never arrives.
+     *
+     * Only for a different trigger. The same one firing again is a scare being
+     * extended, and sending its own reset in the middle of that would be an
+     * off and an on that nobody asked for.
+     */
+    const superseded =
+      holding && holding.triggerId !== trigger.id
+        ? (app.project.triggers || []).find((t) => t.id === holding.triggerId)
+        : null;
+
     const hold = Math.max(0, trigger.hold ?? 0);
     if (hold > 0) {
       holding = { until: Date.now() + hold * 1000, restoreTo, triggerId: trigger.id };
       armWake(hold * 1000 + 60);
     } else {
       holding = null;
+      clearTimeout(wakeTimer);
     }
 
+    if (superseded) call(superseded, 'after');
     call(trigger, 'before');
 
     gate.markFired(trigger.id);
