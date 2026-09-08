@@ -157,7 +157,7 @@ const wanderer = {
     { key: 'nod', type: 'range', label: 'Nods to the beat', default: 0.45, min: 0, max: 1, step: 0.01 },
     { key: 'headphones', type: 'bool', label: 'Headphones', default: true },
     { key: 'hood', type: 'bool', label: 'Hood up', default: true },
-    { key: 'line', type: 'range', label: 'Outline', default: 3, min: 0, max: 12, step: 0.5 },
+    { key: 'line', type: 'range', label: 'Outline', default: 2, min: 0, max: 12, step: 0.5 },
   ],
 
   init() {
@@ -254,7 +254,7 @@ const wanderer = {
 
     /* -- blinking and ear flicks ------------------------------------ */
 
-    state.blink = Math.max(0, state.blink - dt * 7.5);
+    state.blink = Math.max(0, state.blink - dt * 5);
     state.blinkIn -= dt;
     if (state.blinkIn <= 0) {
       state.blink = 1;
@@ -425,7 +425,25 @@ function posture(p, state, t, beat) {
   // contact. Small — a couple of percent of height — and its absence is what
   // makes a walk look like a slide.
   const bob = moving ? Math.cos(phase * TAU * 2) * 0.022 : 0;
+  // The head arrives a little after the body, and the ears after the head:
+  // the same bob, read a few percent of a cycle late, twice over. Lag is
+  // what turns a rigid rig into a thing with mass in it.
+  const bobLate = moving ? Math.cos((phase - 0.06) * TAU * 2) * 0.022 : 0;
+  const flop = moving ? Math.sin((phase - 0.1) * TAU * 2) * 0.13 : 0;
   const breathe = Math.sin(t * (sit > 0.5 ? 0.75 : 1.15)) * (moving ? 0.004 : 0.012);
+
+  /**
+   * The eyelid, which is where most of the expression lives.
+   *
+   * At rest it sits a third of the way down — the relaxed, half-lidded look
+   * of somebody listening to something — and lower still when they sit. A
+   * blink closes over it fast and opens slowly, the way a real one does; a
+   * blink that closes and opens at the same rate reads as a shutter.
+   */
+  const blinkT = clamp(state.blink, 0, 1);
+  const closing = blinkT > 0.7 ? (1 - blinkT) / 0.3 : blinkT / 0.7;
+  const rest = 0.24 + sit * 0.14 + (idle === 'stretch' ? -0.2 : 0) * idleAmt;
+  const lid = idle === 'yawn' ? Math.max(closing, idleAmt) : Math.max(rest, closing);
 
   // The one thing they are actually here for.
   const groove = clamp(p.nod, 0, 1) * (0.5 + 0.5 * (1 - sit))
@@ -438,18 +456,22 @@ function posture(p, state, t, beat) {
     // Sitting drops the hips most of the way to the ledge, which is what puts
     // the knees up by the chest without a single extra number.
     bodyY: bob + breathe + sit * 0.2,
+    squash: moving ? -Math.cos(phase * TAU * 2) * 0.016 : 0,
     lean: (moving ? 0.05 : 0.012) + sit * 0.05 - (idle === 'stretch' ? idleAmt * 0.14 : 0),
-    headBob: -bob * 0.6 + groove,
+    headBob: -bobLate * 0.6 + groove,
+    flop,
+    lid,
     headTurn: idle === 'look' ? -idleAmt : (moving ? 0.08 : 0) + groove * 0.5,
-    headTilt: (idle === 'headphones' ? -0.16 : 0) * idleAmt
-      + (idle === 'stretch' ? -0.22 : 0) * idleAmt
+    // A little nose-down at rest. Somebody looking at the gutter in front
+    // of them rather than at the horizon, which is what a slouch is.
+    headTilt: 0.07 + (idle === 'headphones' ? -0.16 : 0) * idleAmt
+      + (idle === 'stretch' ? -0.3 : 0) * idleAmt
       + groove * 1.6,
     // Hands: the arms swing against the legs unless they are busy.
     reach: idle === 'headphones' ? idleAmt : 0,
     pocket: idle === 'pockets' ? idleAmt : 0,
     stretch: idle === 'stretch' ? idleAmt : 0,
     mouth: idle === 'yawn' ? idleAmt : 0,
-    blink: idle === 'yawn' ? Math.max(state.blink, idleAmt) : clamp(state.blink, 0, 1),
     flick: state.flick * state.flick,
     swing: moving ? Math.sin(phase * TAU) : Math.sin(t * 0.6) * 0.06,
     tail: state.tail,
@@ -470,13 +492,25 @@ function posture(p, state, t, beat) {
  * head has to be big enough that an eye and a muzzle survive being forty
  * pixels of projector, and the tail has to be big enough to read as a
  * separate thing from the body when both are the same colour.
+ *
+ * Four things keep it out of the uncanny valley, and the first draft of this
+ * rig had none of them. **One point of view**: the head is a profile, with
+ * the snout in the outline, not a front-on circle with a muzzle pasted to
+ * one side of it. **No perfect circles**: every silhouette is a hand-drawn
+ * curve with a heavy side and a light side. **Volume from shading, not
+ * outline**: each part is a top-lit gradient with an edge in its own darker
+ * colour, rather than a flat fill in a uniform black line, which is what
+ * makes clip-art look like clip-art. And **a relaxed face**: the eye rests
+ * half-lidded, which is the single cheapest way to make a face look calm
+ * rather than startled, and a blink closes fast and opens slow the way a
+ * real one does.
  * ------------------------------------------------------------------ */
 
 const HIP_Y = -0.30;
-const HEM_Y = -0.26;
+const HEM_Y = -0.24;
 const SHOULDER_Y = -0.56;
 const HEAD_Y = -0.78;
-const HEAD_R = 0.19;
+const HEAD_R = 0.2;
 /** How far a foot travels either side of the hip, in body heights. */
 const STRIDE = 0.11;
 /**
@@ -494,17 +528,34 @@ const STRIDE = 0.11;
 const GAIT_CYCLE = 4 * STRIDE;
 const TAIL_SEG = 0.078;
 
+/** The edge of a part is that part's own colour, taken down — never plain ink. */
+function edgeOf(colour, ink) {
+  return mixLinear(colour, ink, 0.55);
+}
+
+/** A top-lit fill between two heights, in the current transform. */
+function litFill(g, colour, ink, top, bottom, lift = 0.12, drop = 0.3) {
+  const grad = g.createLinearGradient(0, top, 0, bottom);
+  grad.addColorStop(0, mixLinear(colour, '#ffffff', lift));
+  grad.addColorStop(0.55, colour);
+  grad.addColorStop(1, mixLinear(colour, ink, drop));
+  return grad;
+}
+
 function drawWanderer(g, p, a, unit) {
   const ink = p.ink;
   const line = p.line * unit;
 
   const dark = mixLinear(p.hoodie, ink, 0.45);
-  const furShade = mixLinear(p.fur, ink, 0.35);
 
   g.lineJoin = 'round';
   g.lineCap = 'round';
   g.lineWidth = line;
-  g.strokeStyle = ink;
+
+  // Squash on the contact and stretch through the swing, about the feet.
+  // Two percent — invisible as a shape, unmistakable as weight.
+  g.save();
+  g.scale(1 + a.squash, 1 - a.squash);
 
   // Behind everything, and the first thing the eye finds.
   drawTail(g, a, p.hoodie, dark, line, ink);
@@ -530,51 +581,63 @@ function drawWanderer(g, p, a, unit) {
   g.translate(0, SHOULDER_Y);
   g.rotate(a.headTilt + a.headTurn * 0.5);
   g.translate(0, -SHOULDER_Y);
-  drawHead(g, p, a, furShade, ink, line);
+  drawHead(g, p, a, ink, line);
   g.restore();
 
   drawArm(g, a, 0, p.hoodie, ink, line);
 
   if (p.rimAmount > 0) drawRim(g, p, a, line);
+  g.restore();
 }
 
-/** The hoodie: a bell from the shoulders to the hem, with a pouch on it. */
+/**
+ * The hoodie: a slouched torso, rounded at the back, with a pouch on it.
+ *
+ * Rounded at the *back* specifically. A symmetrical bell reads as a toy;
+ * the curve of a spine under a hoodie is convex behind and nearly straight
+ * in front, and that one asymmetry is most of what makes it a body.
+ */
 function drawBody(g, a, p, ink, line) {
   const hem = HEM_Y + a.sit * 0.05;
   const sh = SHOULDER_Y;
   const flare = 1 + a.sit * 0.18;
+  const back = -0.22 * flare;
+  const front = 0.19 * flare;
 
   g.beginPath();
-  g.moveTo(-0.16, sh + 0.02);
-  g.bezierCurveTo(-0.21 * flare, sh + 0.1, -0.22 * flare, hem - 0.06, -0.21 * flare, hem);
-  g.quadraticCurveTo(0, hem + 0.05, 0.2 * flare, hem);
-  g.bezierCurveTo(0.21 * flare, hem - 0.06, 0.2 * flare, sh + 0.1, 0.15, sh + 0.02);
-  g.quadraticCurveTo(0, sh - 0.025, -0.16, sh + 0.02);
+  g.moveTo(-0.13, sh + 0.01);
+  g.bezierCurveTo(-0.25, sh + 0.05, -0.27, hem - 0.1, back, hem);
+  g.quadraticCurveTo(-0.02, hem + 0.045, front, hem);
+  g.bezierCurveTo(0.21, hem - 0.1, 0.17, sh + 0.08, 0.12, sh + 0.01);
+  g.quadraticCurveTo(0, sh - 0.025, -0.13, sh + 0.01);
   g.closePath();
-  g.fillStyle = p.hoodie;
+  g.fillStyle = litFill(g, p.hoodie, ink, sh, hem);
   g.fill();
-  if (line > 0) g.stroke();
+  if (line > 0) {
+    g.strokeStyle = edgeOf(p.hoodie, ink);
+    g.lineWidth = line;
+    g.stroke();
+  }
 
   // The pouch. Two things hang off it: the hands, when they go in, and the
-  // fact that a flat orange bell has no scale to it until something crosses it.
+  // fact that a flat orange shape has no scale to it until something crosses it.
   g.beginPath();
-  g.moveTo(-0.16, hem - 0.1);
-  g.quadraticCurveTo(0, hem - 0.06, 0.16, hem - 0.1);
-  g.strokeStyle = mixLinear(p.hoodie, ink, 0.4);
-  g.lineWidth = Math.max(line, 0.011);
+  g.moveTo(-0.15, hem - 0.095);
+  g.quadraticCurveTo(0, hem - 0.055, 0.15, hem - 0.095);
+  g.strokeStyle = mixLinear(p.hoodie, ink, 0.32);
+  g.lineWidth = Math.max(line * 0.9, 0.01);
   g.stroke();
 
   // Drawstrings, which swing a beat behind the body.
   const swing = a.swing * 0.03;
-  for (const side of [-0.05, 0.04]) {
+  for (const side of [-0.04, 0.05]) {
     g.beginPath();
-    g.moveTo(side, sh + 0.03);
-    g.quadraticCurveTo(side + swing * 0.5, sh + 0.08, side + swing, sh + 0.12);
-    g.strokeStyle = mixLinear(p.fur, ink, 0.1);
-    g.lineWidth = Math.max(line * 0.7, 0.008);
+    g.moveTo(side, sh + 0.035);
+    g.quadraticCurveTo(side + swing * 0.5, sh + 0.085, side + swing, sh + 0.125);
+    g.strokeStyle = mixLinear(p.fur, ink, 0.12);
+    g.lineWidth = Math.max(line * 0.6, 0.008);
     g.stroke();
   }
-  g.strokeStyle = ink;
   g.lineWidth = line;
 }
 
@@ -592,7 +655,16 @@ function drawLeg(g, a, which, colour, ink, line) {
     x: lerp(hip.x, foot.x, 0.5) + 0.035 + a.sit * 0.05,
     y: lerp(hip.y, foot.y, 0.52),
   };
+  const edge = edgeOf(colour, ink);
 
+  if (line > 0) {
+    g.beginPath();
+    g.moveTo(hip.x, hip.y);
+    g.quadraticCurveTo(knee.x, knee.y, foot.x, foot.y - 0.03);
+    g.strokeStyle = edge;
+    g.lineWidth = 0.062 + line * 2;
+    g.stroke();
+  }
   g.beginPath();
   g.moveTo(hip.x, hip.y);
   g.quadraticCurveTo(knee.x, knee.y, foot.x, foot.y - 0.03);
@@ -600,12 +672,17 @@ function drawLeg(g, a, which, colour, ink, line) {
   g.lineWidth = 0.062;
   g.stroke();
 
+  // A paw: a rounded shape with the heel behind and the toes ahead, rather
+  // than an ellipse, which has neither.
   g.beginPath();
-  g.ellipse(foot.x + 0.018, foot.y - 0.022, 0.05, 0.026, 0, 0, TAU);
-  g.fillStyle = colour;
+  g.moveTo(foot.x - 0.035, foot.y - 0.005);
+  g.quadraticCurveTo(foot.x - 0.04, foot.y - 0.048, foot.x + 0.005, foot.y - 0.045);
+  g.quadraticCurveTo(foot.x + 0.075, foot.y - 0.042, foot.x + 0.07, foot.y - 0.005);
+  g.closePath();
+  g.fillStyle = mixLinear(colour, ink, 0.12);
   g.fill();
   if (line > 0) {
-    g.strokeStyle = ink;
+    g.strokeStyle = edge;
     g.lineWidth = line;
     g.stroke();
   }
@@ -621,21 +698,21 @@ function drawLeg(g, a, which, colour, ink, line) {
  */
 function drawArm(g, a, which, colour, ink, line) {
   /**
-   * The shoulder sits on the *edge* of the bell, not in the middle of it.
+   * The shoulder sits on the *edge* of the torso, not in the middle of it.
    *
    * An arm the same colour as the hoodie, drawn down the middle of the
    * hoodie, is not an arm — it is nothing at all, which is exactly what the
-   * first version of this drew. Hanging it off the silhouette and outlining it
+   * first version of this drew. Hanging it off the silhouette and edging it
    * is what makes it a limb.
    */
   const side = which ? -1 : 1;
-  const sh = { x: side * 0.135, y: SHOULDER_Y + a.bodyY + 0.055 };
+  const sh = { x: side * 0.13, y: SHOULDER_Y + a.bodyY + 0.06 };
   const swing = which ? -a.swing : a.swing;
 
-  const free = { x: sh.x + side * 0.035 + swing * 0.075, y: HEM_Y + a.bodyY - 0.005 };
-  const pouch = { x: side * 0.075, y: HEM_Y + a.bodyY - 0.085 };
-  const cup = { x: -0.055, y: HEAD_Y + a.bodyY + 0.005 };
-  const over = { x: side * 0.06, y: sh.y - 0.28 };
+  const free = { x: sh.x + side * 0.03 + swing * 0.075, y: HEM_Y + a.bodyY - 0.01 };
+  const pouch = { x: side * 0.07, y: HEM_Y + a.bodyY - 0.08 };
+  const cup = { x: -0.04, y: HEAD_Y + a.bodyY - 0.01 };
+  const over = { x: -0.04 + side * 0.02, y: sh.y - 0.37 };
 
   let hx = lerp(free.x, pouch.x, a.pocket);
   let hy = lerp(free.y, pouch.y, a.pocket);
@@ -651,15 +728,13 @@ function drawArm(g, a, which, colour, ink, line) {
     x: lerp(sh.x, hx, 0.5) + side * (0.045 + reach * 0.05),
     y: lerp(sh.y, hy, 0.55),
   };
+  const edge = edgeOf(colour, ink);
 
-  // Outlined by stroking it fat in ink first and the sleeve over the top: an
-  // arm crossing a body of its own colour needs the edge, and stroking a
-  // quadratic twice is cheaper than building a closed outline for it.
   if (line > 0) {
     g.beginPath();
     g.moveTo(sh.x, sh.y);
     g.quadraticCurveTo(elbow.x, elbow.y, hx, hy);
-    g.strokeStyle = ink;
+    g.strokeStyle = edge;
     g.lineWidth = 0.058 + line * 2;
     g.stroke();
   }
@@ -670,12 +745,23 @@ function drawArm(g, a, which, colour, ink, line) {
   g.lineWidth = 0.058;
   g.stroke();
 
+  // A cuff where the sleeve ends, then the paw out of it. The cuff is a
+  // single short dark stroke and it is what turns a tube into a sleeve.
+  const cx = lerp(elbow.x, hx, 0.8);
+  const cy = lerp(elbow.y, hy, 0.8);
   g.beginPath();
-  g.arc(hx, hy, 0.04, 0, TAU);
-  g.fillStyle = mixLinear(colour, '#ffffff', 0.08);
+  g.moveTo(cx, cy);
+  g.lineTo(lerp(cx, hx, 0.5), lerp(cy, hy, 0.5));
+  g.strokeStyle = mixLinear(colour, ink, 0.3);
+  g.lineWidth = 0.062;
+  g.stroke();
+
+  g.beginPath();
+  g.arc(hx, hy, 0.037, 0, TAU);
+  g.fillStyle = mixLinear(colour, ink, 0.1);
   g.fill();
   if (line > 0) {
-    g.strokeStyle = ink;
+    g.strokeStyle = edge;
     g.lineWidth = line;
     g.stroke();
   }
@@ -707,12 +793,12 @@ function drawTail(g, a, light, dark, line, ink) {
   const ys = [];
   const n = tailPoints(a, xs, ys);
 
-  // Outline first, as one fat stroke under the lot, so the rings do not each
+  // Edge first, as one fat stroke under the lot, so the rings do not each
   // get an outline of their own and read as a caterpillar.
   if (line > 0) {
     g.beginPath();
     curveThrough(g, xs, ys, n, { move: true });
-    g.strokeStyle = ink;
+    g.strokeStyle = edgeOf(dark, ink);
     g.lineWidth = 0.185 + line * 2;
     g.stroke();
   }
@@ -735,167 +821,222 @@ function drawTail(g, a, light, dark, line, ink) {
   g.fill();
 }
 
-/** Head, hood, ears, muzzle, eye and the headphones over the lot. */
-function drawHead(g, p, a, furShade, ink, line) {
-  const cx = 0.02;
+/**
+ * The head, in profile.
+ *
+ * One closed curve with the snout in it — back of the skull, crown, brow,
+ * down the nose, round under the chin. Everything else on the face is laid
+ * *inside* that outline: the pale muzzle and cheek, the tear stripe, a
+ * half-lidded eye. Nothing is pasted on the outside of a circle, which is
+ * what a face has to avoid to be looked at for more than a second.
+ */
+function headPath(g, cx, cy) {
+  g.moveTo(cx - 0.12, cy + 0.17);
+  g.bezierCurveTo(cx - 0.25, cy + 0.11, cx - 0.25, cy - 0.19, cx - 0.06, cy - 0.215);
+  g.bezierCurveTo(cx + 0.03, cy - 0.235, cx + 0.1, cy - 0.2, cx + 0.14, cy - 0.15);
+  g.bezierCurveTo(cx + 0.21, cy - 0.1, cx + 0.28, cy - 0.01, cx + 0.265, cy + 0.045);
+  g.bezierCurveTo(cx + 0.26, cy + 0.12, cx + 0.2, cy + 0.165, cx + 0.1, cy + 0.175);
+  g.quadraticCurveTo(cx, cy + 0.19, cx - 0.12, cy + 0.17);
+  g.closePath();
+}
+
+function drawHead(g, p, a, ink, line) {
+  const cx = 0.03;
   const cy = HEAD_Y;
   const hood = p.hood;
+  const fur = p.fur;
+  const furEdge = edgeOf(fur, ink);
+  const pale = mixLinear(fur, '#ffffff', 0.5);
+  const shade = mixLinear(fur, ink, 0.4);
 
-  /* -- the far ear, behind the head --------------------------------- */
-  drawEar(g, cx - 0.145, cy - 0.135, 0.062, -0.62 - a.flick * 0.35,
-    mixLinear(p.fur, ink, 0.55), ink, line * 0.7);
+  /* -- the far ear ---------------------------------------------------- */
+  drawEar(g, cx - 0.14, cy - 0.16, 0.068, -0.55 - a.flick * 0.3 - a.flop,
+    mixLinear(fur, ink, 0.45), ink, line * 0.7);
 
-  /* -- the hood, behind the face ------------------------------------ */
+  /* -- the hood, as a bigger head behind the head ---------------------- */
   if (hood) {
     // The collar first: a skirt from the back of the head down onto the
-    // shoulders. Without it the head visibly detaches on any frame where the
-    // neck rotation and the body bob happen to pull in opposite directions.
+    // shoulders, so the head cannot detach on a frame where the neck turn
+    // and the body bob pull in opposite directions.
     g.beginPath();
-    g.moveTo(cx - 0.2, cy + 0.02);
-    g.quadraticCurveTo(cx - 0.19, SHOULDER_Y - 0.01, cx - 0.09, SHOULDER_Y + 0.02);
+    g.moveTo(cx - 0.22, cy + 0.06);
+    g.quadraticCurveTo(cx - 0.21, SHOULDER_Y - 0.01, cx - 0.1, SHOULDER_Y + 0.02);
     g.lineTo(cx + 0.11, SHOULDER_Y + 0.02);
-    g.quadraticCurveTo(cx + 0.16, cy + 0.14, cx + 0.13, cy + 0.02);
+    g.quadraticCurveTo(cx + 0.17, cy + 0.16, cx + 0.14, cy + 0.06);
     g.closePath();
-    g.fillStyle = mixLinear(p.hoodie, ink, 0.28);
+    g.fillStyle = mixLinear(p.hoodie, ink, 0.3);
     g.fill();
-    if (line > 0) g.stroke();
 
+    g.save();
+    g.translate(cx - 0.035, cy + 0.005);
+    g.scale(1.22, 1.2);
+    g.translate(-cx, -cy);
     g.beginPath();
-    g.ellipse(cx - 0.045, cy - 0.005, HEAD_R * 1.24, HEAD_R * 1.2, 0, 0, TAU);
-    g.fillStyle = mixLinear(p.hoodie, ink, 0.14);
+    headPath(g, cx, cy);
+    g.restore();
+    g.fillStyle = litFill(g, mixLinear(p.hoodie, ink, 0.08), ink, cy - 0.27, cy + 0.2, 0.1, 0.35);
     g.fill();
-    if (line > 0) g.stroke();
+    if (line > 0) {
+      g.strokeStyle = edgeOf(p.hoodie, ink);
+      g.lineWidth = line;
+      g.stroke();
+    }
   }
 
-  /* -- the face ----------------------------------------------------- */
+  /* -- the face ---------------------------------------------------------- */
   g.beginPath();
-  g.ellipse(cx, cy, HEAD_R, HEAD_R * 0.95, 0, 0, TAU);
-  g.fillStyle = p.fur;
+  headPath(g, cx, cy);
+  g.fillStyle = litFill(g, fur, ink, cy - 0.22, cy + 0.18, 0.1, 0.22);
   g.fill();
-  if (line > 0) g.stroke();
 
-  // Muzzle, pushed forward of the face so there is a snout in profile rather
-  // than a circle with a nose painted on it.
-  g.beginPath();
-  g.ellipse(cx + 0.15, cy + 0.045, 0.09, 0.062, -0.12, 0, TAU);
-  g.fillStyle = mixLinear(p.fur, '#ffffff', 0.4);
-  g.fill();
-  if (line > 0) g.stroke();
-
-  // The eyebrow mask, the marking that makes it read as this animal and not a
-  // bear. Kept faint — at forty pixels it is a value, not a shape.
+  // Markings, clipped to the head: a pale muzzle running back into a pale
+  // cheek, and the tear stripe from the eye down through it. These are the
+  // three marks that say which animal this is, and they are values on the
+  // face rather than shapes stuck to it.
   g.save();
-  g.globalAlpha *= 0.5;
+  g.clip();
+  g.fillStyle = pale;
   g.beginPath();
-  g.moveTo(cx + 0.02, cy - 0.115);
-  g.quadraticCurveTo(cx + 0.14, cy - 0.085, cx + 0.17, cy - 0.02);
-  g.quadraticCurveTo(cx + 0.08, cy - 0.045, cx + 0.02, cy - 0.03);
-  g.closePath();
-  g.fillStyle = furShade;
+  g.ellipse(cx + 0.19, cy + 0.075, 0.12, 0.085, -0.15, 0, TAU);
+  g.fill();
+  g.beginPath();
+  g.ellipse(cx + 0.04, cy + 0.09, 0.09, 0.07, 0.2, 0, TAU);
+  g.fill();
+  g.globalAlpha *= 0.45;
+  g.fillStyle = shade;
+  g.beginPath();
+  g.ellipse(cx + 0.12, cy + 0.03, 0.028, 0.06, 0.35, 0, TAU);
   g.fill();
   g.restore();
 
-  // Nose.
+  if (line > 0) {
+    g.beginPath();
+    headPath(g, cx, cy);
+    g.strokeStyle = furEdge;
+    g.lineWidth = line;
+    g.stroke();
+  }
+
+  /* -- the eye ------------------------------------------------------------ */
+  const ex = cx + 0.145;
+  const ey = cy - 0.045;
+  const lid = clamp(a.lid, 0, 1);
+  // The eye itself: an almond, heavier below than above.
   g.beginPath();
-  g.ellipse(cx + 0.225, cy + 0.005, 0.024, 0.019, 0, 0, TAU);
+  g.moveTo(ex - 0.042, ey + 0.002);
+  g.quadraticCurveTo(ex, ey - 0.05, ex + 0.04, ey);
+  g.quadraticCurveTo(ex, ey + 0.04, ex - 0.042, ey + 0.002);
+  g.closePath();
+  g.fillStyle = ink;
+  g.fill();
+  if (lid < 0.85) {
+    g.beginPath();
+    g.arc(ex + 0.013, ey - 0.006 + lid * 0.02, 0.012, 0, TAU);
+    g.fillStyle = '#ffffff';
+    g.save();
+    g.globalAlpha *= 0.85;
+    g.fill();
+    g.restore();
+  }
+  // The lid comes down over it in the face colour, and its edge is a line.
+  // At rest it sits a third of the way down, which is the whole of the
+  // difference between a face that is calm and a face that is alarmed.
+  const lidY = ey - 0.048 + lid * 0.088;
+  g.save();
+  g.beginPath();
+  g.moveTo(ex - 0.05, ey - 0.05);
+  g.lineTo(ex + 0.05, ey - 0.05);
+  g.lineTo(ex + 0.05, lidY + 0.004);
+  g.quadraticCurveTo(ex, lidY - 0.012 * (1 - lid), ex - 0.05, lidY + 0.004);
+  g.closePath();
+  g.fillStyle = fur;
+  g.fill();
+  g.restore();
+  g.beginPath();
+  g.moveTo(ex - 0.046, lidY + 0.004);
+  g.quadraticCurveTo(ex, lidY - 0.012 * (1 - lid), ex + 0.046, lidY + 0.004);
+  g.strokeStyle = furEdge;
+  g.lineWidth = Math.max(line * 0.9, 0.011);
+  g.stroke();
+
+  /* -- nose and mouth ------------------------------------------------------ */
+  g.beginPath();
+  g.ellipse(cx + 0.252, cy + 0.03, 0.024, 0.018, 0.2, 0, TAU);
   g.fillStyle = ink;
   g.fill();
 
-  /* -- the eye ------------------------------------------------------ */
-  const open = 1 - clamp(a.blink, 0, 1);
-  const ex = cx + 0.095;
-  const ey = cy - 0.035;
-  if (open > 0.08) {
-    g.beginPath();
-    g.ellipse(ex, ey, 0.038, 0.044 * open, 0, 0, TAU);
-    g.fillStyle = ink;
-    g.fill();
-    // The catchlight. Two pixels of white, and it is the difference between an
-    // eye and a hole.
-    g.beginPath();
-    g.arc(ex + 0.014, ey - 0.015 * open, 0.013, 0, TAU);
-    g.fillStyle = '#ffffff';
-    g.save();
-    g.globalAlpha *= 0.9;
-    g.fill();
-    g.restore();
-  } else {
-    g.beginPath();
-    g.moveTo(ex - 0.042, ey);
-    g.quadraticCurveTo(ex, ey + 0.026, ex + 0.042, ey);
-    g.strokeStyle = ink;
-    g.lineWidth = Math.max(line, 0.013);
-    g.stroke();
-    g.strokeStyle = ink;
-    g.lineWidth = line;
-  }
-
-  /* -- the mouth, when they yawn ------------------------------------ */
   if (a.mouth > 0.02) {
     g.beginPath();
-    g.ellipse(cx + 0.16, cy + 0.09, 0.038, 0.048 * a.mouth, -0.1, 0, TAU);
+    g.ellipse(cx + 0.19, cy + 0.11, 0.035, 0.045 * a.mouth, -0.1, 0, TAU);
     g.fillStyle = mixLinear(ink, '#7a2436', 0.55);
     g.fill();
+  } else {
+    g.beginPath();
+    g.moveTo(cx + 0.24, cy + 0.065);
+    g.quadraticCurveTo(cx + 0.21, cy + 0.085, cx + 0.18, cy + 0.075);
+    g.strokeStyle = shade;
+    g.lineWidth = Math.max(line * 0.6, 0.008);
+    g.stroke();
   }
 
-  /* -- the near ear, poking through the hood ------------------------- */
-  drawEar(g, cx - 0.035, cy - 0.185, 0.072, -0.12 + a.flick * 0.6, p.fur, ink, line);
+  /* -- the near ear, on the crown ------------------------------------------ */
+  drawEar(g, cx + 0.01, cy - 0.2, 0.068, 0.12 + a.flick * 0.55 + a.flop, fur, ink, line);
 
-  /* -- headphones ---------------------------------------------------- */
+  /* -- headphones ----------------------------------------------------------- */
   if (p.headphones) {
     const push = a.reach * 0.012;
     const metal = mixLinear(ink, '#ffffff', 0.3);
     g.beginPath();
-    g.arc(cx - 0.055, cy + push, HEAD_R * (p.hood ? 1.3 : 1.06), Math.PI * 1.14, Math.PI * 1.92);
+    g.arc(cx - 0.04, cy + push, HEAD_R * (hood ? 1.32 : 1.1), Math.PI * 1.15, Math.PI * 1.92);
     g.strokeStyle = metal;
-    g.lineWidth = 0.034;
+    g.lineWidth = 0.032;
     g.stroke();
 
-    // Over the ear, which is behind and above the eye. Put it any further
-    // forward and it reads as a second, larger eye — which is what the first
-    // version of this did, and it made the face unreadable at any size.
-    const kx = cx - 0.105;
-    const ky = cy - 0.015 + push;
+    // Over the ear — behind and a little below the eye. Any further forward
+    // and it reads as a second, larger eye.
+    const kx = cx - 0.075;
+    const ky = cy - 0.045 + push;
     g.beginPath();
-    g.ellipse(kx, ky, 0.055, 0.072, 0.05, 0, TAU);
-    g.fillStyle = mixLinear(ink, '#ffffff', 0.18);
+    g.ellipse(kx, ky, 0.052, 0.068, 0.05, 0, TAU);
+    g.fillStyle = litFill(g, mixLinear(ink, '#ffffff', 0.2), ink, ky - 0.07, ky + 0.07, 0.15, 0.3);
     g.fill();
     if (line > 0) {
-      g.strokeStyle = ink;
+      g.strokeStyle = mixLinear(ink, '#ffffff', 0.08);
       g.lineWidth = line;
       g.stroke();
     }
     g.beginPath();
-    g.ellipse(kx + 0.006, ky, 0.03, 0.042, 0.05, 0, TAU);
-    g.fillStyle = mixLinear(ink, '#ffffff', 0.4);
+    g.ellipse(kx + 0.006, ky, 0.028, 0.04, 0.05, 0, TAU);
+    g.fillStyle = mixLinear(ink, '#ffffff', 0.38);
     g.fill();
   }
 }
 
-/** One ear: a rounded triangle with a paler inside. */
+/** One ear: a rounded lobe, the pale rim a red panda has, and a darker inside. */
 function drawEar(g, x, y, r, tilt, colour, ink, line) {
   g.save();
   g.translate(x, y);
   g.rotate(tilt);
   g.beginPath();
-  g.moveTo(-r, r * 0.85);
-  g.quadraticCurveTo(-r * 0.95, -r * 1.05, 0, -r * 1.1);
-  g.quadraticCurveTo(r * 0.95, -r * 1.05, r, r * 0.85);
-  g.quadraticCurveTo(0, r * 0.45, -r, r * 0.85);
+  g.moveTo(-r, r * 0.8);
+  g.bezierCurveTo(-r * 1.1, -r * 0.6, -r * 0.45, -r * 1.15, 0, -r * 1.1);
+  g.bezierCurveTo(r * 0.5, -r * 1.05, r * 1.05, -r * 0.5, r * 0.95, r * 0.8);
+  g.quadraticCurveTo(0, r * 0.45, -r, r * 0.8);
   g.closePath();
-  g.fillStyle = colour;
+  g.fillStyle = mixLinear(colour, '#ffffff', 0.25);
   g.fill();
   if (line > 0) {
-    g.strokeStyle = ink;
+    g.strokeStyle = edgeOf(colour, ink);
     g.lineWidth = line;
     g.stroke();
   }
   g.beginPath();
-  g.moveTo(-r * 0.45, r * 0.5);
-  g.quadraticCurveTo(0, -r * 0.5, r * 0.45, r * 0.5);
-  g.quadraticCurveTo(0, r * 0.2, -r * 0.45, r * 0.5);
+  g.moveTo(-r * 0.5, r * 0.5);
+  g.bezierCurveTo(-r * 0.55, -r * 0.35, -r * 0.2, -r * 0.6, 0, -r * 0.55);
+  g.bezierCurveTo(r * 0.25, -r * 0.5, r * 0.55, -r * 0.3, r * 0.5, r * 0.5);
+  g.quadraticCurveTo(0, r * 0.25, -r * 0.5, r * 0.5);
   g.closePath();
-  g.fillStyle = mixLinear(colour, '#40161f', 0.62);
+  g.fillStyle = mixLinear(colour, '#40161f', 0.55);
   g.fill();
   g.restore();
 }
@@ -905,7 +1046,7 @@ function drawEar(g, x, y, r, tilt, colour, ink, line) {
  *
  * A projector adds light and cannot subtract any, so a silhouette on a wall
  * has to be made of light or it is not there at all. This is one stroke along
- * the trailing edge — crown, shoulder, hem, tail — and it is what stops the
+ * the trailing edge — crown, back, hem, tail — and it is what stops the
  * whole thing reading as a sticker.
  */
 function drawRim(g, p, a, line) {
@@ -913,19 +1054,27 @@ function drawRim(g, p, a, line) {
   const width = Math.max(line, 0.018);
   g.save();
   g.globalCompositeOperation = 'lighter';
-  g.strokeStyle = rgba(p.rim, 0.45 * amount);
+  g.strokeStyle = rgba(p.rim, 0.42 * amount);
   g.lineWidth = width;
   g.lineCap = 'round';
 
+  // Down the back of the hoodie.
+  const hem = HEM_Y + a.bodyY;
+  const sh = SHOULDER_Y + a.bodyY;
   g.beginPath();
-  g.moveTo(-0.17, HEM_Y + a.bodyY - 0.03);
-  g.bezierCurveTo(-0.22, HEM_Y + a.bodyY - 0.09, -0.21, SHOULDER_Y + a.bodyY + 0.1,
-    -0.16, SHOULDER_Y + a.bodyY + 0.02);
+  g.moveTo(-0.13, sh + 0.01);
+  g.bezierCurveTo(-0.25, sh + 0.05, -0.27, hem - 0.1, -0.22, hem);
   g.stroke();
 
+  // Over the back of the head, hood or not.
+  const cx = 0.03;
+  const cy = HEAD_Y + a.bodyY + a.headBob;
+  const k = p.hood ? 1.21 : 1;
   g.beginPath();
-  g.arc(0.02, HEAD_Y + a.bodyY + a.headBob,
-    HEAD_R * (p.hood ? 1.24 : 1.02), Math.PI * 1.02, Math.PI * 1.58);
+  g.moveTo(cx - 0.12 * k, cy + 0.17 * k);
+  g.bezierCurveTo(cx - 0.25 * k, cy + 0.11 * k, cx - 0.25 * k, cy - 0.19 * k, cx - 0.06 * k, cy - 0.215 * k);
+  g.bezierCurveTo(cx + 0.03 * k, cy - 0.235 * k, cx + 0.1 * k, cy - 0.2 * k, cx + 0.14 * k, cy - 0.15 * k);
+  g.strokeStyle = rgba(p.rim, 0.3 * amount);
   g.stroke();
 
   const xs = [];
@@ -933,7 +1082,7 @@ function drawRim(g, p, a, line) {
   const n = tailPoints(a, xs, ys);
   g.beginPath();
   curveThrough(g, xs, ys, n, { move: true });
-  g.strokeStyle = rgba(p.rim, 0.26 * amount);
+  g.strokeStyle = rgba(p.rim, 0.24 * amount);
   g.stroke();
   g.restore();
 }

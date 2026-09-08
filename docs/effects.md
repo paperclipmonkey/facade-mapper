@@ -750,6 +750,15 @@ stop and sit at different moments, and the wall stops being a loop.
   stopped are all drawn from the seeded generator. Anything exactly periodic
   stops being alive at about the fourth repetition.
 
+And one that *is* the drawing, since it is where the uncanny valley actually
+lives: the head is a single profile curve with the snout in it, every fill is
+top-lit with an edge in its own darker colour rather than a black outline, the
+body squashes on contact and the head and ears arrive a beat behind it, and the
+eye rests half-lidded. A front-on circle with a muzzle pasted to one side, flat
+fills in a uniform outline, and a round wide-open eye are the three things that
+make a cartoon animal look like a doll of one, and the first draft of this rig
+had all three.
+
 **Turn the rim light down last, not first.** A projector adds light and cannot
 subtract any, so a silhouette on a wall has to be *made* of light. **Rim
 strength** is one warm stroke down the trailing edge — crown, shoulder, hem,
