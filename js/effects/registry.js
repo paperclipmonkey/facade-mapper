@@ -27,6 +27,7 @@ import celebrations from './builtin/celebrations.js';
 import bonfire from './builtin/bonfire.js';
 import cyberpunk from './builtin/cyberpunk.js';
 import underwater from './builtin/underwater.js';
+import lofi from './builtin/lofi.js';
 import live from './builtin/live.js';
 
 export const CATEGORIES = [
@@ -49,7 +50,7 @@ export const CATEGORIES = [
 ];
 
 const builtins = new Map();
-for (const list of [basic, paths, facade, brickwork, floral, bursts, atmosphere, halloween, christmas, celebrations, bonfire, cyberpunk, underwater, creatures, text, mediaEffects, live]) {
+for (const list of [basic, paths, facade, brickwork, floral, bursts, atmosphere, halloween, christmas, celebrations, bonfire, cyberpunk, underwater, creatures, lofi, text, mediaEffects, live]) {
   for (const def of list) builtins.set(def.id, normaliseEffect(def, true));
 }
 

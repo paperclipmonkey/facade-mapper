@@ -921,6 +921,90 @@ const SUNKEN = () => [
 ];
 
 
+/**
+ * Rooftops at dusk.
+ *
+ * The one preset here that is not about a night in the calendar. It is about a
+ * mood, and the mood is the reason to build it out of these particular pieces:
+ * the front wall stops being a wall and becomes a view over a city at sunset,
+ * the windows are the only warm thing left on the building, and one small
+ * animal walks the gutter above the lot with nothing to do and nowhere to be.
+ *
+ * Two of them, deliberately. A single wanderer on the roofline is a character;
+ * a second one further down, smaller, slower and a different colour, is a
+ * *place* with somebody else in it — and because the two walks are seeded
+ * independently they stop, sit and look round at different moments, which is
+ * the thing that makes a crowd watch the wall for longer than a minute.
+ */
+const LOFI = () => [
+  layer('vista', {
+    name: 'The view from the roof',
+    tags: ['wall'],
+    needsTag: 'wall',
+    params: {
+      sky: '#2b2757', horizon: '#f0916b', sun: '#ffd7a1', city: '#3b2547', lit: '#ffc978',
+      skyline: 0.68, sunHeight: 0.22, bands: 3, density: 1.1, haze: 0.66,
+      pan: 4.5, lights: 0.45, clouds: 0.55, birds: 0.4, branch: true, sway: 1,
+      seed: 7, level: 0.8,
+    },
+  }),
+  /**
+   * The windows stay the house.
+   *
+   * Everything else on the front is now a picture of somewhere else, and a
+   * picture with no depth cue is a poster. Lighting the real openings warm and
+   * leaving them alone is what keeps the building in front of the view rather
+   * than painted with it.
+   */
+  layer('fill', {
+    name: 'Rooms behind the glass',
+    tags: ['window'],
+    blend: 'lighter',
+    opacity: 0.75,
+    params: { color: '#ffb765', color2: '#7a2c12', gradient: 'vertical', level: 0.85, softness: 1.2, inset: 0.02 },
+  }),
+  layer('pulse', {
+    name: 'Porch light',
+    tags: ['door'],
+    blend: 'lighter',
+    params: { color: '#ffbe73', mode: 'both', rate: 0.18, wave: 'sine', min: 0.3, max: 0.7, width: 14, grow: 0.01 },
+  }),
+  /**
+   * Held back from full brightness, deliberately.
+   *
+   * At full level the bloom takes the face off them: a small warm shape on a
+   * dark wall is exactly what the highlight roll-off is for, and a hoodie two
+   * stops down still reads as lit while keeping an eye, a muzzle and the rings
+   * on the tail. Which is the difference between an animal on the gutter and a
+   * bright smudge on the gutter.
+   */
+  layer('wanderer', {
+    name: 'Wanderer on the gutter',
+    tags: ['roof'],
+    needsTag: 'roof',
+    opacity: 0.9,
+    params: {
+      hoodie: '#c2701f', fur: '#e6c795', ink: '#2c1a2a', rim: '#ffcf83',
+      rimAmount: 0.55, size: 0.13, speed: 24, ledge: 'auto', patrol: 'turn back',
+      start: 0.2, raise: 0, restless: 0.55, sitting: 0.4, nod: 0.5,
+      headphones: true, hood: true, line: 3,
+    },
+  }),
+  layer('wanderer', {
+    name: 'Somebody down on the path',
+    tags: ['wall'],
+    needsTag: 'wall',
+    opacity: 0.85,
+    params: {
+      hoodie: '#5f7fb4', fur: '#dccaa8', ink: '#241a2e', rim: '#ffcf83',
+      rimAmount: 0.45, size: 0.1, speed: 15, ledge: 'bottom', patrol: 'turn back',
+      start: 0.7, raise: 0, restless: 0.75, sitting: 0.6, nod: 0.3,
+      headphones: false, hood: false, line: 2.5,
+    },
+  }),
+];
+
+
 export const PRESETS = [
   {
     id: 'halloween',
@@ -993,6 +1077,15 @@ export const PRESETS = [
     tagsUsed: ['door', 'window', 'roof'],
     grade: 'ember',
     build: BONFIRE_NIGHT,
+  },
+  {
+    id: 'lofi',
+    name: 'Rooftops at dusk',
+    description:
+      'Not a night in the calendar but a mood: the front wall becomes a view over a city at sunset in three bands of parallax, the windows are the only warm thing left on the building, and two small animals in headphones walk the gutter and the plinth, stopping to look round and sit down.',
+    tagsUsed: ['wall', 'roof', 'window', 'door'],
+    grade: 'neutral',
+    build: LOFI,
   },
 ];
 
@@ -1143,6 +1236,40 @@ export const DEMO_BURSTS = [
  * which keys to press stays short.
  */
 const PRESET_BURSTS = {
+  /**
+   * Rooftops at dusk gets two, and both are quiet on purpose.
+   *
+   * The rest of the demos answer a keypress with a bang, because the rest of
+   * the demos are about a bang. This one is about somebody sitting on a roof
+   * with nothing much happening, and the worst thing you could do to it is put
+   * a firework through it. A shooting star and a lit window are the size of
+   * event that belongs in a held shot — enough that pressing the key does
+   * something, not enough to end the mood it took a minute to build.
+   */
+  lofi: [
+    {
+      key: 'x',
+      name: 'A shooting star',
+      effect: 'meteors',
+      tags: ['wall'],
+      hold: 4,
+      params: {
+        radiantX: 1.2, radiantY: -0.4, rate: 14, tint: 'cool', speed: 1.4,
+        length: 1.5, width: 2.5, fireballs: 2, train: 2, showRadiant: false, level: 0.8,
+      },
+    },
+    {
+      key: 'f',
+      name: 'A light goes on in the next room',
+      effect: 'pulse',
+      tags: ['window'],
+      hold: 6,
+      params: {
+        color: '#ffd8a0', mode: 'fill', rate: 0.22, wave: 'sine',
+        min: 0, max: 0.55, width: 10, grow: 0,
+      },
+    },
+  ],
   birthday: [
     {
       key: 'x',
