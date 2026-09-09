@@ -141,13 +141,15 @@ const wanderer = {
   description:
     'A small hooded animal in headphones, walking slowly along a roofline or a sill, stopping to look back, push a headphone cup on, put its hands in its pouch, stretch, and sit down for a while. Point it at a traced roofline.',
   params: [
-    { key: 'hoodie', type: 'color', label: 'Hoodie', default: '#e08a3c' },
-    { key: 'fur', type: 'color', label: 'Fur', default: '#f7dcae' },
-    { key: 'ink', type: 'color', label: 'Ink', default: '#2c1a2a' },
+    { key: 'hoodie', type: 'color', label: 'Hoodie', default: '#dda94a' },
+    { key: 'fur', type: 'color', label: 'Fur', default: '#a0765a' },
+    { key: 'ink', type: 'color', label: 'Ink', default: '#3b2822' },
     { key: 'rim', type: 'color', label: 'Rim light', default: '#ffcf83' },
     { key: 'rimAmount', type: 'range', label: 'Rim strength', default: 0.6, min: 0, max: 1, step: 0.01 },
-    { key: 'size', type: 'range', label: 'Height (of frame)', default: 0.115, min: 0.02, max: 0.4, step: 0.005 },
+    { key: 'size', type: 'range', label: 'Height (of frame, or of the shape with a world behind)', default: 0.115, min: 0.02, max: 0.6, step: 0.005 },
     { key: 'speed', type: 'range', label: 'Walk speed (px/s)', default: 26, min: 0, max: 160, step: 1 },
+    { key: 'travel', type: 'select', label: 'Travel', default: 'along the line', options: ['along the line', 'on the spot'] },
+    { key: 'backdrop', type: 'select', label: 'World behind', default: 'none', options: ['none', 'dusk city', 'woods'] },
     { key: 'ledge', type: 'select', label: 'Walks on', default: 'auto', options: ['auto', 'path', 'bottom', 'top'] },
     { key: 'patrol', type: 'select', label: 'At the end', default: 'turn back', options: ['turn back', 'carry on'] },
     { key: 'start', type: 'range', label: 'Starts along', default: 0.15, min: 0, max: 1, step: 0.01 },
@@ -170,6 +172,15 @@ const wanderer = {
       /** Distance walked, in body heights. Drives the gait, so a slow walk
        *  takes the same number of strides per metre as a fast one. */
       stride: 0,
+      /**
+       * Distance walked, in world pixels, signed by direction.
+       *
+       * What the world behind them scrolls by, when they walk on the spot:
+       * the backdrop moves exactly as far as they have walked and stops when
+       * they stop, which is the whole difference between a character in a
+       * place and a character on a treadmill in front of a screensaver.
+       */
+      walked: 0,
       mode: 'walk',
       modeT: 0,
       modeFor: 6,
@@ -287,10 +298,13 @@ const wanderer = {
      * slider turning the walk into a scuttle — and it is what lets `GAIT_CYCLE`
      * be the one number that keeps the planted foot still.
      */
-    const heightPx = Math.max(4, p.size * Math.max(1, world?.h || 1080));
+    const scene = p.backdrop !== 'none' && shape.closed && shape.bbox.h > 0.5;
+    const heightPx = Math.max(4, p.size * Math.max(1, scene ? shape.bbox.h : (world?.h || 1080)));
     if (moving && p.speed > 0 && lane.length > 0) {
-      state.u += ((p.speed * dt) / lane.length) * state.dir;
       state.stride += (p.speed * dt) / (heightPx * GAIT_CYCLE);
+      state.walked += p.speed * dt * state.dir;
+      // On the spot, the walk goes into `walked` and the world moves instead.
+      if (p.travel !== 'on the spot') state.u += ((p.speed * dt) / lane.length) * state.dir;
 
       if (lane.closed) {
         state.u = frac(state.u);
@@ -340,11 +354,39 @@ const wanderer = {
     }
   },
 
-  draw({ g, p, shape, t, beat, state, world }) {
+  draw({ g, p, shape, t, beat, state, world, noise }) {
     const lane = ensureLane(state, shape, p.ledge);
     if (!lane || !state.tail) return;
 
-    const H = Math.max(4, p.size * Math.max(1, world?.h || shape.bbox.h || 1080));
+    /**
+     * The world behind them, scrolled by how far they have walked.
+     *
+     * This is the same scene Lofi Vista draws, and it is drawn *here* rather
+     * than left to a second layer for one reason: a layer cannot read
+     * another's live position (see `share` in the renderer — publishing is
+     * structural, not per-frame), so a separate vista can only ever drift on
+     * its own clock. Drawn by the same effect, the scroll *is* the walk: the
+     * far hills slide at half the pace of the feet and the near trees at the
+     * pace of the feet, and all of it stops when they sit down.
+     */
+    if (p.backdrop !== 'none' && shape.closed && shape.bbox.w > 0.5 && shape.bbox.h > 0.5) {
+      const vp = backdropParams(state, p.backdrop);
+      if (!state.scene) state.scene = { key: '', bands: null };
+      g.save();
+      g.clip(shape.path);
+      drawScene(g, vp, shape.bbox, t, noise, state.scene, state.walked);
+      g.restore();
+    }
+
+    /**
+     * How tall they are: a fraction of the frame, or — carrying a world
+     * behind them — a fraction of the shape. A scene is the shape it is
+     * drawn in, and the same layer pointed at a big wall and a small one
+     * should put a whole vignette on each, not a whole one on the first and
+     * a head and shoulders on the second.
+     */
+    const scene = p.backdrop !== 'none' && shape.closed && shape.bbox.h > 0.5;
+    const H = Math.max(4, p.size * Math.max(1, scene ? shape.bbox.h : (world?.h || shape.bbox.h || 1080)));
     const here = lane.at(clamp(state.u, 0, 1));
     if (!Number.isFinite(here.x) || !Number.isFinite(here.y)) return;
 
@@ -442,7 +484,7 @@ function posture(p, state, t, beat) {
    */
   const blinkT = clamp(state.blink, 0, 1);
   const closing = blinkT > 0.7 ? (1 - blinkT) / 0.3 : blinkT / 0.7;
-  const rest = 0.24 + sit * 0.14 + (idle === 'stretch' ? -0.2 : 0) * idleAmt;
+  const rest = 0.26 + sit * 0.7 + (idle === 'stretch' ? -0.2 : 0) * idleAmt;
   const lid = idle === 'yawn' ? Math.max(closing, idleAmt) : Math.max(rest, closing);
 
   // The one thing they are actually here for.
@@ -507,7 +549,7 @@ function posture(p, state, t, beat) {
  * ------------------------------------------------------------------ */
 
 const HIP_Y = -0.30;
-const HEM_Y = -0.24;
+const HEM_Y = -0.22;
 const SHOULDER_Y = -0.56;
 const HEAD_Y = -0.78;
 const HEAD_R = 0.2;
@@ -547,6 +589,8 @@ function drawWanderer(g, p, a, unit) {
   const line = p.line * unit;
 
   const dark = mixLinear(p.hoodie, ink, 0.45);
+  const tailLight = mixLinear(p.fur, '#ffffff', 0.35);
+  const tailDark = mixLinear(p.fur, ink, 0.55);
 
   g.lineJoin = 'round';
   g.lineCap = 'round';
@@ -558,7 +602,7 @@ function drawWanderer(g, p, a, unit) {
   g.scale(1 + a.squash, 1 - a.squash);
 
   // Behind everything, and the first thing the eye finds.
-  drawTail(g, a, p.hoodie, dark, line, ink);
+  drawTail(g, a, tailLight, tailDark, line, ink);
 
   // The far side of them, in shadow. Drawn before the body so it is behind
   // it, which is the whole of why an animal drawn flat still has a near side
@@ -735,14 +779,14 @@ function drawArm(g, a, which, colour, ink, line) {
     g.moveTo(sh.x, sh.y);
     g.quadraticCurveTo(elbow.x, elbow.y, hx, hy);
     g.strokeStyle = edge;
-    g.lineWidth = 0.058 + line * 2;
+    g.lineWidth = 0.07 + line * 2;
     g.stroke();
   }
   g.beginPath();
   g.moveTo(sh.x, sh.y);
   g.quadraticCurveTo(elbow.x, elbow.y, hx, hy);
   g.strokeStyle = colour;
-  g.lineWidth = 0.058;
+  g.lineWidth = 0.07;
   g.stroke();
 
   // A cuff where the sleeve ends, then the paw out of it. The cuff is a
@@ -825,10 +869,8 @@ function drawTail(g, a, light, dark, line, ink) {
  * The head, in profile.
  *
  * One closed curve with the snout in it — back of the skull, crown, brow,
- * down the nose, round under the chin. Everything else on the face is laid
- * *inside* that outline: the pale muzzle and cheek, the tear stripe, a
- * half-lidded eye. Nothing is pasted on the outside of a circle, which is
- * what a face has to avoid to be looked at for more than a second.
+ * down the nose, round under the chin. Everything on the face is laid
+ * *inside* that outline. Nothing is pasted on the outside of a circle.
  */
 function headPath(g, cx, cy) {
   g.moveTo(cx - 0.12, cy + 0.17);
@@ -840,47 +882,43 @@ function headPath(g, cx, cy) {
   g.closePath();
 }
 
+/**
+ * The hood, which is drawn *after* the face and covers most of it.
+ *
+ * A hood is not a shell round a head — that is a helmet, and the first draft
+ * read as an astronaut. It is cloth that hangs: one big soft shape from the
+ * shoulders up over the crown, with two bumps in it where the ears push the
+ * fabric, and an opening at the front the face looks out of. Only the brow,
+ * the eye and the muzzle show. Everything behind the opening is hood.
+ */
+function hoodPath(g, cx, cy, bump) {
+  g.moveTo(cx + 0.08, cy + 0.2);
+  // The opening edge, chin to brow, bowed forward a little.
+  g.bezierCurveTo(cx + 0.12, cy + 0.1, cx + 0.12, cy - 0.08, cx + 0.06, cy - 0.17);
+  g.quadraticCurveTo(cx + 0.04, cy - 0.23, cx + 0.01, cy - 0.255);
+  // Ear bump, dip, ear bump.
+  g.bezierCurveTo(cx - 0.01, cy - 0.29 - bump, cx - 0.06, cy - 0.3 - bump, cx - 0.08, cy - 0.265);
+  g.bezierCurveTo(cx - 0.11, cy - 0.3 - bump, cx - 0.16, cy - 0.29 - bump, cx - 0.18, cy - 0.23);
+  // The back, with some slack in it but hugging the skull.
+  g.bezierCurveTo(cx - 0.27, cy - 0.15, cx - 0.29, cy + 0.02, cx - 0.26, cy + 0.12);
+  g.quadraticCurveTo(cx - 0.24, SHOULDER_Y + 0.01, cx - 0.1, SHOULDER_Y + 0.02);
+  g.lineTo(cx + 0.11, SHOULDER_Y + 0.02);
+  g.quadraticCurveTo(cx + 0.13, cy + 0.22, cx + 0.08, cy + 0.2);
+  g.closePath();
+}
+
 function drawHead(g, p, a, ink, line) {
   const cx = 0.03;
   const cy = HEAD_Y;
   const hood = p.hood;
   const fur = p.fur;
   const furEdge = edgeOf(fur, ink);
-  const pale = mixLinear(fur, '#ffffff', 0.5);
-  const shade = mixLinear(fur, ink, 0.4);
+  const pale = mixLinear(fur, '#ffffff', 0.55);
+  const mask = mixLinear(fur, ink, 0.5);
 
-  /* -- the far ear ---------------------------------------------------- */
-  drawEar(g, cx - 0.14, cy - 0.16, 0.068, -0.55 - a.flick * 0.3 - a.flop,
-    mixLinear(fur, ink, 0.45), ink, line * 0.7);
-
-  /* -- the hood, as a bigger head behind the head ---------------------- */
-  if (hood) {
-    // The collar first: a skirt from the back of the head down onto the
-    // shoulders, so the head cannot detach on a frame where the neck turn
-    // and the body bob pull in opposite directions.
-    g.beginPath();
-    g.moveTo(cx - 0.22, cy + 0.06);
-    g.quadraticCurveTo(cx - 0.21, SHOULDER_Y - 0.01, cx - 0.1, SHOULDER_Y + 0.02);
-    g.lineTo(cx + 0.11, SHOULDER_Y + 0.02);
-    g.quadraticCurveTo(cx + 0.17, cy + 0.16, cx + 0.14, cy + 0.06);
-    g.closePath();
-    g.fillStyle = mixLinear(p.hoodie, ink, 0.3);
-    g.fill();
-
-    g.save();
-    g.translate(cx - 0.035, cy + 0.005);
-    g.scale(1.22, 1.2);
-    g.translate(-cx, -cy);
-    g.beginPath();
-    headPath(g, cx, cy);
-    g.restore();
-    g.fillStyle = litFill(g, mixLinear(p.hoodie, ink, 0.08), ink, cy - 0.27, cy + 0.2, 0.1, 0.35);
-    g.fill();
-    if (line > 0) {
-      g.strokeStyle = edgeOf(p.hoodie, ink);
-      g.lineWidth = line;
-      g.stroke();
-    }
+  if (!hood) {
+    drawEar(g, cx - 0.14, cy - 0.16, 0.068, -0.55 - a.flick * 0.3 - a.flop,
+      mixLinear(fur, ink, 0.4), ink, line * 0.7);
   }
 
   /* -- the face ---------------------------------------------------------- */
@@ -889,23 +927,24 @@ function drawHead(g, p, a, ink, line) {
   g.fillStyle = litFill(g, fur, ink, cy - 0.22, cy + 0.18, 0.1, 0.22);
   g.fill();
 
-  // Markings, clipped to the head: a pale muzzle running back into a pale
-  // cheek, and the tear stripe from the eye down through it. These are the
-  // three marks that say which animal this is, and they are values on the
-  // face rather than shapes stuck to it.
+  // The markings, clipped to the head: the raccoon mask across the eye, and
+  // the pale muzzle and cheek under it. Values on the face, not shapes on it.
   g.save();
   g.clip();
   g.fillStyle = pale;
   g.beginPath();
-  g.ellipse(cx + 0.19, cy + 0.075, 0.12, 0.085, -0.15, 0, TAU);
+  g.ellipse(cx + 0.19, cy + 0.085, 0.12, 0.08, -0.2, 0, TAU);
   g.fill();
   g.beginPath();
-  g.ellipse(cx + 0.04, cy + 0.09, 0.09, 0.07, 0.2, 0, TAU);
+  g.ellipse(cx + 0.03, cy + 0.1, 0.1, 0.065, 0.2, 0, TAU);
   g.fill();
-  g.globalAlpha *= 0.45;
-  g.fillStyle = shade;
+  g.fillStyle = mask;
   g.beginPath();
-  g.ellipse(cx + 0.12, cy + 0.03, 0.028, 0.06, 0.35, 0, TAU);
+  g.moveTo(cx - 0.05, cy - 0.06);
+  g.bezierCurveTo(cx + 0.05, cy - 0.13, cx + 0.2, cy - 0.11, cx + 0.27, cy - 0.02);
+  g.bezierCurveTo(cx + 0.24, cy + 0.03, cx + 0.16, cy + 0.02, cx + 0.1, cy + 0.02);
+  g.bezierCurveTo(cx + 0.04, cy + 0.03, cx - 0.02, cy + 0.0, cx - 0.05, cy - 0.06);
+  g.closePath();
   g.fill();
   g.restore();
 
@@ -918,53 +957,59 @@ function drawHead(g, p, a, ink, line) {
   }
 
   /* -- the eye ------------------------------------------------------------ */
-  const ex = cx + 0.145;
-  const ey = cy - 0.045;
+  const ex = cx + 0.165;
+  const ey = cy - 0.035;
   const lid = clamp(a.lid, 0, 1);
-  // The eye itself: an almond, heavier below than above.
-  g.beginPath();
-  g.moveTo(ex - 0.042, ey + 0.002);
-  g.quadraticCurveTo(ex, ey - 0.05, ex + 0.04, ey);
-  g.quadraticCurveTo(ex, ey + 0.04, ex - 0.042, ey + 0.002);
-  g.closePath();
-  g.fillStyle = ink;
-  g.fill();
   if (lid < 0.85) {
     g.beginPath();
-    g.arc(ex + 0.013, ey - 0.006 + lid * 0.02, 0.012, 0, TAU);
+    g.moveTo(ex - 0.036, ey + 0.002);
+    g.quadraticCurveTo(ex, ey - 0.046, ex + 0.034, ey);
+    g.quadraticCurveTo(ex, ey + 0.036, ex - 0.036, ey + 0.002);
+    g.closePath();
+    g.fillStyle = ink;
+    g.fill();
+    g.beginPath();
+    g.arc(ex + 0.011, ey - 0.006 + lid * 0.02, 0.011, 0, TAU);
     g.fillStyle = '#ffffff';
     g.save();
     g.globalAlpha *= 0.85;
     g.fill();
     g.restore();
+    // The lid comes down over it in the mask colour, and its edge is a line.
+    const lidY = ey - 0.044 + lid * 0.082;
+    g.beginPath();
+    g.moveTo(ex - 0.045, ey - 0.05);
+    g.lineTo(ex + 0.045, ey - 0.05);
+    g.lineTo(ex + 0.045, lidY + 0.004);
+    g.quadraticCurveTo(ex, lidY - 0.012 * (1 - lid), ex - 0.045, lidY + 0.004);
+    g.closePath();
+    g.fillStyle = mask;
+    g.fill();
+    g.beginPath();
+    g.moveTo(ex - 0.04, lidY + 0.004);
+    g.quadraticCurveTo(ex, lidY - 0.012 * (1 - lid), ex + 0.04, lidY + 0.004);
+    g.strokeStyle = ink;
+    g.lineWidth = Math.max(line * 0.9, 0.011);
+    g.stroke();
+  } else {
+    /**
+     * Closed, and closed *happily*: an arc bowed downwards, which is an eye
+     * shut in contentment. Bowed the other way it is an eye shut in pain, and
+     * a straight line is somebody asleep on their feet.
+     */
+    g.beginPath();
+    g.moveTo(ex - 0.04, ey - 0.006);
+    g.quadraticCurveTo(ex, ey + 0.03, ex + 0.04, ey - 0.006);
+    g.strokeStyle = ink;
+    g.lineWidth = Math.max(line * 1.1, 0.014);
+    g.stroke();
   }
-  // The lid comes down over it in the face colour, and its edge is a line.
-  // At rest it sits a third of the way down, which is the whole of the
-  // difference between a face that is calm and a face that is alarmed.
-  const lidY = ey - 0.048 + lid * 0.088;
-  g.save();
-  g.beginPath();
-  g.moveTo(ex - 0.05, ey - 0.05);
-  g.lineTo(ex + 0.05, ey - 0.05);
-  g.lineTo(ex + 0.05, lidY + 0.004);
-  g.quadraticCurveTo(ex, lidY - 0.012 * (1 - lid), ex - 0.05, lidY + 0.004);
-  g.closePath();
-  g.fillStyle = fur;
-  g.fill();
-  g.restore();
-  g.beginPath();
-  g.moveTo(ex - 0.046, lidY + 0.004);
-  g.quadraticCurveTo(ex, lidY - 0.012 * (1 - lid), ex + 0.046, lidY + 0.004);
-  g.strokeStyle = furEdge;
-  g.lineWidth = Math.max(line * 0.9, 0.011);
-  g.stroke();
 
   /* -- nose and mouth ------------------------------------------------------ */
   g.beginPath();
   g.ellipse(cx + 0.252, cy + 0.03, 0.024, 0.018, 0.2, 0, TAU);
   g.fillStyle = ink;
   g.fill();
-
   if (a.mouth > 0.02) {
     g.beginPath();
     g.ellipse(cx + 0.19, cy + 0.11, 0.035, 0.045 * a.mouth, -0.1, 0, TAU);
@@ -974,40 +1019,90 @@ function drawHead(g, p, a, ink, line) {
     g.beginPath();
     g.moveTo(cx + 0.24, cy + 0.065);
     g.quadraticCurveTo(cx + 0.21, cy + 0.085, cx + 0.18, cy + 0.075);
-    g.strokeStyle = shade;
+    g.strokeStyle = mask;
     g.lineWidth = Math.max(line * 0.6, 0.008);
     g.stroke();
   }
 
-  /* -- the near ear, on the crown ------------------------------------------ */
-  drawEar(g, cx + 0.01, cy - 0.2, 0.068, 0.12 + a.flick * 0.55 + a.flop, fur, ink, line);
-
-  /* -- headphones ----------------------------------------------------------- */
-  if (p.headphones) {
-    const push = a.reach * 0.012;
-    const metal = mixLinear(ink, '#ffffff', 0.3);
+  /* -- the hood, over the back of the head ---------------------------------- */
+  if (hood) {
+    const bump = 0.01 + a.flick * 0.012;
     g.beginPath();
-    g.arc(cx - 0.04, cy + push, HEAD_R * (hood ? 1.32 : 1.1), Math.PI * 1.15, Math.PI * 1.92);
-    g.strokeStyle = metal;
-    g.lineWidth = 0.032;
-    g.stroke();
-
-    // Over the ear — behind and a little below the eye. Any further forward
-    // and it reads as a second, larger eye.
-    const kx = cx - 0.075;
-    const ky = cy - 0.045 + push;
-    g.beginPath();
-    g.ellipse(kx, ky, 0.052, 0.068, 0.05, 0, TAU);
-    g.fillStyle = litFill(g, mixLinear(ink, '#ffffff', 0.2), ink, ky - 0.07, ky + 0.07, 0.15, 0.3);
+    hoodPath(g, cx, cy, bump);
+    g.fillStyle = litFill(g, p.hoodie, ink, cy - 0.33, SHOULDER_Y + 0.02, 0.12, 0.34);
     g.fill();
     if (line > 0) {
-      g.strokeStyle = mixLinear(ink, '#ffffff', 0.08);
+      g.strokeStyle = edgeOf(p.hoodie, ink);
+      g.lineWidth = line;
+      g.stroke();
+    }
+    // The inside of the opening, a shade darker, so the face sits *in* it.
+    g.beginPath();
+    g.moveTo(cx + 0.08, cy + 0.2);
+    g.bezierCurveTo(cx + 0.12, cy + 0.1, cx + 0.12, cy - 0.08, cx + 0.06, cy - 0.17);
+    g.strokeStyle = mixLinear(p.hoodie, ink, 0.35);
+    g.lineWidth = 0.022;
+    g.stroke();
+    // A crease in the slack at the back.
+    g.beginPath();
+    g.moveTo(cx - 0.21, cy - 0.04);
+    g.quadraticCurveTo(cx - 0.15, cy + 0.04, cx - 0.18, cy + 0.15);
+    g.strokeStyle = mixLinear(p.hoodie, ink, 0.28);
+    g.lineWidth = Math.max(line * 0.8, 0.01);
+    g.stroke();
+  } else {
+    drawEar(g, cx + 0.01, cy - 0.2, 0.068, 0.12 + a.flick * 0.55 + a.flop, fur, ink, line);
+  }
+
+  /* -- headphones, on the outside of whatever is on the head ---------------- */
+  if (p.headphones) {
+    const push = a.reach * 0.012;
+    const shell = '#ece4d2';
+    const pad = '#9fc6b2';
+    const band = mixLinear(shell, ink, 0.35);
+    // Where the ear is under the cloth: back of the head, level with the eye.
+    const kx = cx - 0.1;
+    const ky = cy + 0.0 + push;
+    const kr = hood ? 0.072 : 0.062;
+    // The band: one broad arc from the top of the cup up over the crown to
+    // the brow, sitting on the outside of the hood. Wide enough to be a
+    // padded band and not a wire.
+    const top = hood ? cy - 0.32 : cy - 0.26;
+    g.beginPath();
+    g.moveTo(kx - 0.01, ky - kr * 0.85);
+    g.bezierCurveTo(kx - 0.02, top + 0.02, cx - 0.02, top - 0.01, cx + 0.05, top + 0.005);
+    g.bezierCurveTo(cx + 0.11, top + 0.02, cx + 0.15, cy - 0.2, cx + 0.16, cy - 0.15);
+    g.strokeStyle = edgeOf(shell, ink);
+    g.lineWidth = 0.044 + line * 2;
+    g.lineCap = 'round';
+    g.stroke();
+    g.beginPath();
+    g.moveTo(kx - 0.01, ky - kr * 0.85);
+    g.bezierCurveTo(kx - 0.02, top + 0.02, cx - 0.02, top - 0.01, cx + 0.05, top + 0.005);
+    g.bezierCurveTo(cx + 0.11, top + 0.02, cx + 0.15, cy - 0.2, cx + 0.16, cy - 0.15);
+    g.strokeStyle = band;
+    g.lineWidth = 0.044;
+    g.stroke();
+
+    // The cup: pale and round with a soft green pad, matte — a highlight and
+    // no metal, and small enough to be a thing on the head rather than the
+    // head itself.
+    g.beginPath();
+    g.arc(kx, ky, kr, 0, TAU);
+    g.fillStyle = litFill(g, shell, ink, ky - kr, ky + kr, 0.08, 0.3);
+    g.fill();
+    if (line > 0) {
+      g.strokeStyle = edgeOf(shell, ink);
       g.lineWidth = line;
       g.stroke();
     }
     g.beginPath();
-    g.ellipse(kx + 0.006, ky, 0.028, 0.04, 0.05, 0, TAU);
-    g.fillStyle = mixLinear(ink, '#ffffff', 0.38);
+    g.arc(kx + 0.004, ky, kr * 0.6, 0, TAU);
+    g.fillStyle = litFill(g, pad, ink, ky - kr * 0.6, ky + kr * 0.6, 0.1, 0.3);
+    g.fill();
+    g.beginPath();
+    g.arc(kx + 0.004, ky, kr * 0.22, 0, TAU);
+    g.fillStyle = mixLinear(pad, ink, 0.4);
     g.fill();
   }
 }
@@ -1069,11 +1164,16 @@ function drawRim(g, p, a, line) {
   // Over the back of the head, hood or not.
   const cx = 0.03;
   const cy = HEAD_Y + a.bodyY + a.headBob;
-  const k = p.hood ? 1.21 : 1;
   g.beginPath();
-  g.moveTo(cx - 0.12 * k, cy + 0.17 * k);
-  g.bezierCurveTo(cx - 0.25 * k, cy + 0.11 * k, cx - 0.25 * k, cy - 0.19 * k, cx - 0.06 * k, cy - 0.215 * k);
-  g.bezierCurveTo(cx + 0.03 * k, cy - 0.235 * k, cx + 0.1 * k, cy - 0.2 * k, cx + 0.14 * k, cy - 0.15 * k);
+  if (p.hood) {
+    g.moveTo(cx - 0.28, cy + 0.12);
+    g.bezierCurveTo(cx - 0.33, cy + 0.02, cx - 0.3, cy - 0.16, cx - 0.19, cy - 0.24);
+    g.quadraticCurveTo(cx - 0.12, cy - 0.31, cx - 0.07, cy - 0.28);
+  } else {
+    g.moveTo(cx - 0.12, cy + 0.17);
+    g.bezierCurveTo(cx - 0.25, cy + 0.11, cx - 0.25, cy - 0.19, cx - 0.06, cy - 0.215);
+    g.bezierCurveTo(cx + 0.03, cy - 0.235, cx + 0.1, cy - 0.2, cx + 0.14, cy - 0.15);
+  }
   g.strokeStyle = rgba(p.rim, 0.3 * amount);
   g.stroke();
 
@@ -1120,6 +1220,7 @@ const vista = {
     { key: 'sun', type: 'color', label: 'Sun', default: '#ffd7a1' },
     { key: 'city', type: 'color', label: 'City', default: '#3b2547' },
     { key: 'lit', type: 'color', label: 'Lit windows', default: '#ffc978' },
+    { key: 'terrain', type: 'select', label: 'Terrain', default: 'city', options: ['city', 'woods'] },
     { key: 'skyline', type: 'range', label: 'Horizon height', default: 0.62, min: 0.1, max: 0.95, step: 0.01 },
     { key: 'sunHeight', type: 'range', label: 'Sun height', default: 0.58, min: 0, max: 1, step: 0.01 },
     { key: 'bands', type: 'range', label: 'Bands of depth', default: 3, min: 1, max: 4, step: 1 },
@@ -1142,36 +1243,76 @@ const vista = {
   draw({ g, p, shape, t, state, noise }) {
     const { bbox } = shape;
     if (!(bbox.w > 0.5) || !(bbox.h > 0.5) || p.level <= 0) return;
-
-    const horizon = bbox.y + bbox.h * clamp(p.skyline, 0, 1);
-    const bands = ensureCity(state, p, bbox);
-
     g.save();
     g.globalAlpha *= clamp(p.level, 0, 1);
     g.clip(shape.path);
-
-    drawSky(g, p, bbox, horizon);
-    drawSun(g, p, bbox, horizon);
-    if (p.clouds > 0) drawClouds(g, p, bbox, horizon, t, noise);
-
-    /**
-     * Back to front, and slowest to fastest.
-     *
-     * The rate ratio is what carries the depth — a band twice as near moving
-     * twice as fast — so the speeds are derived from the band index rather
-     * than being four numbers somebody would have to keep in proportion.
-     */
-    for (let b = 0; b < bands.length; b++) {
-      const near = (b + 1) / bands.length;
-      drawBand(g, p, bands[b], bbox, horizon, t, near, b === bands.length - 1);
-    }
-
-    if (p.birds > 0) drawBirds(g, p, bbox, horizon, t);
-    if (p.branch) drawBranch(g, p, bbox, t, noise);
-
+    // On its own, the camera drifts at `pan`. Behind a Wanderer walking on the
+    // spot, the same scene is scrolled by the walk instead — see there.
+    drawScene(g, p, bbox, t, noise, state, t * p.pan);
     g.restore();
   },
 };
+
+/**
+ * The whole scene, scrolled by `scroll` world pixels.
+ *
+ * Shared by Lofi Vista, which scrolls it on a clock, and by Wanderer, which
+ * scrolls it by how far the animal has walked.
+ */
+function drawScene(g, p, bbox, t, noise, state, scroll) {
+  const horizon = bbox.y + bbox.h * clamp(p.skyline, 0, 1);
+  const bands = ensureCity(state, p, bbox);
+
+  drawSky(g, p, bbox, horizon);
+  drawSun(g, p, bbox, horizon);
+  if (p.clouds > 0) drawClouds(g, p, bbox, horizon, t, noise);
+
+  /**
+   * Back to front, and slowest to fastest.
+   *
+   * The rate ratio is what carries the depth — a band twice as near moving
+   * twice as fast — so the speeds are derived from the band index rather
+   * than being four numbers somebody would have to keep in proportion. The
+   * nearest band moves at exactly `scroll`, which is what puts the feet of a
+   * walker on the spot on the same ground as the nearest trees.
+   */
+  for (let b = 0; b < bands.length; b++) {
+    const near = (b + 1) / bands.length;
+    drawBand(g, p, bands[b], bbox, horizon, t, near, b === bands.length - 1, scroll * (0.2 + 0.8 * near));
+  }
+
+  if (p.birds > 0) drawBirds(g, p, bbox, horizon, t);
+  if (p.branch) drawBranch(g, p, bbox, t, noise);
+}
+
+/**
+ * The worlds a Wanderer can carry behind it, as Vista parameter sets.
+ *
+ * Built once per choice and kept on the instance, so the scene cache keyed
+ * on them stays warm. The wanderer's own colours are not consulted: a world
+ * is a palette of its own, and one that changed with the hoodie would be a
+ * hoodie with a matching sky.
+ */
+const BACKDROPS = {
+  'dusk city': {
+    sky: '#2b2757', horizon: '#f0916b', sun: '#ffd7a1', city: '#3b2547', lit: '#ffc978',
+    terrain: 'city', skyline: 0.66, sunHeight: 0.28, bands: 3, density: 1.1, haze: 0.66,
+    lights: 0.45, clouds: 0.5, birds: 0.35, branch: true, sway: 1, seed: 7, level: 1, pan: 0,
+  },
+  woods: {
+    sky: '#5a6a8d', horizon: '#d9c2a2', sun: '#f7e4bb', city: '#2a3a31', lit: '#ffc978',
+    terrain: 'woods', skyline: 0.68, sunHeight: 0.22, bands: 3, density: 1.2, haze: 0.72,
+    lights: 0, clouds: 0.7, birds: 0.3, branch: true, sway: 1, seed: 3, level: 1, pan: 0,
+  },
+};
+
+function backdropParams(state, which) {
+  if (state.backdropKey !== which) {
+    state.backdropKey = which;
+    state.backdropP = { ...(BACKDROPS[which] || BACKDROPS['dusk city']) };
+  }
+  return state.backdropP;
+}
 
 /**
  * The city, cast once and kept.
@@ -1182,7 +1323,8 @@ const vista = {
  */
 function ensureCity(state, stable, bbox) {
   const count = Math.max(1, Math.round(clamp(stable.bands, 1, 4)));
-  const key = `${stable.seed}:${count}:${stable.density}:${Math.round(bbox.w)}:${Math.round(bbox.h)}`;
+  const woods = stable.terrain === 'woods';
+  const key = `${stable.seed}:${count}:${stable.density}:${woods}:${Math.round(bbox.w)}:${Math.round(bbox.h)}`;
   if (state.key === key && state.bands) return state.bands;
 
   state.key = key;
@@ -1207,8 +1349,16 @@ function ensureCity(state, stable, bbox) {
       const w = width * (0.55 + rng() * 0.9);
       const h = lerp(0.05, 0.34, near) * (0.35 + rng() * 1.3);
       const roof = rng();
+      /**
+       * Woods: the far band is hills, the near ones pines with the odd hill
+       * between them. A pine is tall and narrow, a hill wide and low, so the
+       * same block gets reshaped rather than re-rolled.
+       */
+      const kind = !woods ? 'block' : (near < 0.4 || roof < 0.25 ? 'hill' : 'pine');
       blocks.push({
-        x, w, h,
+        x, w: kind === 'hill' ? w * 2.2 : kind === 'pine' ? w * 1.7 : w,
+        h: kind === 'hill' ? h * 0.45 : kind === 'pine' ? h * 0.75 : h,
+        kind,
         // A water tower on one roof in fifteen, and an aerial on one in six.
         tower: roof > 0.94,
         aerial: roof > 0.72 && roof <= 0.94,
@@ -1296,14 +1446,14 @@ function drawClouds(g, p, bbox, horizon, t, noise) {
  * it. Cheaper than tiling into a canvas and it survives the shape changing
  * size, which a baked tile does not.
  */
-function drawBand(g, p, band, bbox, horizon, t, near, isNearest) {
+function drawBand(g, p, band, bbox, horizon, t, near, isNearest, scroll) {
   const haze = clamp(p.haze, 0, 1) * (1 - near);
   const colour = mixLinear(p.city, p.horizon, haze * 0.85);
   const base = horizon + bbox.h * 0.02 * near;
   const span = band.span * bbox.w;
   if (!(span > 1)) return;
 
-  const shift = -((t * p.pan * (0.25 + near)) % span);
+  const shift = -(((scroll % span) + span) % span);
 
   /**
    * The ground in front of the nearest band, with a little fall-off.
@@ -1342,6 +1492,29 @@ function drawBand(g, p, band, bbox, horizon, t, near, isNearest) {
       const w = block.w * bbox.w;
       if (x + w < bbox.x || x > bbox.x + bbox.w) continue;
       const h = block.h * bbox.h;
+      if (block.kind === 'pine') {
+        // Three tiers of boughs and a trunk, in one path.
+        const mid = x + w / 2;
+        g.moveTo(mid - w * 0.06, base);
+        g.lineTo(mid - w * 0.06, base - h * 0.2);
+        for (let tier = 0; tier < 3; tier++) {
+          const top = base - h * (0.62 + tier * 0.19);
+          const spread = w * (0.5 - tier * 0.12);
+          g.lineTo(mid - spread, base - h * (0.2 + tier * 0.22));
+          g.quadraticCurveTo(mid - spread * 0.45, base - h * (0.5 + tier * 0.2), mid, top);
+          g.quadraticCurveTo(mid + spread * 0.45, base - h * (0.5 + tier * 0.2), mid + spread, base - h * (0.2 + tier * 0.22));
+        }
+        g.lineTo(mid + w * 0.06, base - h * 0.2);
+        g.lineTo(mid + w * 0.06, base);
+        g.closePath();
+        continue;
+      }
+      if (block.kind === 'hill') {
+        g.moveTo(x, base);
+        g.quadraticCurveTo(x + w * 0.5, base - h * 2, x + w, base);
+        g.closePath();
+        continue;
+      }
       g.rect(x, base - h, w, h);
 
       if (block.tower) {
@@ -1354,7 +1527,7 @@ function drawBand(g, p, band, bbox, horizon, t, near, isNearest) {
     }
     g.fill();
 
-    if (p.lights > 0 && near > 0.4) drawWindows(g, p, band, bbox, base, ox, t, near);
+    if (p.lights > 0 && near > 0.4 && p.terrain !== 'woods') drawWindows(g, p, band, bbox, base, ox, t, near);
   }
 }
 
@@ -1375,6 +1548,7 @@ function drawWindows(g, p, band, bbox, base, ox, t, near) {
   g.globalCompositeOperation = 'lighter';
 
   for (const block of band.blocks) {
+    if (block.kind !== 'block') continue;
     const x = ox + block.x * bbox.w;
     const w = block.w * bbox.w;
     if (x + w < bbox.x || x > bbox.x + bbox.w) continue;

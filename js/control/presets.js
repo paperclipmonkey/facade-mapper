@@ -937,15 +937,30 @@ const SUNKEN = () => [
  * the thing that makes a crowd watch the wall for longer than a minute.
  */
 const LOFI = () => [
-  layer('vista', {
-    name: 'The view from the roof',
+  /**
+   * The wall is the scene, and the animal is in it.
+   *
+   * One layer, deliberately: the raccoon walks on the spot at the foot of the
+   * wall and carries the woods behind it, scrolled by exactly how far it has
+   * walked. Two layers — a vista drifting on a clock and a walker on top —
+   * cannot do that, because a layer cannot read another's live position (see
+   * `share` in the renderer), and a world that keeps sliding while the animal
+   * sits down is a treadmill in front of a screensaver. Drawn by the same
+   * effect, the world stops when they do.
+   */
+  layer('wanderer', {
+    name: 'Walking through the woods',
     tags: ['wall'],
     needsTag: 'wall',
+    opacity: 0.85,
     params: {
-      sky: '#2b2757', horizon: '#f0916b', sun: '#ffd7a1', city: '#3b2547', lit: '#ffc978',
-      skyline: 0.68, sunHeight: 0.22, bands: 3, density: 1.1, haze: 0.66,
-      pan: 4.5, lights: 0.45, clouds: 0.55, birds: 0.4, branch: true, sway: 1,
-      seed: 7, level: 0.8,
+      hoodie: '#dda94a', fur: '#a0765a', ink: '#3b2822', rim: '#ffd9a0',
+      // Height is a fraction of the wall here, since the wall is the scene.
+      rimAmount: 0.35, size: 0.46, speed: 22, travel: 'on the spot', backdrop: 'woods',
+      // Left of the door, on the plain brick: on the door the porch light
+      // takes the face off them.
+      ledge: 'bottom', patrol: 'turn back', start: 0.16, raise: 0.02,
+      restless: 0.45, sitting: 0.4, nod: 0.5, headphones: true, hood: true, line: 2,
     },
   }),
   /**
@@ -970,40 +985,25 @@ const LOFI = () => [
     params: { color: '#ffbe73', mode: 'both', rate: 0.18, wave: 'sine', min: 0.3, max: 0.7, width: 14, grow: 0.01 },
   }),
   /**
-   * Held back from full brightness, deliberately.
+   * A second one, up on the gutter, going somewhere.
    *
-   * At full level the bloom takes the face off them: a small warm shape on a
-   * dark wall is exactly what the highlight roll-off is for, and a hoodie two
-   * stops down still reads as lit while keeping an eye, a muzzle and the rings
-   * on the tail. Which is the difference between an animal on the gutter and a
-   * bright smudge on the gutter.
+   * Smaller, no hood, walking the roofline end to end. Seeded independently
+   * of the one below, so they stop and sit at different moments, which is the
+   * thing that makes a crowd watch the wall for longer than a minute.
    */
   layer('wanderer', {
-    name: 'Wanderer on the gutter',
+    name: 'Somebody on the gutter',
     tags: ['roof'],
     needsTag: 'roof',
-    opacity: 0.9,
-    params: {
-      hoodie: '#c2701f', fur: '#e6c795', ink: '#2c1a2a', rim: '#ffcf83',
-      rimAmount: 0.55, size: 0.13, speed: 24, ledge: 'auto', patrol: 'turn back',
-      start: 0.2, raise: 0, restless: 0.55, sitting: 0.4, nod: 0.5,
-      headphones: true, hood: true, line: 3,
-    },
-  }),
-  layer('wanderer', {
-    name: 'Somebody down on the path',
-    tags: ['wall'],
-    needsTag: 'wall',
     opacity: 0.85,
     params: {
-      hoodie: '#5f7fb4', fur: '#dccaa8', ink: '#241a2e', rim: '#ffcf83',
-      rimAmount: 0.45, size: 0.1, speed: 15, ledge: 'bottom', patrol: 'turn back',
-      start: 0.7, raise: 0, restless: 0.75, sitting: 0.6, nod: 0.3,
-      headphones: false, hood: false, line: 2.5,
+      hoodie: '#6f86b8', fur: '#b08a6a', ink: '#2e2226', rim: '#ffd9a0',
+      rimAmount: 0.45, size: 0.11, speed: 18, travel: 'along the line', backdrop: 'none',
+      ledge: 'auto', patrol: 'turn back', start: 0.2, raise: 0,
+      restless: 0.6, sitting: 0.5, nod: 0.3, headphones: true, hood: false, line: 2,
     },
   }),
 ];
-
 
 export const PRESETS = [
   {
@@ -1082,7 +1082,7 @@ export const PRESETS = [
     id: 'lofi',
     name: 'Rooftops at dusk',
     description:
-      'Not a night in the calendar but a mood: the front wall becomes a view over a city at sunset in three bands of parallax, the windows are the only warm thing left on the building, and two small animals in headphones walk the gutter and the plinth, stopping to look round and sit down.',
+      'Not a night in the calendar but a mood: a raccoon in a hoodie and headphones walks through the woods on the front wall — on the spot, with the trees and hills sliding past in parallax exactly as far as it has walked — and stops to look round, push a headphone cup on and sit down. The windows are the only warm thing left on the building.',
     tagsUsed: ['wall', 'roof', 'window', 'door'],
     grade: 'neutral',
     build: LOFI,

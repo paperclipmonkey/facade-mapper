@@ -241,6 +241,65 @@ console.log('\n— the behaviour —');
     && a.tail.every((s, i) => s.a === b.tail[i].a));
 }
 
+
+/* ------------------------------------------------------------------ *
+ * Walking on the spot, with the world behind
+ * ------------------------------------------------------------------ */
+
+console.log('\n— on the spot —');
+
+{
+  /**
+   * The treadmill: the animal stays where it was put and the distance goes
+   * into `walked`, which is what the backdrop scrolls by. Both halves matter
+   * — a walker that also drifted along the wall would leave its own world
+   * behind, and a `walked` that kept counting while they sat would make the
+   * woods slide past somebody sitting still.
+   */
+  const shape = SHAPES.window;
+  const p = { ...base, travel: 'on the spot', speed: 40, start: 0.5, restless: 0, sitting: 0 };
+  const state = walk(p, { shape, steps: 600 });
+  ok('on the spot, they stay where they were put', Math.abs(state.u - 0.5) < 1e-9, `u=${state.u}`);
+  // Paces times the ground each pace covers is the distance, and that is
+  // what the world has to have scrolled by.
+  // (`cycles` skips the placement step, which `walked` counts: one step's
+  // worth of slack.)
+  const paced = state.cycles * gait.GAIT_CYCLE * p.size * 1080;
+  ok('and the distance walked goes into the scroll instead',
+    state.walked > 0 && Math.abs(state.walked - paced) <= p.speed / 60 + 1e-6,
+    `walked ${state.walked.toFixed(1)} px, paced ${paced.toFixed(1)} px`);
+
+  // Sit them down and the world must stop with them.
+  state.mode = 'sit';
+  state.sit = 1;
+  state.modeT = 0;
+  state.modeFor = 1000;
+  const before = state.walked;
+  for (let i = 601; i <= 900; i++) {
+    wanderer.step({
+      p, dt: 1 / 60, t: i / 60, state, shape, world: { w: 1920, h: 1080 },
+      rng: makeRng(`lofi#${i}`), i: 0, n: 1, stable: p,
+    });
+  }
+  ok('and stops scrolling while they sit', state.walked === before);
+}
+
+{
+  // The world behind is drawn by the same effect, so it needs a closed shape
+  // with an area — on a roofline there is nothing to draw it into, and it
+  // must simply not be there rather than be a smear along the gutter.
+  const p = { ...base, backdrop: 'woods', travel: 'on the spot' };
+  const state = wanderer.init({});
+  wanderer.step({ p, dt: 1 / 60, t: 0.1, state, shape: SHAPES.window, world: { w: 1920, h: 1080 }, rng: makeRng('bd#1'), i: 0, n: 1, stable: p });
+  wanderer.draw(context(wanderer, SHAPES.window, { g: quiet(), t: 1, state, rng: makeRng('bd~1'), p }));
+  ok('a backdrop is cast behind a closed shape', !!state.scene?.bands, `${state.scene?.bands?.length} bands`);
+
+  const open = wanderer.init({});
+  wanderer.step({ p, dt: 1 / 60, t: 0.1, state: open, shape: SHAPES.path, world: { w: 1920, h: 1080 }, rng: makeRng('bd#2'), i: 0, n: 1, stable: p });
+  wanderer.draw(context(wanderer, SHAPES.path, { g: quiet(), t: 1, state: open, rng: makeRng('bd~2'), p }));
+  ok('and not behind an open path', !open.scene);
+}
+
 /* ------------------------------------------------------------------ *
  * The world behind
  * ------------------------------------------------------------------ */

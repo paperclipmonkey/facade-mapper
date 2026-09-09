@@ -719,8 +719,8 @@ is weather or decoration; this one puts somebody on your roof.
 
 | | |
 | --- | --- |
-| **Wanderer** | A small hooded animal in headphones, walking slowly along whatever you point it at, stopping to look back the way it came, push a headphone cup on, put its hands in its pouch, stretch, yawn, and sit down for a while. |
-| **Lofi Vista** | The world behind: a dusk sky, a sun on the horizon, three bands of city drifting at three different rates with windows coming on, a branch across the near corner and a skein of birds every so often. |
+| **Wanderer** | A raccoon in a hoodie and headphones, walking slowly — along whatever you point it at, or on the spot with the world sliding past behind it — and stopping to look back the way it came, push a headphone cup on, put its hands in its pouch, stretch, yawn, and sit down for a while. |
+| **Lofi Vista** | The world on its own: a dusk sky, a sun on the horizon, three bands of city or woods drifting at three different rates, a branch across the near corner and a skein of birds every so often. |
 
 This is a starter preset like the rest, with its own demo:
 [rooftops at dusk](https://paperclipmonkey.github.io/facade-mapper/?demo=lofi).
@@ -767,15 +767,22 @@ brickwork. On a pale wall, or under a grade with a low bloom threshold, pull
 the layer's opacity down before you touch it: bloom takes the face off a small
 bright shape long before the rim is the problem.
 
-**The parallax is a camera drift, not a treadmill.** Vista's bands move on
-their own clock at **Drift**, and the Wanderer walks at **Walk speed** on its.
-They are not locked together and are not meant to be — the layer boundary is
-also the boundary of what one effect is allowed to know about another, and a
-value two layers must agree on has to be a structural fact about the show
-rather than something either of them is making up sixty times a second (see
-**Talking to another layer** in [writing effects](writing-effects.md)). Slow
-both right down and the eye reads a held shot with somebody walking through it,
-which is the thing worth having.
+**Walking on the spot, with the world going past.** Set **Travel** to `on
+the spot` and **World behind** to `woods` or `dusk city`, and the animal stays
+where you put it while the hills, trees and rooftops slide past behind it in
+three bands of parallax — scrolled by *exactly* how far it has walked, so the
+nearest trees pass at the pace of its feet, the far hills at half that, and
+all of it stops when it sits down. This is the lofi-stream shot, and it is one
+layer on purpose: a separate Vista can only drift on its own clock, because a
+layer cannot read another's live position (a value two layers must agree on
+has to be a structural fact about the show — see **Talking to another layer**
+in [writing effects](writing-effects.md)), and a world that keeps sliding past
+somebody sitting still is a treadmill in front of a screensaver. It needs a
+closed shape with some area — the wall — and does nothing on a roofline.
+
+**Lofi Vista on its own** is the same scene drifting at **Drift**, for a wall
+you want the view on without anybody walking through it, or a window that
+should be a view. **Terrain** picks a city or woods.
 
 ## Paths and animation
 
