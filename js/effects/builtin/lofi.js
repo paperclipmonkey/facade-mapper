@@ -182,6 +182,8 @@ const wanderer = {
        */
       walked: 0,
       mode: 'walk',
+      /** How settled they are: 0 mid-stride, 1 having stood a moment. */
+      still: 0,
       modeT: 0,
       modeFor: 6,
       sit: 0,
@@ -320,6 +322,11 @@ const wanderer = {
     // genuinely turn round rather than flipping between two mirror images.
     state.face += clamp(state.dir - state.face, -1, 1) * Math.min(1, dt * 4.5);
 
+    // Coming to rest, the hands go into the pouch over a second or so; the
+    // first stride out brings them back. Eased, so it is a thing they do
+    // rather than a thing that happens to them.
+    state.still += clamp((moving ? 0 : 1) - state.still, -1, 1) * Math.min(1, dt * 1.6);
+
     /* -- the tail ---------------------------------------------------- */
 
     /**
@@ -400,7 +407,7 @@ const wanderer = {
     }
     if (alpha <= 0.004) return;
 
-    const pose = posture(p, state, t, beat);
+    const pose = posture(p, state, t, beat, noise);
 
     g.save();
     g.globalAlpha = alpha;
@@ -429,7 +436,7 @@ const wanderer = {
  * of that. All of it derived from `state` and `t` and nothing else, so `draw`
  * writes nothing — see the two-tabs rule in docs/writing-effects.md.
  */
-function posture(p, state, t, beat) {
+function posture(p, state, t, beat, noise) {
   const sit = clamp(state.sit, 0, 1);
   const moving = state.mode === 'walk' && sit < 0.02 && p.speed > 0;
   const phase = frac(state.stride);
@@ -491,10 +498,27 @@ function posture(p, state, t, beat) {
   const groove = clamp(p.nod, 0, 1) * (0.5 + 0.5 * (1 - sit))
     * Math.sin(frac(beat * 0.5) * TAU) * 0.055;
 
+  /**
+   * Line boil.
+   *
+   * Hand-drawn animation is redrawn every frame by a hand, and no two
+   * drawings of the same thing agree to the pixel, so the picture quivers —
+   * on eights or twelves, never on every frame. Each part of the rig gets its
+   * own offset of about half a percent of the height, held for an eighth of a
+   * second. As a shape change it is invisible; as a signal it is the single
+   * strongest cue that something was drawn rather than rendered.
+   */
+  const held = Math.floor(t * 8) / 8;
+  const boil = (k) => [
+    noise.noise2(k * 3.7 + 11.3, held * 5.1) * 0.0055,
+    noise.noise2(k * 3.7 + 47.9, held * 5.1) * 0.0055,
+  ];
+
   return {
     sit,
     moving,
     feet,
+    boil,
     // Sitting drops the hips most of the way to the ledge, which is what puts
     // the knees up by the chest without a single extra number.
     bodyY: bob + breathe + sit * 0.2,
@@ -511,7 +535,13 @@ function posture(p, state, t, beat) {
       + groove * 1.6,
     // Hands: the arms swing against the legs unless they are busy.
     reach: idle === 'headphones' ? idleAmt : 0,
-    pocket: idle === 'pockets' ? idleAmt : 0,
+    // Hands in the pouch is the resting posture, not an idle: anyone standing
+    // about in a hoodie has their hands in the front of it. An errand that
+    // needs a hand takes it out.
+    pocket: Math.max(
+      idle === 'pockets' ? idleAmt : 0,
+      clamp(state.still, 0, 1) * (1 - (idle === 'headphones' ? idleAmt : 0)) * (1 - (idle === 'stretch' ? idleAmt : 0))
+    ),
     stretch: idle === 'stretch' ? idleAmt : 0,
     mouth: idle === 'yawn' ? idleAmt : 0,
     flick: state.flick * state.flick,
@@ -601,34 +631,43 @@ function drawWanderer(g, p, a, unit) {
   g.save();
   g.scale(1 + a.squash, 1 - a.squash);
 
+  // Each part is drawn under its own boil offset — see `boil` in `posture`.
+  const part = (k, fn) => {
+    const [bx, by] = a.boil(k);
+    g.save();
+    g.translate(bx, by);
+    fn();
+    g.restore();
+  };
+
   // Behind everything, and the first thing the eye finds.
-  drawTail(g, a, tailLight, tailDark, line, ink);
+  part(0, () => drawTail(g, a, tailLight, tailDark, line, ink));
 
   // The far side of them, in shadow. Drawn before the body so it is behind
   // it, which is the whole of why an animal drawn flat still has a near side
   // and a far side.
-  drawLeg(g, a, 1, dark, ink, line * 0.7);
-  drawArm(g, a, 1, dark, ink, line * 0.7);
+  part(1, () => drawLeg(g, a, 1, dark, ink, line * 0.7));
+  part(2, () => drawArm(g, a, 1, dark, ink, line * 0.7));
 
-  g.save();
-  g.translate(0, a.bodyY);
-  g.rotate(-a.lean);
-  drawBody(g, a, p, ink, line);
-  g.restore();
+  part(3, () => {
+    g.translate(0, a.bodyY);
+    g.rotate(-a.lean);
+    drawBody(g, a, p, ink, line);
+  });
 
-  drawLeg(g, a, 0, p.hoodie, ink, line);
+  part(4, () => drawLeg(g, a, 0, p.hoodie, ink, line));
 
-  g.save();
-  g.translate(0, a.bodyY + a.headBob);
-  // The head turns about the neck, not about its own centre, or a look back
-  // over the shoulder detaches it.
-  g.translate(0, SHOULDER_Y);
-  g.rotate(a.headTilt + a.headTurn * 0.5);
-  g.translate(0, -SHOULDER_Y);
-  drawHead(g, p, a, ink, line);
-  g.restore();
+  part(5, () => {
+    g.translate(0, a.bodyY + a.headBob);
+    // The head turns about the neck, not about its own centre, or a look back
+    // over the shoulder detaches it.
+    g.translate(0, SHOULDER_Y);
+    g.rotate(a.headTilt + a.headTurn * 0.5);
+    g.translate(0, -SHOULDER_Y);
+    drawHead(g, p, a, ink, line);
+  });
 
-  drawArm(g, a, 0, p.hoodie, ink, line);
+  part(6, () => drawArm(g, a, 0, p.hoodie, ink, line));
 
   if (p.rimAmount > 0) drawRim(g, p, a, line);
   g.restore();
@@ -1230,6 +1269,7 @@ const vista = {
     { key: 'lights', type: 'range', label: 'Windows lit', default: 0.45, min: 0, max: 1, step: 0.01 },
     { key: 'clouds', type: 'range', label: 'Cloud', default: 0.5, min: 0, max: 1, step: 0.01 },
     { key: 'birds', type: 'range', label: 'Birds', default: 0.35, min: 0, max: 1, step: 0.01 },
+    { key: 'rain', type: 'range', label: 'Rain', default: 0, min: 0, max: 1, step: 0.01 },
     { key: 'branch', type: 'bool', label: 'Branch in the corner', default: true },
     { key: 'sway', type: 'range', label: 'Sway', default: 1, min: 0, max: 3, step: 0.05 },
     { key: 'seed', type: 'range', label: 'Shuffle the city', default: 7, min: 0, max: 999, step: 1 },
@@ -1279,10 +1319,89 @@ function drawScene(g, p, bbox, t, noise, state, scroll) {
   for (let b = 0; b < bands.length; b++) {
     const near = (b + 1) / bands.length;
     drawBand(g, p, bands[b], bbox, horizon, t, near, b === bands.length - 1, scroll * (0.2 + 0.8 * near));
+    // In the woods, water lies between the far hills and the near trees.
+    if (b === 0 && p.terrain === 'woods' && bands.length > 1) {
+      drawWater(g, p, bbox, bandBase(p, bbox, horizon, near), bandBase(p, bbox, horizon, 2 / bands.length), t);
+    }
   }
 
   if (p.birds > 0) drawBirds(g, p, bbox, horizon, t);
+  if (p.rain > 0) drawRain(g, p, bbox, t);
   if (p.branch) drawBranch(g, p, bbox, t, noise);
+}
+
+/**
+ * Where a band stands. City bands sit almost on one another, the way a
+ * skyline does; woods are spread down the picture so there is room for a
+ * lake between the hills and the trees, and ground in front of the trees.
+ */
+function bandBase(p, bbox, horizon, near) {
+  return horizon + bbox.h * (p.terrain === 'woods' ? 0.09 : 0.02) * near;
+}
+
+/**
+ * A lake, holding the sky and the sun.
+ *
+ * Nothing but a gradient from the horizon colour into the sky colour — a
+ * reflection is the sky the other way up — with the sun laid on it as a
+ * smeared column rather than a disc, since water does not hold a disc still.
+ */
+function drawWater(g, p, bbox, y0, y1, t) {
+  if (!(y1 > y0 + 0.5)) return;
+  const grad = g.createLinearGradient(0, y0, 0, y1);
+  grad.addColorStop(0, mixLinear(p.horizon, p.sky, 0.25));
+  grad.addColorStop(1, mixLinear(p.sky, p.city, 0.35));
+  g.fillStyle = grad;
+  g.fillRect(bbox.x, y0, bbox.w, y1 - y0);
+
+  const x = bbox.x + bbox.w * 0.68;
+  const w = Math.min(bbox.w, bbox.h) * 0.06;
+  g.save();
+  g.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 6; i++) {
+    const y = lerp(y0, y1, (i + 0.5) / 6);
+    const sway = Math.sin(t * 0.7 + i * 1.9) * w * 0.3;
+    const grad2 = g.createLinearGradient(x - w * 2, 0, x + w * 2, 0);
+    grad2.addColorStop(0, rgba(p.sun, 0));
+    grad2.addColorStop(0.5, rgba(p.sun, 0.22 * (1 - i / 7)));
+    grad2.addColorStop(1, rgba(p.sun, 0));
+    g.fillStyle = grad2;
+    g.fillRect(x - w * 2 + sway, y, w * 4, Math.max(1, (y1 - y0) / 12));
+  }
+  g.restore();
+}
+
+/**
+ * Rain, as the light diagonal hatching a hand puts over a scene.
+ *
+ * A few hundred short strokes at one slant, each on its own loop down the
+ * picture. A pure function of `t` and a seed, so every tab draws the same
+ * rain — and one path, stroked once.
+ */
+function drawRain(g, p, bbox, t) {
+  const amount = clamp(p.rain, 0, 1);
+  const n = Math.round(220 * amount);
+  if (n < 1) return;
+  const rng = makeRng(`rain:${p.seed}`);
+  const len = bbox.h * 0.06;
+  const slant = len * 0.18;
+  const speed = bbox.h * 0.55;
+  g.save();
+  g.strokeStyle = rgba(mixLinear(p.horizon, '#ffffff', 0.5), 0.16);
+  g.lineWidth = Math.max(0.6, bbox.h * 0.0012);
+  g.lineCap = 'round';
+  g.beginPath();
+  for (let i = 0; i < n; i++) {
+    const x0 = bbox.x + rng() * (bbox.w + slant);
+    const phase = rng();
+    const rate = 0.8 + rng() * 0.5;
+    const y = bbox.y + (((t * speed * rate + phase * (bbox.h + len)) % (bbox.h + len)) - len);
+    const x = x0 - (y - bbox.y) * 0.18;
+    g.moveTo(x, y);
+    g.lineTo(x - slant, y + len);
+  }
+  g.stroke();
+  g.restore();
 }
 
 /**
@@ -1297,12 +1416,12 @@ const BACKDROPS = {
   'dusk city': {
     sky: '#2b2757', horizon: '#f0916b', sun: '#ffd7a1', city: '#3b2547', lit: '#ffc978',
     terrain: 'city', skyline: 0.66, sunHeight: 0.28, bands: 3, density: 1.1, haze: 0.66,
-    lights: 0.45, clouds: 0.5, birds: 0.35, branch: true, sway: 1, seed: 7, level: 1, pan: 0,
+    lights: 0.45, clouds: 0.5, birds: 0.35, rain: 0, branch: true, sway: 1, seed: 7, level: 1, pan: 0,
   },
   woods: {
     sky: '#5a6a8d', horizon: '#d9c2a2', sun: '#f7e4bb', city: '#2a3a31', lit: '#ffc978',
-    terrain: 'woods', skyline: 0.68, sunHeight: 0.22, bands: 3, density: 1.2, haze: 0.72,
-    lights: 0, clouds: 0.7, birds: 0.3, branch: true, sway: 1, seed: 3, level: 1, pan: 0,
+    terrain: 'woods', skyline: 0.6, sunHeight: 0.22, bands: 3, density: 1.2, haze: 0.72,
+    lights: 0, clouds: 0.7, birds: 0.3, rain: 0.4, branch: true, sway: 1, seed: 3, level: 1, pan: 0,
   },
 };
 
@@ -1354,11 +1473,14 @@ function ensureCity(state, stable, bbox) {
        * between them. A pine is tall and narrow, a hill wide and low, so the
        * same block gets reshaped rather than re-rolled.
        */
-      const kind = !woods ? 'block' : (near < 0.4 || roof < 0.25 ? 'hill' : 'pine');
+      let kind = !woods ? 'block' : (near < 0.4 || roof < 0.25 ? 'hill' : 'pine');
+      // A signpost now and then, in the nearest band only, where it can be read.
+      if (woods && near > 0.9 && roof > 0.25 && roof < 0.31) kind = 'sign';
       blocks.push({
-        x, w: kind === 'hill' ? w * 2.2 : kind === 'pine' ? w * 1.7 : w,
-        h: kind === 'hill' ? h * 0.45 : kind === 'pine' ? h * 0.75 : h,
+        x, w: kind === 'hill' ? w * 2.2 : kind === 'pine' ? w * 1.7 : kind === 'sign' ? w * 0.55 : w,
+        h: kind === 'hill' ? h * 0.45 : kind === 'pine' ? h * 0.75 : kind === 'sign' ? h * 0.42 : h,
         kind,
+        tone: rng() < 0.5 ? 1 : 0,
         // A water tower on one roof in fifteen, and an aerial on one in six.
         tower: roof > 0.94,
         aerial: roof > 0.72 && roof <= 0.94,
@@ -1370,7 +1492,13 @@ function ensureCity(state, stable, bbox) {
       });
       x += w + width * 0.12 * rng();
     }
-    state.bands.push({ blocks, span: x, near });
+    // Grass along the ground of the band, laid once with the trees.
+    const tufts = [];
+    if (woods) {
+      const count = Math.round(x * 28);
+      for (let i = 0; i < count; i++) tufts.push({ x: rng() * x, s: 0.6 + rng() * 0.8 });
+    }
+    state.bands.push({ blocks, span: x, near, tufts });
   }
   return state.bands;
 }
@@ -1449,7 +1577,7 @@ function drawClouds(g, p, bbox, horizon, t, noise) {
 function drawBand(g, p, band, bbox, horizon, t, near, isNearest, scroll) {
   const haze = clamp(p.haze, 0, 1) * (1 - near);
   const colour = mixLinear(p.city, p.horizon, haze * 0.85);
-  const base = horizon + bbox.h * 0.02 * near;
+  const base = bandBase(p, bbox, horizon, near);
   const span = band.span * bbox.w;
   if (!(span > 1)) return;
 
@@ -1527,8 +1655,101 @@ function drawBand(g, p, band, bbox, horizon, t, near, isNearest, scroll) {
     }
     g.fill();
 
+    if (p.terrain === 'woods') drawWoodsDetail(g, p, band, bbox, base, ox, colour, isNearest);
     if (p.lights > 0 && near > 0.4 && p.terrain !== 'woods') drawWindows(g, p, band, bbox, base, ox, t, near);
   }
+
+  /**
+   * Mist at the foot of every band but the nearest.
+   *
+   * The one painterly thing that costs nothing: a band of the horizon colour
+   * fading up from where the trees meet the ground. It is what the air does
+   * between here and there, and without it every band is a paper cut-out
+   * laid on the one behind.
+   */
+  if (!isNearest) {
+    const top = base - bbox.h * 0.05;
+    const bottom = base + bbox.h * 0.035;
+    const grad = g.createLinearGradient(0, top, 0, bottom);
+    grad.addColorStop(0, rgba(p.horizon, 0));
+    grad.addColorStop(0.6, rgba(p.horizon, 0.3 * (1 - near * 0.5)));
+    grad.addColorStop(1, rgba(p.horizon, 0.12));
+    g.fillStyle = grad;
+    g.fillRect(bbox.x, top, bbox.w, bottom - top);
+  }
+}
+
+/**
+ * The second pass over a woods band: the lit side of every other pine, the
+ * signposts, and grass at the feet of the nearest one.
+ *
+ * Its own pass because these are not the silhouette colour. Two tones of
+ * pine is what stops a forest reading as a saw blade; the grass and the odd
+ * post are the near ground having something on it, which is what the eye
+ * uses to tell it is moving.
+ */
+function drawWoodsDetail(g, p, band, bbox, base, ox, colour, isNearest) {
+  const lit = mixLinear(colour, p.horizon, 0.16);
+  g.fillStyle = lit;
+  g.beginPath();
+  for (const block of band.blocks) {
+    if (block.kind !== 'pine' || !block.tone) continue;
+    const x = ox + block.x * bbox.w;
+    const w = block.w * bbox.w;
+    if (x + w < bbox.x || x > bbox.x + bbox.w) continue;
+    const h = block.h * bbox.h;
+    const mid = x + w / 2;
+    // The sunward half of the tree, tier by tier.
+    for (let tier = 0; tier < 3; tier++) {
+      const top = base - h * (0.62 + tier * 0.19);
+      const spread = w * (0.5 - tier * 0.12);
+      g.moveTo(mid, top);
+      g.quadraticCurveTo(mid + spread * 0.45, base - h * (0.5 + tier * 0.2), mid + spread, base - h * (0.2 + tier * 0.22));
+      g.lineTo(mid + spread * 0.25, base - h * (0.2 + tier * 0.22));
+      g.closePath();
+    }
+  }
+  g.fill();
+
+  if (!isNearest) return;
+
+  // Signposts: a post and an arrow board, wood-coloured.
+  const wood = mixLinear('#8a6a48', colour, 0.35);
+  for (const block of band.blocks) {
+    if (block.kind !== 'sign') continue;
+    const x = ox + block.x * bbox.w;
+    const w = block.w * bbox.w;
+    if (x + w < bbox.x || x > bbox.x + bbox.w) continue;
+    const h = block.h * bbox.h;
+    const post = Math.max(1, w * 0.12);
+    g.fillStyle = mixLinear(wood, colour, 0.4);
+    g.fillRect(x + w * 0.4, base - h, post, h);
+    g.fillStyle = wood;
+    g.beginPath();
+    g.moveTo(x + w * 0.2, base - h * 0.95);
+    g.lineTo(x + w * 0.85, base - h * 0.95);
+    g.lineTo(x + w, base - h * 0.82);
+    g.lineTo(x + w * 0.85, base - h * 0.69);
+    g.lineTo(x + w * 0.2, base - h * 0.69);
+    g.closePath();
+    g.fill();
+  }
+
+  // Grass, as short strokes leaning the way the wind goes.
+  g.strokeStyle = mixLinear(colour, p.horizon, 0.28);
+  g.lineWidth = Math.max(0.8, bbox.h * 0.0025);
+  g.lineCap = 'round';
+  g.beginPath();
+  for (const tuft of band.tufts) {
+    const x = ox + tuft.x * bbox.w;
+    if (x < bbox.x - 5 || x > bbox.x + bbox.w + 5) continue;
+    const sz = bbox.h * 0.012 * tuft.s;
+    for (let k = -1; k <= 1; k++) {
+      g.moveTo(x + k * sz * 0.35, base + 1);
+      g.lineTo(x + k * sz * 0.9 + sz * 0.3, base - sz * (1 - Math.abs(k) * 0.35));
+    }
+  }
+  g.stroke();
 }
 
 /**

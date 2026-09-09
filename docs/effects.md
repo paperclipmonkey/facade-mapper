@@ -753,11 +753,19 @@ stop and sit at different moments, and the wall stops being a loop.
 And one that *is* the drawing, since it is where the uncanny valley actually
 lives: the head is a single profile curve with the snout in it, every fill is
 top-lit with an edge in its own darker colour rather than a black outline, the
-body squashes on contact and the head and ears arrive a beat behind it, and the
-eye rests half-lidded. A front-on circle with a muzzle pasted to one side, flat
-fills in a uniform outline, and a round wide-open eye are the three things that
-make a cartoon animal look like a doll of one, and the first draft of this rig
-had all three.
+hood is cloth that hangs over the head rather than a shell round it, the body
+squashes on contact and the head and ears arrive a beat behind it, the hands go
+into the pouch whenever they stop, and the eye rests half-lidded. A front-on
+circle with a muzzle pasted to one side, flat fills in a uniform outline, a
+hood drawn as a bigger head, and a round wide-open eye are the four things that
+make a cartoon animal look like a doll of one — or an astronaut — and the
+first drafts of this rig had all four.
+
+**It boils.** Hand-drawn animation is redrawn every frame by a hand, and no two
+drawings agree to the pixel, so the picture quivers — on eights, never on every
+frame. Each part of the rig gets its own offset of half a percent of its height,
+held for an eighth of a second. Invisible as a shape change; as a signal it is
+the strongest cue there is that something was drawn rather than rendered.
 
 **Turn the rim light down last, not first.** A projector adds light and cannot
 subtract any, so a silhouette on a wall has to be *made* of light. **Rim
@@ -782,7 +790,12 @@ closed shape with some area — the wall — and does nothing on a roofline.
 
 **Lofi Vista on its own** is the same scene drifting at **Drift**, for a wall
 you want the view on without anybody walking through it, or a window that
-should be a view. **Terrain** picks a city or woods.
+should be a view. **Terrain** picks a city or woods; **Rain** hatches the
+picture with the light diagonal strokes a hand puts over a wet scene. The woods
+are painted rather than cut out: mist rises at the foot of every band but the
+nearest, every other pine has a sunward side, there is a lake between the hills
+and the trees with the sun smeared down it, and the near ground has grass and
+the odd signpost on it — which is what the eye uses to tell it is moving.
 
 ## Paths and animation
 
