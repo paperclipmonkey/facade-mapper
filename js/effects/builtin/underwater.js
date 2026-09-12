@@ -935,8 +935,38 @@ const shoal = {
         f.ay += edge.ny * inward * urgency;
       }
 
-      const surf = nearestSurface(obstacles, probeX, probeY, look);
-      if (surf) {
+      /**
+       * Every obstacle within reach, not just the closest one.
+       *
+       * `nearestSurface` used to stand in here on its own, and picking a
+       * single winner is fine when there is only one thing to avoid. Between
+       * two — a gap between windows, a window close to the edge of the wall —
+       * it is not: whichever is a pixel closer takes over the steering
+       * completely, so a fish easing into the gap gets shoved one way, and the
+       * moment that nudge makes the *other* obstacle the nearer one, shoved
+       * back. The turning-circle cap keeps either shove from being a full
+       * reversal, so the fish neither escapes nor settles — it sits in the gap
+       * flipping between the two headings, which is a fish stuck vibrating at
+       * the mouth of every such gap, precisely where the shafts of light also
+       * happen to line up.
+       *
+       * Summing every obstacle in range instead gives the fish sitting between
+       * two of them what it should feel: both pushes at once, cancelling in
+       * the middle of the gap and net-zero exactly on the centreline, with
+       * only the tangents left to carry it through. The hard constraint below
+       * already loops over all of them for the same reason; this brings the
+       * soft steering into line with it.
+       */
+      for (const o of obstacles) {
+        const { bbox } = o;
+        if (
+          probeX < bbox.x - look
+          || probeX > bbox.x + bbox.w + look
+          || probeY < bbox.y - look
+          || probeY > bbox.y + bbox.h + look
+        ) continue;
+        const surf = surfaceNormal(o.points, probeX, probeY);
+        if (surf.dist >= look) continue;
         const urgency = (1 - surf.dist / look) * 2600;
         const elen = Math.hypot(surf.ex, surf.ey) || 1;
         let tx = surf.ex / elen;
@@ -949,7 +979,7 @@ const shoal = {
         // surface towards the probe, which is the way out when the probe is
         // still outside and the way *in* when it has already crossed — hence
         // the sign, which is the one thing here that is easy to get backwards.
-        const sign = surf.inside ? -1 : 1;
+        const sign = pointInPolygon(PROBE, o.points) ? -1 : 1;
         f.ax += surf.nx * sign * urgency + tx * urgency * 0.8;
         f.ay += surf.ny * sign * urgency + ty * urgency * 0.8;
       }
@@ -1043,6 +1073,30 @@ const shoal = {
           || f.y > bbox.y + bbox.h + size
         ) continue;
         deflect(o.points, f, size * 0.35, 0.25, false, GRAZE);
+      }
+
+      /**
+       * Grazing off two surfaces in the same step can leave less than one.
+       *
+       * A slide removes only the component driving into *that* surface, which
+       * is correct for one surface at a time — but a fish squeezed into a gap
+       * now gets pushed towards every obstacle in reach rather than just the
+       * nearest, so it reaches the mouth of a gap heading closer to square-on
+       * to both sides than it used to. Slide off the wall, then off the window
+       * beside it, and the second slide can remove most of what the first one
+       * left, since the two normals are not parallel. What survives is still
+       * the correct direction — clear of both surfaces — just thinner than the
+       * floor promises, and nothing after this put it back.
+       */
+      const grazed = Math.hypot(f.vx, f.vy);
+      if (grazed < floor) {
+        if (grazed > 1e-6) {
+          f.vx *= floor / grazed;
+          f.vy *= floor / grazed;
+        } else {
+          f.vx = Math.cos(heading) * floor;
+          f.vy = Math.sin(heading) * floor;
+        }
       }
 
       /**
