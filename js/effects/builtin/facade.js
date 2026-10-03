@@ -437,6 +437,219 @@ const serpent = {
 
 const VINE_STEPS_PER_FRAME = 26;
 
+/* ------------------------------------------------------------------ *
+ * Ivy, baked
+ * ------------------------------------------------------------------ */
+
+/** Sprite size, and the leaf's length inside it, in sprite pixels. */
+const LEAF_PX = 80;
+const LEAF_L = 60;
+/** Where the stalk meets the stem, in the sprite: the stamp's origin. */
+const LEAF_ORIGIN_X = 6;
+
+/**
+ * Ages at which a stretch of stem is gone over again, wider and woodier.
+ *
+ * Ivy's runners go out as green shoots the width of a pencil lead and are
+ * wrist-thick grey wood by the time anybody notices the plant, and the
+ * thickening is most of what says *old* about it. In seconds, because a show
+ * is an evening: a stem a minute old has had its whole life.
+ */
+const STEM_AGES = [5, 16, 40];
+const STEM_WIDEN = [1.5, 2.1, 2.7];
+const STEM_WOOD = [0.45, 0.65, 0.85];
+/** Stretches of stem remembered for that, and how long one is before it is logged. */
+const STEM_LOG = 8192;
+const STEM_LOG_PX = 10;
+
+/** Log a stretch of new stem, for `step` to thicken as it ages. */
+function logStem(state, x0, y0, x1, y1, width, t) {
+  const i = state.logHead;
+  const o = i * 6;
+  state.log[o] = x0;
+  state.log[o + 1] = y0;
+  state.log[o + 2] = x1;
+  state.log[o + 3] = y1;
+  state.log[o + 4] = width;
+  state.log[o + 5] = t;
+  state.logStage[i] = 0;
+  state.logHead = (i + 1) % STEM_LOG;
+  if (state.logCount < STEM_LOG) state.logCount++;
+}
+
+/**
+ * One leaf into the plant's bitmap: its shadow a fixed way down and to the
+ * right, then the leaf, both turned to `angle` about the point the stalk meets
+ * the stem.
+ */
+function stampLeaf(c, ivy, x, y, angle, len, kind, tone) {
+  const s = len / LEAF_L;
+  const size = LEAF_PX * s;
+  const ox = LEAF_ORIGIN_X * s;
+  const drop = len * 0.13;
+  c.save();
+  c.translate(x + drop * 0.55, y + drop * 0.85);
+  c.rotate(angle);
+  c.drawImage(ivy.shadows[kind], -ox, -size / 2, size, size);
+  c.restore();
+  c.save();
+  c.translate(x, y);
+  c.rotate(angle);
+  c.drawImage(ivy.leaves[kind * 3 + tone].canvas, -ox, -size / 2, size, size);
+  c.restore();
+}
+
+/**
+ * An ivy leaf's outline into the current path: stalk at the origin, blade
+ * pointing along +x, `len` from stalk to tip.
+ *
+ * Polar about the point where the veins meet, as a sum of lobes — which is
+ * what a palmate leaf is — sampled into straight segments fine enough at
+ * sprite scale not to show. Three kinds: the five-lobed juvenile leaf
+ * everybody draws, a three-lobed one, and the unlobed heart of the adult
+ * plant. A wall of only the first reads as a pattern.
+ */
+function ivyOutline(c, kind, len) {
+  const cx = len * 0.36;
+  const R = len - cx;
+  // Broad lobes and shallow sinuses. Narrow ones with deep cuts between them
+  // were the first attempt, and every leaf on the wall came out a star.
+  const lobes = kind === 0
+    ? [[0, 1, 0.55], [1.2, 0.84, 0.5], [-1.2, 0.84, 0.5], [2.25, 0.58, 0.5], [-2.25, 0.58, 0.5]]
+    : kind === 1
+      ? [[0, 1, 0.62], [1.3, 0.78, 0.58], [-1.3, 0.78, 0.58]]
+      : null;
+  const N = 64;
+  for (let k = 0; k <= N; k++) {
+    const th = -Math.PI + (k / N) * TAU;
+    let f;
+    if (lobes) {
+      f = kind === 0 ? 0.42 : 0.46;
+      for (const [at, amp, wide] of lobes) {
+        let d = th - at;
+        if (d > Math.PI) d -= TAU;
+        if (d < -Math.PI) d += TAU;
+        // A broad triangle with a blunt tip, which is what an ivy lobe is. A
+        // bell made every lobe a spike, and a leaf of five spikes is a star;
+        // a round cap made them clubs, and the wall turned to clover.
+        const u = Math.abs(d / (wide * 1.5));
+        if (u < 1) f = Math.max(f, amp * (1 - u ** 1.5));
+      }
+      // Pulled in towards the stalk, where the two basal lobes meet it.
+      const back = Math.PI - Math.abs(th);
+      f *= 1 - 0.5 * Math.exp(-((back / 0.3) ** 2));
+    } else {
+      // The adult leaf: no lobes, a long point, and a notch where the stalk
+      // goes in.
+      const back = Math.PI - Math.abs(th);
+      f = (0.2 + 0.8 * ((1 + Math.cos(th)) / 2) ** 2) * (1 - 0.5 * Math.exp(-((back / 0.32) ** 2)));
+      f = Math.max(f, 0.52 * Math.exp(-(((Math.abs(th) - 1.85) / 0.85) ** 2)));
+    }
+    const x = cx + Math.cos(th) * R * f;
+    const y = Math.sin(th) * R * f * 0.92;
+    if (k === 0) c.moveTo(x, y);
+    else c.lineTo(x, y);
+  }
+  c.closePath();
+}
+
+/**
+ * The leaves the plant is grown from: three shapes in three ages, and a soft
+ * shadow for each shape.
+ *
+ * Every leaf is shaded rather than flat — a lit half and a darker half, as if
+ * folded slightly along the midrib, a gloss, pale veins and a darker edge —
+ * because a mat of flat green shapes is a camouflage print, and a mat of
+ * leaves each with its own light and dark is a plant. Lighter for younger:
+ * ivy comes out a bright fresh green and darkens to nearly black as it ages.
+ *
+ * The shadow is a sprite of its own rather than part of the leaf, so it can
+ * be stamped a fixed distance down and to the right whichever way the leaf is
+ * turned. Baked into the leaf, it would turn with it, and a plant whose every
+ * leaf casts its shadow a different way reads as noise.
+ */
+function bakeIvy(color, tip) {
+  const tones = [mixHex(color, '#000000', 0.3), mixHex(color, '#000000', 0.08), mixHex(color, tip, 0.45)];
+  const leaves = [];
+  const shadows = [];
+  for (let kind = 0; kind < 3; kind++) {
+    const shadow = offscreen(LEAF_PX, LEAF_PX);
+    {
+      const c = shadow.getContext('2d');
+      c.translate(LEAF_ORIGIN_X, LEAF_PX / 2);
+      // Four nested copies, each a little bigger and fainter: a soft edge
+      // without a filter.
+      for (const [grow, a] of [[1.12, 0.12], [1.06, 0.16], [1, 0.22], [0.92, 0.26]]) {
+        c.save();
+        c.translate(LEAF_L * 0.36, 0);
+        c.scale(grow, grow);
+        c.translate(-LEAF_L * 0.36, 0);
+        c.beginPath();
+        ivyOutline(c, kind, LEAF_L);
+        c.fillStyle = `rgba(0,0,0,${a})`;
+        c.fill();
+        c.restore();
+      }
+    }
+    shadows.push(shadow);
+
+    for (const tone of tones) {
+      const canvas = offscreen(LEAF_PX, LEAF_PX);
+      const c = canvas.getContext('2d');
+      c.translate(LEAF_ORIGIN_X, LEAF_PX / 2);
+      const R = LEAF_L * 0.64;
+      const cx = LEAF_L * 0.36;
+
+      // The stalk, from the stem into the blade.
+      c.strokeStyle = mixHex(tone, '#3d3324', 0.35);
+      c.lineWidth = 2.2;
+      c.lineCap = 'round';
+      c.beginPath();
+      c.moveTo(-LEAF_ORIGIN_X + 1, 0);
+      c.lineTo(cx, 0);
+      c.stroke();
+
+      c.beginPath();
+      ivyOutline(c, kind, LEAF_L);
+      c.fillStyle = tone;
+      c.fill();
+
+      const fold = c.createLinearGradient(0, -R, 0, R);
+      fold.addColorStop(0, 'rgba(255,255,226,0.2)');
+      fold.addColorStop(0.48, 'rgba(255,255,226,0.04)');
+      fold.addColorStop(0.52, 'rgba(0,0,0,0.06)');
+      fold.addColorStop(1, 'rgba(0,0,0,0.3)');
+      c.fillStyle = fold;
+      c.fill();
+
+      const gloss = c.createRadialGradient(cx + R * 0.25, -R * 0.28, 0, cx + R * 0.25, -R * 0.28, R * 0.6);
+      gloss.addColorStop(0, 'rgba(255,255,240,0.24)');
+      gloss.addColorStop(1, 'rgba(255,255,240,0)');
+      c.fillStyle = gloss;
+      c.fill();
+
+      c.strokeStyle = rgba(mixHex(tone, '#000000', 0.5), 0.8);
+      c.lineWidth = 1.6;
+      c.lineJoin = 'round';
+      c.stroke();
+
+      // Veins, from where the stalk meets the blade out towards each lobe.
+      c.strokeStyle = rgba(mixHex(tone, '#e9f2cf', 0.5), 0.75);
+      c.lineWidth = 1.3;
+      c.beginPath();
+      const veins = kind === 0 ? [0, 1.15, -1.15, 2.2, -2.2] : kind === 1 ? [0, 1.25, -1.25] : [0, 0.8, -0.8, 1.7, -1.7];
+      for (const a of veins) {
+        const reach = a === 0 ? 0.9 : kind === 2 ? 0.55 : 0.72;
+        c.moveTo(cx, 0);
+        c.lineTo(cx + Math.cos(a) * R * reach, Math.sin(a) * R * reach * 0.92);
+      }
+      c.stroke();
+      leaves.push({ canvas, kind });
+    }
+  }
+  return { leaves, shadows };
+}
+
 /**
  * Growth that spreads across a wall and goes *round* the openings.
  *
@@ -461,6 +674,19 @@ const VINE_STEPS_PER_FRAME = 26;
  * centimetres added this frame are ever stroked. A wall covered in ivy costs
  * one drawImage, which is the only reason this can run alongside everything
  * else in a show.
+ *
+ * What it accumulates is a plant, not a line drawing of one. It used to be a
+ * thin green stroke with the odd green oval beside it, which at house scale is
+ * scribble: nothing about it said leaf, and nothing about it changed with age.
+ * Now the leaves are baked once — ivy's three shapes in three ages of green,
+ * each shaded, veined and edged — and stamped in alternating clusters along
+ * every runner with a soft shadow under each, so where runners cross and
+ * recross, the leaves pile into a mat with depth in it. And the stems age: a
+ * runner goes out as a thin green-brown shoot and is gone over again, wider
+ * and woodier, at a few ages, from *behind* everything already drawn, so the
+ * oldest runners — the ones that came up from the ground first — end up as the
+ * thick bare trunks the rest of the plant hangs off. Every bit of that is a
+ * stroke or a stamp into the same bitmap, so it costs what the scribble did.
  */
 const vine = {
   id: 'vine',
@@ -487,7 +713,7 @@ const vine = {
     // lives at, with new shoots replacing the oldest growth for ever.
     { key: 'wither', type: 'range', label: 'Wither', default: 0.25, min: 0, max: 1, step: 0.01 },
     { key: 'regrow', type: 'range', label: 'Start again after (s)', default: 0, min: 0, max: 600, step: 5 },
-    { key: 'leaves', type: 'range', label: 'Leaves', default: 0.4, min: 0, max: 1, step: 0.01 },
+    { key: 'leaves', type: 'range', label: 'Leaves', default: 0.65, min: 0, max: 1, step: 0.01 },
     OBSTACLE_PARAM,
     { key: 'shootGlow', type: 'range', label: 'Shoot glow', default: 1, min: 0, max: 4, step: 0.05 },
   ],
@@ -547,6 +773,19 @@ const vine = {
       /** Openings something has already reached, so the pull towards them stops. */
       state.wrapped = new Set();
       state.plantedAt = t;
+
+      state.ivy = bakeIvy(stable.color, stable.tip);
+      /**
+       * Every stretch of stem laid, and when — so it can be gone over again,
+       * wider and woodier, as it ages. A ring: on a plant that has covered the
+       * wall the oldest stretches drop off the end, by which time they have
+       * had every thickening they are going to get.
+       */
+      state.log = new Float32Array(STEM_LOG * 6);
+      state.logStage = new Uint8Array(STEM_LOG);
+      state.logCount = 0;
+      state.logHead = 0;
+      state.logScan = 0;
     }
 
     const c = state.ctx;
@@ -573,6 +812,9 @@ const vine = {
       state.carry = 0;
       state.wrapped.clear();
       state.plantedAt = t;
+      state.logCount = 0;
+      state.logHead = 0;
+      state.logScan = 0;
     };
 
     // A hard cycle, for a show that wants the wall to be taken over, cleared,
@@ -651,6 +893,12 @@ const vine = {
       width,
       life: (bbox.w + bbox.h) * (0.15 + rng() * 0.35),
       sinceLeaf: 0,
+      /** Which side the next leaf comes off: they alternate, as ivy's do. */
+      leafSide: rng() < 0.5 ? 1 : -1,
+      /** Where the stretch of stem being logged began, and how long it is. */
+      segX: x,
+      segY: y,
+      segLen: 0,
       tint: rng(),
       /** How brightly this shoot is lit, eased so it never pops on or off. */
       glow: 0,
@@ -806,6 +1054,8 @@ const vine = {
       state.carry -= steps * stepPx;
     }
 
+    /** Which openings a leaf this step was stamped close enough to hang over, as bits. */
+    let overhang = 0;
     while (steps > 0 && state.grown < budget && state.tips.length) {
       steps -= 1;
       for (let i = state.tips.length - 1; i >= 0; i--) {
@@ -910,28 +1160,55 @@ const vine = {
           continue;
         }
 
-        c.strokeStyle = mixHex(p.color, '#000000', tip.tint * 0.35);
-        c.lineWidth = Math.max(0.4, p.thickness * tip.width);
+        // A new shoot, only as wide as this runner is, and already halfway to
+        // bark: the wood thickens out from behind it later — see below the
+        // loop — and a bright green line down the middle of a brown stem
+        // reads as a tube rather than a branch.
+        const width = Math.max(0.4, p.thickness * tip.width);
+        c.strokeStyle = mixHex(mixHex(p.color, '#5d4b3a', 0.35), '#000000', tip.tint * 0.25);
+        c.lineWidth = width;
         c.beginPath();
         c.moveTo(tip.x, tip.y);
         c.lineTo(nx, ny);
         c.stroke();
+        tip.segLen += stepPx;
+        if (tip.segLen >= STEM_LOG_PX) {
+          logStem(state, tip.segX, tip.segY, nx, ny, width, t);
+          tip.segX = nx;
+          tip.segY = ny;
+          tip.segLen = 0;
+        }
 
+        /**
+         * Leaves, a few at a node, alternating sides.
+         *
+         * Stamped from the baked set, each with its shadow first — so a leaf
+         * laid over an older one darkens it, and the mat builds up in depth
+         * rather than in flat green — and each turned out from the stem and
+         * then let droop a little, because a leaf on a wall hangs.
+         */
         tip.sinceLeaf += stepPx;
-        const leafGap = lerp(200, 26, p.leaves);
+        const leafGap = lerp(64, 9, p.leaves) * Math.sqrt(Math.max(0.5, p.thickness) / 3.5);
         if (p.leaves > 0 && tip.sinceLeaf > leafGap) {
-          tip.sinceLeaf = 0;
-          const side = rng() < 0.5 ? 1 : -1;
-          const a = tip.angle + side * (0.7 + rng() * 0.5);
-          const r = p.thickness * (1.6 + rng() * 1.4);
-          c.save();
-          c.translate(nx, ny);
-          c.rotate(a);
-          c.fillStyle = mixHex(p.color, p.tip, 0.25 + rng() * 0.3);
-          c.beginPath();
-          c.ellipse(r * 0.9, 0, r, r * 0.55, 0, 0, TAU);
-          c.fill();
-          c.restore();
+          tip.sinceLeaf = rng() * leafGap * 0.4;
+          const count = 1 + (rng() < 0.4 ? 1 : 0) + (rng() < 0.12 ? 1 : 0);
+          for (let k = 0; k < count; k++) {
+            tip.leafSide = -tip.leafSide;
+            let a = tip.angle + tip.leafSide * (0.8 + rng() * 0.8);
+            a += angleDelta(a, Math.PI / 2) * 0.3;
+            const len = p.thickness * (6 + rng() * 4) * (k ? 0.72 : 1);
+            const pick = rng();
+            const kind = pick < 0.5 ? 0 : pick < 0.8 ? 1 : 2;
+            const age = rng();
+            const tone = age < 0.55 ? 0 : age < 0.86 ? 1 : 2;
+            stampLeaf(c, state.ivy, nx, ny, a, len, kind, tone);
+            for (let o = 0; o < obstacles.length && o < 31; o++) {
+              const b = obstacles[o].bbox;
+              if (nx > b.x - len && nx < b.x + b.w + len && ny > b.y - len && ny < b.y + b.h + len) {
+                overhang |= 1 << o;
+              }
+            }
+          }
         }
 
         tip.x = nx;
@@ -969,6 +1246,70 @@ const vine = {
       }
     }
 
+    /**
+     * Age the wood.
+     *
+     * A few stretches of logged stem a step, round-robin, and any that have
+     * reached their next age are drawn again — wider, browner — *behind*
+     * everything already on the bitmap, with `destination-over`. So the stem
+     * thickens out from under its own leaves rather than being painted across
+     * them, and the oldest runners, the ones that came up from the ground
+     * first, end up as the thick grey trunks the rest of the plant hangs off.
+     *
+     * Drawn at the strength the withering would have left that stretch at by
+     * now, so wood laid behind old, faded growth does not come back brighter
+     * than the growth it belongs to.
+     */
+    if (state.logCount) {
+      const checks = Math.min(state.logCount, 160);
+      c.save();
+      c.globalCompositeOperation = 'destination-over';
+      c.lineCap = 'round';
+      for (let k = 0; k < checks; k++) {
+        const i = state.logScan;
+        state.logScan = (state.logScan + 1) % state.logCount;
+        const stage = state.logStage[i];
+        if (stage >= STEM_AGES.length) continue;
+        const o = i * 6;
+        const age = t - state.log[o + 5];
+        if (age < STEM_AGES[stage]) continue;
+        state.logStage[i] = stage + 1;
+        const left = p.wither > 0 ? Math.exp(-0.06 * p.wither * age) : 1;
+        c.strokeStyle = rgba(mixHex(p.color, '#5d4b3a', STEM_WOOD[stage]), left);
+        c.lineWidth = state.log[o + 4] * STEM_WIDEN[stage];
+        c.beginPath();
+        c.moveTo(state.log[o], state.log[o + 1]);
+        c.lineTo(state.log[o + 2], state.log[o + 3]);
+        c.stroke();
+      }
+      c.restore();
+    }
+
+    /**
+     * And cut the openings back out, when a leaf may have reached one.
+     *
+     * The runners keep off the glass by construction; a leaf hangs a leaf's
+     * length off its runner, so one laid beside a frame lies across it. Erasing
+     * the opening from the bitmap leaves the leaf cut cleanly at the frame,
+     * which reads as ivy growing up to a window rather than over it — and
+     * costs one fill of the openings actually reached, on the steps that
+     * reach one, rather than a clip every frame.
+     */
+    if (overhang) {
+      c.save();
+      c.globalCompositeOperation = 'destination-out';
+      c.fillStyle = '#000000';
+      c.beginPath();
+      for (let o = 0; o < obstacles.length && o < 31; o++) {
+        const pts = obstacles[o].points;
+        if (!(overhang & (1 << o)) || pts.length < 3) continue;
+        c.moveTo(pts[0].x, pts[0].y);
+        for (let k = 1; k < pts.length; k++) c.lineTo(pts[k].x, pts[k].y);
+        c.closePath();
+      }
+      c.fill();
+      c.restore();
+    }
   },
   /**
    * The plant is grown into an offscreen bitmap by `step` and blitted here.
