@@ -62,7 +62,9 @@ const HERO = {
 };
 
 const SHOTS = [
-  { preset: 'halloween', t: 14 },
+  // A storm is mostly the dark between strikes, so the moment is chosen to
+  // land in one: the Halloween storm's second stroke comes at 14.6 seconds.
+  { preset: 'halloween', t: 14.8 },
   { preset: 'christmas', t: 16 },
   { preset: 'birthday', t: 11 },
   { preset: 'perseids', t: 9 },

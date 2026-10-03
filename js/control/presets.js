@@ -45,10 +45,28 @@ const HALLOWEEN = () => [
     name: 'Night wash',
     params: { color: '#12061f', color2: '#000814', blend: 0.4, level: 0.35, vignette: 0.4 },
   }),
-  layer('fog', {
-    name: 'Ground fog',
-    softness: 6,
-    params: { color: '#7a8ba0', density: 0.22, scale: 2.4, speed: 0.04, swirl: 0.6, height: 0.45 },
+  /**
+   * Somebody is home, and they are watching.
+   *
+   * Candles on the sill of every window, and a figure in front of them. The
+   * figure is drawn at level 0, which means it brings no room of its own: it
+   * is cut out of whatever light is already in the glass, so the candles are
+   * what it stands against. That only works if it sits directly on top of the
+   * candles at full opacity, with no blend and no softness — any of those
+   * sends a layer through a buffer of its own, where there is nothing to cut.
+   *
+   * Under everything else, so the embers, the blood and the heartbeat round
+   * the frames all draw over the windows rather than under them.
+   */
+  layer('candle', {
+    name: 'Candles in the windows',
+    tags: ['window'],
+    params: { temperature: 1850, level: 0.85, jitter: 0.35, rate: 3.5, gust: 0.25, hotspot: 0.6, candles: 3 },
+  }),
+  layer('silhouette', {
+    name: 'Somebody at the window',
+    tags: ['window'],
+    params: { level: 0, figure: 'person', speed: 0.12, size: 0.85, direction: 'right', pause: 0.3 },
   }),
   // Embers, candles and lightning take a blackbody temperature rather than a
   // colour — see docs/effects.md. 2200 K is a bright ember, 1050 K a dying one.
@@ -160,6 +178,23 @@ const HALLOWEEN = () => [
       dry: '#8a6a42', count: 7, height: 0.85, size: 0.12, petals: 5, spread: 0.45,
       leaves: 0.35, wind: 0.7, gust: 1.1, wilt: 0.85, fly: 1.4, seed: 13,
     },
+  }),
+  /**
+   * The fog goes over the house, not under it.
+   *
+   * It used to be the second layer, which put the brick on top of it: the
+   * wall is opaque, so a bank of fog at the foot of it was painted out by the
+   * wall it was lying against, and the only fog left was in the strip of
+   * garden. It belongs in front of everything but the lightning, which lights
+   * it.
+   */
+  layer('fog', {
+    name: 'Ground fog',
+    softness: 6,
+    // Thinner than it was: density now means thickness, and at the old value
+    // the bank came up a third of the house as a milky sheet. At this one it
+    // lies along the foot of the wall and tears into veils above it.
+    params: { color: '#7a8ba0', density: 0.15, scale: 2.4, speed: 0.04, swirl: 0.6, height: 0.45 },
   }),
   layer('lightning', {
     name: 'Storm',

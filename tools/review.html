@@ -44,6 +44,7 @@
       /**
        * One still. `job`:
        *   preset   — a starter id, applied to the demo house, or null
+       *   patch    — { 'Layer name': { opacity, ...params } } over the preset's layers
        *   layers   — [{ effect, tags, params, opacity, blend, softness, stagger, bindings }]
        *   grade    — a GRADE_PRESETS id (defaults to the preset's, else neutral)
        *   t, w, h, fps, facade (bool), bloom (bool), format ('png' | 'jpeg')
@@ -71,6 +72,16 @@
         project.worldAspect = DEMO_ASPECT;
         project.shapes = demoShapes();
         if (job.preset) applyPreset(project, job.preset);
+        // `patch`: { 'Layer name': { opacity, softness, ...params } } — try a
+        // value on a preset's layer without editing the preset.
+        for (const [name, change] of Object.entries(job.patch || {})) {
+          const layer = project.layers.find((l) => l.name === name);
+          if (!layer) { console.error(`patch: no layer called ${name}`); continue; }
+          for (const [key, value] of Object.entries(change)) {
+            if (['opacity', 'softness', 'blend', 'stagger', 'enabled', 'targetTags'].includes(key)) layer[key] = value;
+            else layer.params[key] = value;
+          }
+        }
         for (const [i, spec] of (job.layers || []).entries()) {
           const ids = spec.shapes
             ? project.shapes.filter((s) => spec.shapes.includes(s.name)).map((s) => s.id)
