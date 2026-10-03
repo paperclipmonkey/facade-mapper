@@ -478,10 +478,10 @@ console.log('\n— the starter template —');
 {
   /**
    * Nothing checked this at all, and it is the first line of every custom
-   * effect anybody writes. It is a plain module with no imports of its own —
-   * the registry appends the `fx` namespace, which the template does not use —
-   * so it loads here from a data: URL and faces the same rules as the eighty
-   * built-ins.
+   * effect anybody writes. It is a plain module with no imports of its own:
+   * the registry appends the `fx` namespace when it compiles one, and so does
+   * this, in the same words — so it loads here from a data: URL exactly as the
+   * Code panel loads it, and faces the same rules as the eighty built-ins.
    *
    * The rule it was breaking is the one the whole `step`/`draw` split exists
    * for. Its `step` advanced `state.phase` and its `draw` ignored it, animating
@@ -493,7 +493,9 @@ console.log('\n— the starter template —');
   let def = null;
   let loadError = null;
   try {
-    const url = `data:text/javascript;base64,${Buffer.from(EFFECT_TEMPLATE).toString('base64')}`;
+    const lib = new URL('../js/effects/lib.js', import.meta.url).href;
+    const source = `${EFFECT_TEMPLATE}\n;import * as fx from ${JSON.stringify(lib)};\n`;
+    const url = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
     def = (await import(url)).default;
   } catch (err) {
     loadError = err.message;

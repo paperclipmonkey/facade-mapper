@@ -49,15 +49,18 @@ export default {
 
     g.save();
     g.clip(path);
+    // Light adds. Where two glows overlap the wall gets brighter, as it would
+    // under two real lamps; 'source-over' would paint one on top of the other.
+    g.globalCompositeOperation = 'lighter';
 
     for (let k = 0; k < p.count; k++) {
       // sampler.at(u) walks the outline at constant speed, wrapping on closed
       // shapes. This is how chases and light strings work.
       const at = sampler.at(((state.phase || 0) + k / p.count) % 1);
-      g.fillStyle = p.color;
-      g.beginPath();
-      g.arc(at.x, at.y, bbox.h * 0.02, 0, Math.PI * 2);
-      g.fill();
+      // A point of light, not a filled disc: a hot core and a long soft skirt.
+      // A flat circle on a wall reads as a sticker; this reads as a lamp. \`fx\`
+      // is the helper library, in scope in every effect you write here.
+      fx.glow(g, at.x, at.y, bbox.h * 0.08, p.color);
     }
 
     g.restore();
