@@ -2211,8 +2211,10 @@ const kelp = {
          * own blade, so where two overlap the non-zero rule fills them once
          * rather than cutting a hole.
          */
+        // Translucent: a blade is a sheet of tissue a few cells thick, and the
+        // light through a stand of them is the sum of several.
         g.fillStyle = grad;
-        g.globalAlpha = 0.72;
+        g.globalAlpha = 0.5;
         g.beginPath();
         for (let pass = 0; pass < 2; pass++) {
           if (pass === 1) {
