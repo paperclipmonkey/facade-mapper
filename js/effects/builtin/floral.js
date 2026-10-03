@@ -31,7 +31,7 @@
 
 import { rgba, clamp, TAU, mixHex, makeRng, smoothstep } from '../../core/math.js';
 import { collectObstacles } from '../obstacles.js';
-import { offscreen } from '../lib.js';
+import { offscreen, curveThrough } from '../lib.js';
 
 /** Shared with the facade family so the wording stays consistent. */
 const OBSTACLE_PARAM = {
@@ -74,6 +74,12 @@ function petalGeometry(radius, petals) {
  */
 function tracePetal(c, dist, petal, angle, squash = 1) {
   c.beginPath();
+  petalPath(c, dist, petal, angle, squash);
+  c.fill();
+}
+
+/** The same petal, into the current path only, for a caller that fills and strokes it. */
+function petalPath(c, dist, petal, angle, squash = 1) {
   c.ellipse(
     Math.cos(angle) * dist,
     Math.sin(angle) * dist,
@@ -83,7 +89,6 @@ function tracePetal(c, dist, petal, angle, squash = 1) {
     0,
     TAU
   );
-  c.fill();
 }
 
 /**
@@ -435,21 +440,38 @@ const flowers = {
     }
     g.globalAlpha = alpha;
 
-    // Every stem, then every head: a head must never be behind the stem of the
-    // flower in front of it.
+    /**
+     * Every stem, then every head: a head must never be behind the stem of the
+     * flower in front of it.
+     *
+     * A stem is two strokes — a darker one, and a lighter one inside it nudged
+     * towards the light — which is a round stalk rather than a line, and is
+     * curved through its joints rather than bent at them. It thins as the
+     * plant dries, and a dead one flops: see `bendOf`.
+     */
+    const dead = smoothstep(0.35, 0.95, wilt);
+    const stemDark = mixHex(green, '#000000', 0.38);
+    const stemLit = mixHex(green, '#fffbe8', 0.2);
     for (const f of bunch) {
       const len = Math.max(6, p.height * bbox.h * f.lenVar);
       traceStem(f, len, leanOf(f, p), bendOf(f, p, wilt, breeze, t));
 
-      g.strokeStyle = green;
-      g.lineWidth = Math.max(2.5, headR * f.sizeVar * 0.13);
+      const stemW = Math.max(3.4, headR * f.sizeVar * 0.2) * (1 - 0.15 * dead);
+      g.strokeStyle = stemDark;
+      g.lineWidth = stemW;
       g.beginPath();
-      g.moveTo(f.jx[0], f.jy[0]);
-      for (let k = 1; k <= STEM_JOINTS; k++) g.lineTo(f.jx[k], f.jy[k]);
+      curveThrough(g, f.jx, f.jy, STEM_JOINTS + 1, { move: true });
       g.stroke();
+      g.save();
+      g.translate(-stemW * 0.16, -stemW * 0.08);
+      g.strokeStyle = stemLit;
+      g.lineWidth = stemW * 0.42;
+      g.beginPath();
+      curveThrough(g, f.jx, f.jy, STEM_JOINTS + 1, { move: true });
+      g.stroke();
+      g.restore();
 
       if (p.leaves > 0) {
-        g.fillStyle = green;
         // Two leaves, on opposite sides, a third and two thirds of the way up.
         for (const [at, side] of [[3, 1], [6, -1]]) {
           const along = Math.atan2(f.jy[at] - f.jy[at - 1], f.jx[at] - f.jx[at - 1]);
@@ -461,11 +483,13 @@ const flowers = {
           // what "wilted" looks like at a distance.
           const held = along + side * 1.0;
           const hangs = Math.PI / 2 + side * 0.25;
+          // And it dries narrow and curled, rather than staying a fresh leaf
+          // shape in a dead colour.
+          const wide = leafLen * 0.34 * (1 - 0.55 * dead);
           g.save();
           g.translate(f.jx[at], f.jy[at]);
           g.rotate(held + (hangs - held) * wilt * 0.85);
-          leafPath(g, leafLen, leafLen * 0.34);
-          g.fill();
+          drawLeaf(g, leafLen, wide, green, dead);
           g.restore();
         }
       }
@@ -481,8 +505,23 @@ const flowers = {
       // points — and nods further forward the more it wilts.
       g.translate(f.jx[STEM_JOINTS], f.jy[STEM_JOINTS]);
       g.rotate(f.tipAngle + Math.PI / 2 + wilt * 0.8);
-      g.fillStyle = colour;
 
+      /**
+       * Petals, shaded from the middle out.
+       *
+       * Flat-filled, a head of petals is a disc with a scalloped edge, and in
+       * a bright colour the bloom downstream turns it into a glowing blob. So
+       * each petal is dark where it joins the flower, its own colour across the
+       * middle and lighter at the rim — one gradient for the whole head, in the
+       * head's own frame — and has a darker edge, which is what lets the eye
+       * count them. Still exactly one ellipse a petal.
+       */
+      const shade = g.createRadialGradient(0, 0, r * 0.1, 0, 0, r * 1.02);
+      shade.addColorStop(0, mixHex(colour, '#000000', 0.5));
+      shade.addColorStop(0.45, colour);
+      shade.addColorStop(1, mixHex(colour, '#fff6ea', 0.1));
+      const rim = rgba(mixHex(colour, '#000000', 0.55), 0.6);
+      g.lineWidth = Math.max(1, r * 0.05);
       for (let k = 0; k < petals; k++) {
         if (wilt >= f.drop[k]) continue;
         // The last of the travel before a petal lets go is spent curling: it
@@ -490,19 +529,110 @@ const flowers = {
         // than blinking out of it.
         const curl = smoothstep(f.drop[k] - 0.16, f.drop[k], wilt);
         const squash = f.petalVar[k] * (1 - curl * 0.55);
-        tracePetal(g, dist, petal, f.spin + (k / petals) * TAU, squash);
+        g.beginPath();
+        petalPath(g, dist, petal, f.spin + (k / petals) * TAU, squash);
+        g.fillStyle = shade;
+        g.fill();
+        g.strokeStyle = rim;
+        g.stroke();
       }
 
-      g.fillStyle = mixHex(p.centre, p.dry, wilt * 0.8);
-      g.beginPath();
-      g.arc(0, 0, Math.max(1, r * 0.3), 0, TAU);
-      g.fill();
+      drawHeart(g, f, r, p, wilt, dead, petals, dist, petal);
       g.restore();
     }
 
     g.restore();
   },
 };
+
+/**
+ * A leaf on a stem: the blade, its shaded half, its midrib, and — as it dies —
+ * a dry brown edge.
+ *
+ * Laid along +x from the origin, like `leafPath`, which it is built on.
+ */
+function drawLeaf(g, len, wide, green, dead) {
+  leafPath(g, len, wide);
+  g.fillStyle = green;
+  g.fill();
+  if (dead > 0.05) {
+    g.strokeStyle = rgba(mixHex(green, '#3a2a18', 0.6), 0.5 + 0.4 * dead);
+    g.lineWidth = Math.max(1, wide * 0.18);
+    g.stroke();
+  }
+  // The half turned away from the light.
+  g.beginPath();
+  g.moveTo(0, 0);
+  g.quadraticCurveTo(len * 0.45, wide, len, 0);
+  g.closePath();
+  g.fillStyle = 'rgba(0,0,0,0.24)';
+  g.fill();
+  g.beginPath();
+  g.moveTo(len * 0.04, 0);
+  g.lineTo(len * 0.9, 0);
+  g.strokeStyle = rgba(mixHex(green, '#fffbe0', 0.4), 0.7);
+  g.lineWidth = Math.max(1, wide * 0.14);
+  g.stroke();
+}
+
+/**
+ * The middle of a flower: a domed disc with its stamens round it, which, as
+ * the flower dies, darkens and swells into a seed head — with, where each
+ * petal has fallen, the shrivelled stub of it still curled at the rim.
+ *
+ * That is what a dead flower is from across a road — not a stalk with nothing
+ * on the end, which is what full Wilt used to leave and what read as a scratch
+ * on the wall, but a dark, ragged head on a bent stem. Arcs and paths, never an
+ * ellipse: ellipses are petals, and a petal is what has to be countable.
+ */
+function drawHeart(g, f, r, p, wilt, dead, petals, dist, petal) {
+  const cr = Math.max(1.5, r * (0.27 + 0.18 * dead));
+  const disc = mixHex(mixHex(p.centre, p.dry, wilt * 0.8), '#000000', 0.5 * dead);
+  if (dead > 0.05) {
+    g.beginPath();
+    for (let k = 0; k < petals; k++) {
+      if (wilt < f.drop[k]) continue;
+      // A stub: the base of the petal, gone papery and curled back on itself.
+      const a = f.spin + (k / petals) * TAU;
+      const reach = (cr + (dist + petal - cr) * 0.72 * f.petalVar[k]) * (0.6 + 0.4 * dead);
+      const curl = 0.55 * (k & 1 ? 1 : -1);
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      const half = petal * 0.5;
+      g.moveTo(ca * cr * 0.85 - sa * half, sa * cr * 0.85 + ca * half);
+      g.quadraticCurveTo(
+        Math.cos(a + curl * 0.6) * reach * 1.1, Math.sin(a + curl * 0.6) * reach * 1.1,
+        Math.cos(a + curl) * reach, Math.sin(a + curl) * reach
+      );
+      g.quadraticCurveTo(ca * reach * 0.7, sa * reach * 0.7, ca * cr * 0.85 + sa * half, sa * cr * 0.85 - ca * half);
+      g.closePath();
+    }
+    g.fillStyle = mixHex(p.dry, '#000000', 0.3);
+    g.fill();
+    g.strokeStyle = rgba(mixHex(p.dry, '#000000', 0.6), 0.8);
+    g.lineWidth = Math.max(1, r * 0.05);
+    g.stroke();
+  }
+  const dome = g.createRadialGradient(-cr * 0.3, -cr * 0.35, 0, 0, 0, cr);
+  dome.addColorStop(0, mixHex(disc, '#fffbe8', 0.3 - 0.22 * dead));
+  dome.addColorStop(1, mixHex(disc, '#000000', 0.38));
+  g.fillStyle = dome;
+  g.beginPath();
+  g.arc(0, 0, cr, 0, TAU);
+  g.fill();
+  // Stamens, or seeds.
+  g.beginPath();
+  for (let k = 0; k < 8; k++) {
+    const a = f.phase + (k / 8) * TAU;
+    const x = Math.cos(a) * cr * 0.62;
+    const y = Math.sin(a) * cr * 0.62;
+    const dot = Math.max(0.6, cr * 0.14);
+    g.moveTo(x + dot, y);
+    g.arc(x, y, dot, 0, TAU);
+  }
+  g.fillStyle = rgba(mixHex(disc, '#000000', 0.55), 0.75);
+  g.fill();
+}
 
 /* ------------------------------------------------------------------ *
  * Prints
