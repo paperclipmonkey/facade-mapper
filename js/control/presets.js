@@ -397,8 +397,13 @@ const BIRTHDAY = () => [
       // leaving the inspector's dropdown showing nothing at all. This is the
       // face it has always rendered in. A genuinely rounded one would mean
       // adding a stack to FONT_STACKS, which is a decision rather than a fix.
+      //
+      // A deeper yellow with a dark keyline and a small glow, not the pale
+      // yellow, pink edge and big halo it had: under the saturated grade the
+      // bright faces bloomed into each other and the name read as a white
+      // bar. The keyline is what holds the letters apart.
       content: 'HAPPY BIRTHDAY', mode: 'box', font: 'system', weight: '900', size: 0.62,
-      tracking: 0.04, color: '#ffd166', stroke: '#ff3b6b', strokeWidth: 4, glow: 20,
+      tracking: 0.04, color: '#ffc43d', stroke: '#7a0a26', strokeWidth: 6, glow: 8,
       align: 'centre', animation: 'wave', speed: 0.7, amount: 0.3,
     },
   }),
@@ -711,13 +716,18 @@ const CYBERPUNK = () => [
     name: 'Tube round the door',
     tags: ['door'],
     params: {
-      color: '#ff2a6d', core: '#fff0f6', width: 10, inset: 7, color2: '#05d9e8',
+      // Inset far enough that the second tube reads as a second tube: the
+      // effect will not put two tubes closer than glass can be bent, and at 7
+      // they merged into one white band.
+      color: '#ff2a6d', core: '#fff0f6', width: 10, inset: 14, color2: '#05d9e8',
       flicker: 0.45, buzz: 1.2, dead: 0, chase: 0, spill: 0.9, level: 1,
     },
   }),
   layer('neon', {
     name: 'Strip along the gutter',
-    tags: ['roof', 'trim'],
+    // The gutter only: `trim` also takes in the arch over the door, and the
+    // strip's chase ran straight through the sign hanging from it.
+    tags: ['roof'],
     params: {
       color: '#c400ff', core: '#f7e6ff', width: 6, inset: 0, color2: '#05d9e8',
       flicker: 0.15, buzz: 0.8, dead: 0, chase: 0.12, spill: 0.4, level: 0.9,
