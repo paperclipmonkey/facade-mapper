@@ -857,7 +857,7 @@ function ivyOutline(c, kind, len) {
   const cx = len * 0.36;
   const R = len - cx;
   // Broad lobes and shallow sinuses. Narrow ones with deep cuts between them
-  // were the first attempt, and every leaf on the wall came out a star.
+  // make every leaf on the wall a star.
   const lobes = kind === 0
     ? [[0, 1, 0.55], [1.2, 0.84, 0.5], [-1.2, 0.84, 0.5], [2.25, 0.58, 0.5], [-2.25, 0.58, 0.5]]
     : kind === 1

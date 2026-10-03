@@ -207,9 +207,9 @@ function brickLook(p, row, col) {
  *  - **Grain.** Pits and grains of sand, a couple of pixels each. Under the
  *    projector floor and deliberately so: see the note at the top.
  *  - **Light.** The face a touch brighter along the top and darker towards the
- *    bottom, as one soft gradient rather than the hard bands that were here
- *    before, which read as a bevel on a cartoon brick. The top arris catches
- *    the light in the brick's own colour; the right-hand one is turned away.
+ *    bottom, as one soft gradient: hard light and dark bands along the edges
+ *    read as the bevel on a cartoon brick. The top arris catches the light in
+ *    the brick's own colour; the right-hand one is turned away.
  *  - **The joint.** Recessed mortar is what makes brickwork look laid rather
  *    than printed. Each brick throws a shadow across the top of the bed joint
  *    under it, and the bottom of that joint, out of the shadow, is lit — so
@@ -680,7 +680,7 @@ function tentacleRibbon(g, joints, widths, scale = 1, nx = null, ny = null) {
  * one `fitWidths` measures against — into `NX` and `NY`.
  *
  * Worked out once an arm and shared by every ribbon of its skin and its sheen,
- * which were each working out the same few hundred angles for themselves.
+ * which would otherwise each work out the same few hundred angles again.
  */
 let NX = new Float64Array(1024);
 let NY = new Float64Array(1024);
@@ -795,19 +795,17 @@ function inOtherGone(hole, self, x, y, w, h, gap) {
  * they take corners of their neighbours with them, and a hole whose edge is a
  * perfect staircase reads as a rectangle somebody drew, not as damage.
  *
- * `grow` widens all of it at once, which is how the lit edge is drawn: the
- * grown outline in lit brick, then the outline itself in black over it, leaves
- * a band of exactly `grow` all the way round — following every bite.
- *
  * Bites are turned rectangles, each a subpath of its own: angular, because
  * broken brick is, and sparse, because a hole whose whole edge is nibbled
- * reads as a cloud. `rects` leaves the bricks out, for the one pass that fills
- * them one at a time instead.
+ * reads as a cloud. All of it is a pure function of the bricks, so the same
+ * outline drawn again under a translation is the back of the same hole (see
+ * `backOf`). `rects` leaves the bricks out, for the one pass that fills them
+ * one at a time instead.
  */
-function holeOutline(g, hole, w, h, gap, bite, grow, rects = true) {
+function holeOutline(g, hole, w, h, gap, bite, rects = true) {
   if (rects) {
     for (const brick of hole.gone) {
-      g.rect(brick.x - gap - grow, brick.y - gap - grow, w + (gap + grow) * 2, h + (gap + grow) * 2);
+      g.rect(brick.x - gap, brick.y - gap, w + gap * 2, h + gap * 2);
     }
   }
   if (bite <= 0) return;
@@ -835,8 +833,8 @@ function holeOutline(g, hole, w, h, gap, bite, grow, rects = true) {
         if (inOtherGone(hole, brick, px + nx * 2, py + ny * 2, w, h, gap)) continue;
         // A shard: a rectangle turned off the line of the edge, so what is
         // left of the neighbour has a corner knocked off rather than a bite.
-        const long = bite * (0.5 + 0.7 * jag(brick, side, k)) + grow;
-        const deep = bite * (0.35 + 0.5 * jag(brick, side + 12, k)) + grow;
+        const long = bite * (0.5 + 0.7 * jag(brick, side, k));
+        const deep = bite * (0.35 + 0.5 * jag(brick, side + 12, k));
         const turn = Math.atan2(ny, nx) + Math.PI / 2 + (jag(brick, side + 16, k) - 0.5) * 1.2;
         g.save();
         g.translate(px, py);
@@ -1033,15 +1031,28 @@ const breach = {
       state.since = 0;
       // Somewhere that is not already open, and not touching an existing hole —
       // two holes side by side read as one big rectangle rather than as two
-      // things pushing through.
+      // things pushing through. And of the first few such places, the one with
+      // the most bare wall round it: a hole squeezed between a sill and the
+      // ground can only put its arms out flat along the gap, which reads as
+      // something lying on the wall rather than reaching out of it. Best of a
+      // few rather than the roomiest anywhere, so the holes still turn up all
+      // over the wall and not always in the same open patch.
       let seed = null;
-      for (let attempt = 0; attempt < 24 && !seed; attempt++) {
+      let room = -1;
+      let found = 0;
+      for (let attempt = 0; attempt < 24 && found < 4; attempt++) {
         const candidate = grid[Math.floor(rng() * grid.length)];
         if (state.taken.has(candidate)) continue;
         const clear = state.holes.every(
           (hole) => Math.hypot(hole.cx - candidate.cx, hole.cy - candidate.cy) > Math.max(w, h) * 2.2
         );
-        if (clear) seed = candidate;
+        if (!clear) continue;
+        found++;
+        const r = roomAt(shape, obstacles, candidate.cx, candidate.cy, Math.max(w, h) * 3);
+        if (r > room) {
+          room = r;
+          seed = candidate;
+        }
       }
 
       if (seed) {
@@ -1330,12 +1341,11 @@ const breach = {
    * the light on a tip reaching a pixel past a fitted outline is still off the
    * window. Locally, because the wall alone is a rectangle the canvas clips to
    * for nothing, and the wall with its windows cut out is a mask the size of
-   * the wall, every frame, which was most of what this layer cost once the
-   * arms stopped being the dearest thing in it. What falls is never guarded: a
-   * brick dropping past a window is in front of it, and clipping it to the
-   * brickwork would make it fall behind the glass.
+   * the wall, every frame, which costs more than the arms do. What falls is
+   * never guarded: a brick dropping past a window is in front of it, and
+   * clipping it to the brickwork would make it fall behind the glass.
    */
-  draw({ g, p, shape, t, rng, state, shapes, stable, share }) {
+  draw({ g, p, shape, t, rng, state, shapes, stable, share, world }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2) return;
     const layout = layoutFor({ stable, shape, shapes, share, state });
@@ -1345,8 +1355,13 @@ const breach = {
     const obstacles = collectObstacles(shapes, p.obstacles, shape.id);
     const sprites = spritesFor(state, stable, w, h);
     const bite = Math.max(1.5, Math.min(w, h) * 0.3);
-    const rim = Math.max(2, Math.min(w, h) * 0.18);
     const glowing = clamp(p.glowAmount, 0, 3);
+    // The eye every hole is seen from (see `backOf`): the frame's, so the
+    // holes on two walls agree about where the street is, or this wall's
+    // where there is no frame to go by.
+    const span = world?.h > 0 ? world.h : bbox.h;
+    const eyeX = world?.w > 0 ? world.w * 0.5 : bbox.x + bbox.w * 0.5;
+    const eyeY = world?.h > 0 ? world.h * 0.65 : bbox.y + bbox.h * 0.7;
     // Multiplied into rather than assigned over, so the layer's opacity and the
     // master fader still reach a layer drawing straight into the frame.
     const alpha = g.globalAlpha;
@@ -1358,8 +1373,8 @@ const breach = {
     // — the only order in which an arm reads as coming *out* of the wall.
     for (const hole of state.holes) {
       if (!hole.gone.length) continue;
-      // Out to the far corner of the largest shard, rim and all.
-      const pad = gap + bite * 1.8 + rim * 1.5;
+      // Out to the far corner of the largest shard.
+      const pad = gap + bite * 1.8;
       let x0 = Infinity;
       let y0 = Infinity;
       let x1 = -Infinity;
@@ -1371,7 +1386,7 @@ const breach = {
         y1 = Math.max(y1, b.y + h + pad);
       }
       const guarded = guardOpenings(g, obstacles, x0, y0, x1, y1);
-      drawOpening(g, p, hole, t, w, h, gap, bite, rim, alpha);
+      drawOpening(g, p, hole, t, w, h, gap, bite, alpha, backOf(hole, eyeX, eyeY, span, h + gap), sprites.grain);
       if (guarded) g.restore();
     }
 
@@ -1420,10 +1435,12 @@ const breach = {
      * dark and the light behind it, and once over them, as depth — darkness
      * over the roots, and the light from inside laid over that, so they go
      * down into a glow rather than ending in a cut, and the parts of them still
-     * in the wall are lit the colour of whatever is in there. Gone by the rim,
-     * so everything that has come out stays itself.
+     * in the wall are lit the colour of whatever is in there. Only in the back
+     * opening, so the lit thickness of the wall round it stays in front of the
+     * roots, and gone by its edge, so everything that has come out stays
+     * itself.
      *
-     * In the light's own colour, and never whitened: whitened, the haze turned
+     * In the light's own colour, and never whitened: whitened, the haze turns
      * the whole opening grey on the wall, which reads as fog rather than as a
      * hole with something lit at the back of it.
      */
@@ -1433,10 +1450,20 @@ const breach = {
       if (solidity <= 0.02 || p.throat <= 0) continue;
       const reach = holeReach(hole, w, h, gap);
       const pulse = openingPulse(t, hole);
+      const back = backOf(hole, eyeX, eyeY, span, h + gap);
+      const bx = back.x;
+      const by = back.y;
+      const cx = hole.cx + bx;
+      const cy = hole.cy + by;
 
       g.save();
       g.beginPath();
-      holeOutline(g, hole, w, h, gap, bite, 0);
+      holeOutline(g, hole, w, h, gap, bite);
+      g.clip();
+      g.translate(bx, by);
+      g.beginPath();
+      holeOutline(g, hole, w, h, gap, bite);
+      g.translate(-bx, -by);
       g.clip();
 
       // Just the roots: they come out of the middle and are cut off within a
@@ -1444,17 +1471,17 @@ const breach = {
       const r = Math.min(reach * 0.7, Math.max(w, h) * 1.15);
       const dark = p.throat * (1 - 0.35 * Math.min(1, glowing)) * solidity;
       if (dark > 0.01) {
-        const shade = g.createRadialGradient(hole.cx, hole.cy, 0, hole.cx, hole.cy, r);
+        const shade = g.createRadialGradient(cx, cy, 0, cx, cy, r);
         shade.addColorStop(0, rgba(p.void, 0.95 * dark));
         shade.addColorStop(0.5, rgba(p.void, 0.65 * dark));
         shade.addColorStop(1, rgba(p.void, 0));
         g.fillStyle = shade;
-        g.fillRect(hole.cx - r, hole.cy - r, r * 2, r * 2);
+        g.fillRect(cx - r, cy - r, r * 2, r * 2);
       }
       if (glowing > 0) {
         g.globalCompositeOperation = 'lighter';
         const haze = clamp(0.34 * glowing * pulse * solidity * p.throat, 0, 1);
-        glow(g, hole.cx, hole.cy + h * 0.3, reach * 0.95, p.innerGlow, haze);
+        glow(g, cx, cy + h * 0.3, reach * 0.95, p.innerGlow, haze);
       }
       g.restore();
     }
@@ -1522,74 +1549,131 @@ function openingPulse(t, hole) {
 }
 
 /**
+ * Where the back of a hole is, seen from the street, as an offset from its
+ * front: into `BACK`, which every caller reads at once and never keeps.
+ *
+ * A wall has a thickness, and a hole through it is two openings — one in each
+ * face — that only line up for somebody looking straight down the middle. Seen
+ * from anywhere else the far one is shifted towards the eye, by the depth of
+ * the wall over the distance to it, and what shows between the two is the
+ * inside of the wall: the broken ends of the bricks round the hole. That band
+ * is what makes a dark patch read as a hole *through* something rather than a
+ * shape painted on it, and it is only ever on the side away from the eye — the
+ * underside of the top edge for an opening above head height, the far jamb for
+ * one off to the side — which is why it cannot be a rim drawn all the way round.
+ *
+ * The eye is across the road, opposite the middle of the frame, at head height
+ * — about the middle of the front door. The shift grows with distance from it,
+ * between half a course and one: less and the hole is flat, more and the inside
+ * of the wall is wider than the gap it frames and the hole reads as a box. Less
+ * of it sideways than up and down, because the side of a hole is the ragged
+ * ends of bricks, one course at a time, and a lot of it reads as teeth.
+ */
+const BACK = { x: 0, y: 0 };
+function backOf(hole, eyeX, eyeY, span, course) {
+  let dx = ((eyeX - hole.cx) / span) * course * 1.1;
+  let dy = ((eyeY - hole.cy) / span) * course * 2.2;
+  const m = Math.hypot(dx, dy);
+  const want = clamp(m, course * 0.5, course);
+  if (m < 1e-6) {
+    dx = 0;
+    dy = want;
+  } else {
+    dx *= want / m;
+    dy *= want / m;
+  }
+  BACK.x = dx;
+  BACK.y = dy;
+  return BACK;
+}
+
+/**
  * One opening in the wall, under everything that comes out of it.
  *
- * Three passes, and their order is the trick:
+ * Three passes:
  *
- *  1. The hole's outline grown by a rim, in brick lit from inside — the broken
- *     faces of the neighbouring bricks catching the light behind the wall,
- *     brightest nearest the middle of the hole. Green when the light inside is
- *     green; with the inner glow off, just brick in shadow.
- *  2. The outline itself, in the dark. What survives of pass one is a lit edge
- *     exactly `rim` wide, following every bite out of every neighbour.
- *  3. The light behind, inside the outline only: a hot, nearly white core low
- *     in the hole, falling off as an inverse square to nothing at the rim. The
- *     dark edge that leaves is what reads as depth — the opening is lit at the
- *     back and in shadow at the sides, which is how a hole in a wall with a
- *     lamp behind it looks.
+ *  1. The void, one rectangle per brick plus the shards knocked out of its
+ *     neighbours. These are where the wall actually is open, and the tests
+ *     that keep the holes off the windows and on the bricks read them.
+ *  2. The inside of the wall, within the opening and nowhere else: all of it
+ *     in brick lit from within, then the back of the hole — the same outline
+ *     moved by `back` — in the dark over that. What survives is the band of
+ *     broken brick on the far side from the eye, brightest nearest the light,
+ *     and it follows every shard because it is the shard, seen end on. Lit
+ *     means the brick's colour multiplied by the light's: a green light on red
+ *     brick makes a dull olive, where mixing the two makes a pale khaki that
+ *     reads as paint.
+ *  3. The light behind, in the back opening only: a hot, nearly white core low
+ *     in the hole, falling off as an inverse square to nothing at its edge. So
+ *     the hole is lit at the back, framed by the lit thickness of the wall and
+ *     in shadow at the sides — how a hole in a wall with a lamp behind it looks.
  *
- * The rectangles in pass two are filled one per brick in the void colour, and
- * stay that way: they are where the wall actually is open, and the tests that
- * keep the holes off the windows and on the bricks read them.
+ * Nothing is drawn round the outside. A band of lit brick on the face of the
+ * wall all the way round a hole reads as a line somebody painted round it, and
+ * light coming out of a hole cannot reach the face it is cut in anyway: what
+ * spills onto that is the bloom's to add, and it does.
  */
-function drawOpening(g, p, hole, t, w, h, gap, bite, rim, alpha) {
+function drawOpening(g, p, hole, t, w, h, gap, bite, alpha, back, grain) {
   const solidity = 1 - hole.closing;
   if (solidity <= 0.005) return;
   const reach = holeReach(hole, w, h, gap);
   const glowing = clamp(p.glowAmount, 0, 3);
   const lift = Math.min(1, glowing);
   const edge = hole.edge || p.brick;
+  const gx = hole.cx + back.x;
+  const gy = hole.cy + back.y + h * 0.35;
 
   g.globalAlpha = alpha * solidity;
-  const lit = g.createRadialGradient(hole.cx, hole.cy, reach * 0.25, hole.cx, hole.cy, reach + bite + rim);
-  // Brick *lit by* the light inside, which is the brick's colour multiplied
-  // by the light's. Mixing the two gives a pale khaki that reads as a line
-  // painted round the hole rather than as broken faces catching the glow.
-  lit.addColorStop(0, litBy(edge, p.innerGlow, 1.4 * lift, 0.4));
-  lit.addColorStop(0.5, litBy(edge, p.innerGlow, 0.9 * lift, 0.45));
-  lit.addColorStop(0.85, litBy(edge, p.innerGlow, 0.4 * lift, 0.55));
-  lit.addColorStop(1, mixHex(edge, '#000000', 0.4));
-  g.fillStyle = lit;
-  g.beginPath();
-  holeOutline(g, hole, w, h, gap, bite, rim);
-  g.fill();
-
   g.fillStyle = p.void;
   g.beginPath();
-  holeOutline(g, hole, w, h, gap, bite, 0, false);
+  holeOutline(g, hole, w, h, gap, bite, false);
   g.fill();
   for (const brick of hole.gone) g.fillRect(brick.x - gap, brick.y - gap, w + gap * 2, h + gap * 2);
-  g.globalAlpha = alpha;
 
-  if (glowing <= 0) return;
   g.save();
   g.beginPath();
-  holeOutline(g, hole, w, h, gap, bite, 0);
+  holeOutline(g, hole, w, h, gap, bite);
   g.clip();
-  g.globalCompositeOperation = 'lighter';
-  const gx = hole.cx;
-  const gy = hole.cy + h * 0.35;
-  const r = reach * 1.05;
-  const a = clamp(1.05 * glowing * openingPulse(t, hole) * solidity, 0, 1);
-  const light = g.createRadialGradient(gx, gy, 0, gx, gy, r);
-  light.addColorStop(0, rgba(mixHex(p.innerGlow, '#ffffff', 0.35), a));
-  light.addColorStop(0.12, rgba(p.innerGlow, a * 0.9));
-  light.addColorStop(0.35, rgba(p.innerGlow, a * 0.55));
-  light.addColorStop(0.7, rgba(p.innerGlow, a * 0.2));
-  light.addColorStop(1, rgba(p.innerGlow, 0));
-  g.fillStyle = light;
-  g.fillRect(gx - r, gy - r, r * 2, r * 2);
+  // Out past the far edge, because the inside of the wall faces the light
+  // where the front of it does not: the underside of the top of a hole is
+  // lit almost as well as the bottom of it.
+  const lit = g.createRadialGradient(gx, gy, 0, gx, gy, reach * 1.5 + bite);
+  lit.addColorStop(0, litBy(edge, p.innerGlow, 1.1 * lift, 0.45));
+  lit.addColorStop(0.5, litBy(edge, p.innerGlow, 0.7 * lift, 0.45));
+  lit.addColorStop(1, litBy(edge, p.innerGlow, 0.25 * lift, 0.4));
+  g.fillStyle = lit;
+  g.fill();
+  // The same pits and sand as a loose brick, laid on the course, so the
+  // inside of the wall is broken brick rather than a flat lit shape.
+  if (grain) {
+    for (const brick of hole.gone) g.drawImage(grain, brick.x, brick.y, w, h);
+  }
+  g.translate(back.x, back.y);
+  g.fillStyle = p.void;
+  g.beginPath();
+  holeOutline(g, hole, w, h, gap, bite);
+  g.fill();
+
+  if (glowing > 0) {
+    // Clipped to the back opening, built in its own place, and then back to
+    // the wall's coordinates to draw the light where it is.
+    g.clip();
+    g.translate(-back.x, -back.y);
+    g.globalAlpha = alpha;
+    g.globalCompositeOperation = 'lighter';
+    const r = reach * 1.05;
+    const a = clamp(1.05 * glowing * openingPulse(t, hole) * solidity, 0, 1);
+    const light = g.createRadialGradient(gx, gy, 0, gx, gy, r);
+    light.addColorStop(0, rgba(mixHex(p.innerGlow, '#ffffff', 0.35), a));
+    light.addColorStop(0.12, rgba(p.innerGlow, a * 0.9));
+    light.addColorStop(0.35, rgba(p.innerGlow, a * 0.55));
+    light.addColorStop(0.7, rgba(p.innerGlow, a * 0.2));
+    light.addColorStop(1, rgba(p.innerGlow, 0));
+    g.fillStyle = light;
+    g.fillRect(gx - r, gy - r, r * 2, r * 2);
+  }
   g.restore();
+  g.globalAlpha = alpha;
 }
 
 
@@ -2031,9 +2115,9 @@ function subdivide(joints, widths, k, container, obstacles) {
  * bounding box, or comes within `r` of the container's edge, is "not known to
  * be clear" and goes on to the exact tests. What it buys is the common case.
  * Fitting a width is up to thirty-six containment tests a vertex, three rounds
- * of it, on several hundred vertices an arm — and was most of what the arms
- * cost — while nearly all of those vertices sit in open brickwork where one
- * look at the disc answers every radius on both flanks at once.
+ * of it, on several hundred vertices an arm — most of what an arm would cost —
+ * while nearly all of those vertices sit in open brickwork where one look at
+ * the disc answers every radius on both flanks at once.
  */
 function discClear(container, obstacles, x, y, r) {
   for (const o of obstacles) {
@@ -2058,6 +2142,22 @@ function discClear(container, obstacles, x, y, r) {
     if ((pts[i].y > y) !== (ay > y) && x < (dx * (y - pts[i].y)) / (dy || 1e-12) + pts[i].x) inside = !inside;
   }
   return inside;
+}
+
+/**
+ * The radius of the largest disc at (x, y) that `discClear` passes, to within a
+ * sixty-fourth of `limit`, and `limit` itself if that much fits.
+ */
+function roomAt(container, obstacles, x, y, limit) {
+  if (discClear(container, obstacles, x, y, limit)) return limit;
+  let lo = 0;
+  let hi = limit;
+  for (let k = 0; k < 6; k++) {
+    const mid = (lo + hi) / 2;
+    if (discClear(container, obstacles, x, y, mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
 }
 
 /**
@@ -2412,31 +2512,25 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
      * Thickness, from two things that are not the same.
      *
      * The **taper** is a property of the limb: how thick it is a given distance
-     * from the body. Held wide down most of it and falling away late, because
-     * `1 - u` gives a triangle and a triangle is a leaf. Measured against a
-     * little over half the arm's full reach rather than all of it — an arm that
-     * only ever grows to a third of its limit otherwise never thins at all, and
-     * comes out a uniform tube, which is what these were.
+     * from the body. It thins from the moment it leaves the wall, measured
+     * against most of the arm's full reach rather than all of it — an arm that
+     * only ever grows to part of its limit would otherwise barely thin, and
+     * comes out a uniform tube. The exponent is doing the real work, and it is
+     * easy to get wrong in both directions. Thinned early, the arm is a fat
+     * shoulder and a long whip. Held at full width for most of its reach and
+     * then pinched, it is fine at full stretch, but an arm only a little way
+     * out is all shoulder, and a short fat lozenge with a point on the end is
+     * a leaf — as is the triangle a straight `1 - u` gives. An exponent of 1.5
+     * thins it steadily, a little fuller than a straight line, so whatever
+     * length of it is out reads as the base of something longer.
      *
      * The **tip** is a property of the end: whatever is currently the leading
      * few centimetres is thin, and stops being thin once it is no longer the
      * end. That is not a contradiction of the above, it is the difference
      * between a limb and its growing point, and without it every arm finishes
-     * in a club the same width as its middle — which is the single thing that
-     * still read as wrong. Its length scales with the arm's own girth, so a fat
-     * tentacle gets a proportionally long point rather than a stubbed one.
-     */
-    /**
-     * Thinning from the hole outwards, all the way along.
-     *
-     * The exponent is doing the real work, and it has been wrong in both
-     * directions. At 1.9 against half the reach the width was down to a fifth
-     * by the halfway point — a fat shoulder and a long whip. At 3.2 against
-     * most of it the arm held its full width for two thirds of its reach and
-     * then pinched: fine for an arm at full stretch, but an arm only a little
-     * way out is all shoulder, and a short fat lozenge with a point on the end
-     * is a leaf. 1.5 thins it steadily from the moment it leaves the wall, so
-     * whatever length of it is out reads as the base of something longer.
+     * in a club the same width as its middle. Its length scales with the arm's
+     * own girth, so a fat tentacle gets a proportionally long point rather
+     * than a stubbed one.
      */
     const taperScale = Math.max(1, fullReach * 0.85);
     const d = along[i];
