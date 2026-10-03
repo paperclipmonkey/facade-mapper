@@ -25,7 +25,7 @@
  * Neither `ctx.shadowBlur` nor `ctx.filter` appears anywhere below, though a
  * glow is exactly what they are for. Both are per-draw-call full-layer
  * compositing operations, and a sign with twenty glyphs would pay for twenty of
- * them every frame. Three concentric strokes of decreasing width and increasing
+ * them every frame. Concentric strokes of decreasing width and increasing
  * alpha give a better tube anyway — a real one has a hard core, and a Gaussian
  * blur does not.
  *
@@ -38,6 +38,7 @@
  */
 
 import { rgba, clamp, frac, makeRng, hashString } from '../../core/math.js';
+import { mixLinear } from '../color.js';
 import { glow } from '../lib.js';
 
 /**
@@ -92,32 +93,136 @@ function tubeBrightness(t, p, key) {
 }
 
 /**
- * Lay a neon tube down along the current path or a supplied one.
+ * Lay a neon tube down along the current path.
  *
- * Four passes, widest and faintest first: outer bloom, inner bloom, the glass
- * tube itself in a lighter version of the gas colour, and a core that is nearly
- * white because a real tube's core is saturating your eye. Reversing that order
- * or dropping the core is the difference between neon and a coloured line.
+ * Widest and faintest first, so the passes read outwards-in as a photograph
+ * of a lit tube does:
+ *
+ *   - the light the tube throws on the wall round it, a long soft skirt in the
+ *     gas colour — the part the Light on the wall slider scales;
+ *   - the tube's own glow, tighter and stronger and properly saturated, which
+ *     is where the colour of a neon sign actually lives;
+ *   - the glass, the width of the tube, in the gas colour;
+ *   - the core, nearly white, because the column of gas down the middle is
+ *     bright enough to saturate any eye and any camera;
+ *   - and a hairline highlight off-centre, the reflection a round glass tube
+ *     always carries, which is the cue that it is a tube and not a stripe.
+ *
+ * Reversing that order or dropping the core is the difference between neon and
+ * a coloured line. Six or seven passes rather than the old four, because the
+ * halo was two hard-edged bands that read as outlines; geometric steps of width
+ * between them approximate a smooth falloff, and the bloom does the rest.
  */
-function strokeNeon(g, path, width, colour, core, bright, level) {
+function strokeNeon(g, width, colour, core, bright, level, spill = 1) {
   if (bright <= 0.01) return;
+  const halo = clamp(spill, 0, 3);
   const passes = [
-    [width * 4.5, 0.06 * level],
-    [width * 2.2, 0.14 * level],
-    [width * 1.0, 0.55 * level],
+    [width * 10, 0.016 * halo],
+    [width * 5.2, 0.036 * halo],
+    [width * 2.8, 0.1],
+    [width * 1.7, 0.24],
+    [width * 1.08, 0.62],
   ];
   g.lineCap = 'round';
   g.lineJoin = 'round';
   for (const [w, a] of passes) {
+    if (a <= 0) continue;
     g.lineWidth = w;
-    g.strokeStyle = rgba(colour, a * bright);
-    if (path) g.stroke(path);
-    else g.stroke();
+    g.strokeStyle = rgba(colour, Math.min(1, a * bright * level));
+    g.stroke();
   }
-  g.lineWidth = Math.max(1, width * 0.4);
-  g.strokeStyle = rgba(core, 0.95 * bright * level);
-  if (path) g.stroke(path);
-  else g.stroke();
+  g.lineWidth = Math.max(1, width * 0.5);
+  g.strokeStyle = rgba(core, Math.min(1, 0.9 * bright * level));
+  g.stroke();
+  g.lineWidth = Math.max(0.6, width * 0.18);
+  g.strokeStyle = rgba('#ffffff', Math.min(1, 0.85 * bright * level));
+  g.stroke();
+}
+
+/**
+ * The glass highlight, along the current path, offset up and to the left — the
+ * way a tube on a wall catches the light of the street. Faint, and only ever on
+ * one side of the tube, which is the whole cue.
+ */
+function strokeGlint(g, width, bright, level) {
+  if (bright <= 0.01) return;
+  g.save();
+  g.translate(-width * 0.26, -width * 0.26);
+  g.lineWidth = Math.max(0.5, width * 0.12);
+  g.strokeStyle = rgba('#ffffff', Math.min(1, 0.32 * bright * level));
+  g.stroke();
+  g.restore();
+}
+
+/**
+ * Trace a shape's outline as bent glass: the same path, with every corner
+ * rounded off to the radius a glass-bender can actually make.
+ *
+ * Neon is a tube heated and bent by hand, and the tightest bend it takes is a
+ * couple of tube widths. A traced window has dead-square corners, and a tube
+ * drawn into them comes out as a stroked rectangle with mitred joins — a
+ * graphic, not glass. Rounding each corner to the bend radius (or to the most
+ * the neighbouring edges allow, on a short edge) is a quadratic through the
+ * corner, which costs what the corner did.
+ *
+ * `inset` pulls every point towards the middle of the shape first, for the
+ * second tube inside the first. Done to the points, not to the context, so the
+ * inner tube keeps the width it was given in both directions — scaling the
+ * context to inset it stretched its strokes along whichever side was longer.
+ *
+ * Returns the length of the traced tube, for laying a dash pattern along it.
+ */
+function traceTube(g, shape, bend, inset = 0) {
+  const pts = shape.points;
+  const n = pts.length;
+  g.beginPath();
+  if (!n) return 0;
+  const { bbox } = shape;
+  const sx = inset > 0 ? Math.max(0.05, 1 - (inset * 2) / Math.max(1, bbox.w)) : 1;
+  const sy = inset > 0 ? Math.max(0.05, 1 - (inset * 2) / Math.max(1, bbox.h)) : 1;
+  const X = (i) => bbox.cx + (pts[i].x - bbox.cx) * sx;
+  const Y = (i) => bbox.cy + (pts[i].y - bbox.cy) * sy;
+  const closed = shape.closed && n > 2;
+
+  if (!closed) {
+    g.moveTo(X(0), Y(0));
+    let length = 0;
+    for (let i = 1; i < n; i++) {
+      g.lineTo(X(i), Y(i));
+      length += Math.hypot(X(i) - X(i - 1), Y(i) - Y(i - 1));
+    }
+    return length;
+  }
+
+  let length = 0;
+  let started = false;
+  for (let i = 0; i <= n; i++) {
+    const c = i % n;
+    const a = (c - 1 + n) % n;
+    const b = (c + 1) % n;
+    const ax = X(a) - X(c);
+    const ay = Y(a) - Y(c);
+    const bx = X(b) - X(c);
+    const by = Y(b) - Y(c);
+    const la = Math.hypot(ax, ay);
+    const lb = Math.hypot(bx, by);
+    if (la < 1e-6 || lb < 1e-6) continue;
+    const r = Math.min(bend, la * 0.45, lb * 0.45);
+    const inX = X(c) + (ax / la) * r;
+    const inY = Y(c) + (ay / la) * r;
+    const outX = X(c) + (bx / lb) * r;
+    const outY = Y(c) + (by / lb) * r;
+    if (!started) {
+      g.moveTo(outX, outY);
+      started = true;
+      continue;
+    }
+    g.lineTo(inX, inY);
+    g.quadraticCurveTo(X(c), Y(c), outX, outY);
+    length += la - r * 2 + r * 1.6;
+  }
+  g.closePath();
+  return length;
 }
 
 /* ------------------------------------------------------------------ *
@@ -149,59 +254,92 @@ const neon = {
     const level = clamp(p.level, 0, 3);
     if (bright <= 0.01 || level <= 0) return;
 
-    const length = shape.sampler.length || Math.max(shape.bbox.w, shape.bbox.h);
+    const width = Math.max(0.5, p.width);
+    const bend = width * 2.2;
 
     g.save();
     g.globalCompositeOperation = 'lighter';
 
+    const length = traceTube(g, shape, bend) || shape.sampler.length || Math.max(shape.bbox.w, shape.bbox.h);
+    const offset = hashString(`${shape.id}`) / 4294967296;
+
     /**
-     * A dead section, as a dash pattern rather than as a gap in the geometry.
+     * Where the tube is broken, as a dash pattern rather than as a gap in the
+     * geometry.
      *
      * One dash the length of the live part and one gap the length of the dead
      * part gives exactly one break in the tube, wherever the offset puts it —
      * which is what a broken sign looks like. A conventional dash pattern gives
      * a dotted line, which looks like a design decision instead of a fault.
+     *
+     * A tube with nothing dead in it is still broken once, and that is not a
+     * fault: a neon tube is a length of glass with an electrode sealed into
+     * each end, so a tube that goes all the way round a window has to start and
+     * stop somewhere. Glass-benders hide the join with a painted-out bend; what
+     * shows from the street is a short dark gap with two rounded ends either
+     * side of it, glowing a little where the light from the ends spills into
+     * it. A closed loop of light with no join in it is the tell of a graphic.
      */
+    let dashed = false;
     if (p.dead > 0) {
       const live = length * (1 - p.dead);
       g.setLineDash([live, length - live]);
-      g.lineDashOffset = -length * frac(hashString(`${shape.id}`) / 4294967296 + t * p.chase);
+      g.lineDashOffset = -length * frac(offset + t * p.chase);
+      dashed = true;
     } else if (p.chase !== 0) {
       // A chase is the same trick with a short lit run travelling round.
       const lit = length * 0.22;
       g.setLineDash([lit, length - lit]);
       g.lineDashOffset = -length * frac(t * p.chase);
+      dashed = true;
+    } else if (shape.closed && length > width * 12) {
+      const gap = width * 1.9;
+      g.setLineDash([length - gap, gap]);
+      g.lineDashOffset = (length - gap) - length * frac(offset * 7.31);
+      dashed = true;
     }
 
-    strokeNeon(g, shape.path, p.width, p.color, p.core, bright, level);
+    strokeNeon(g, width, p.color, p.core, bright, level, p.spill);
+    strokeGlint(g, width, bright, level);
 
     if (p.inset > 0) {
-      // A second tube inside the first, which is how real double-line signage
-      // is made — and the cheapest way to get two gases into one shape.
-      g.save();
-      g.translate(shape.bbox.cx, shape.bbox.cy);
-      const sx = Math.max(0.05, 1 - (p.inset * 2) / Math.max(1, shape.bbox.w));
-      const sy = Math.max(0.05, 1 - (p.inset * 2) / Math.max(1, shape.bbox.h));
-      g.scale(sx, sy);
-      g.translate(-shape.bbox.cx, -shape.bbox.cy);
-      strokeNeon(g, shape.path, p.width * 0.7, p.color2, p.core, bright, level * 0.9);
-      g.restore();
+      /**
+       * A second tube inside the first, which is how real double-line signage
+       * is made — and the cheapest way to get two gases into one shape. Its own
+       * electrode break, somewhere else, because it is its own length of glass.
+       *
+       * Never closer to the first than two pieces of glass can be. An inset
+       * smaller than the tubes are wide put the second tube *inside* the first,
+       * and the two white cores ran together into one fat white band: the
+       * door read as a single thick tube instead of a double one.
+       */
+      const inner = width * 0.7;
+      const inset = Math.max(p.inset, (width + inner) * 0.62);
+      const innerLength = traceTube(g, shape, inner * 2.2, inset) || length;
+      if (dashed && p.dead <= 0 && p.chase === 0) {
+        const gap = inner * 1.9;
+        g.setLineDash([innerLength - gap, gap]);
+        g.lineDashOffset = (innerLength - gap) - innerLength * frac(offset * 3.7 + 0.5);
+      }
+      strokeNeon(g, inner, p.color2, p.core, bright, level * 0.9, p.spill * 0.6);
+      strokeGlint(g, inner, bright, level * 0.9);
     }
 
     g.setLineDash([]);
 
     /**
-     * And the light the sign throws onto the wall around it.
+     * And the light the sign throws onto the opening it surrounds.
      *
-     * A sign is a light source, and the thing that makes a projected one sit on
-     * a building rather than float in front of it is that the brickwork near it
-     * picks up its colour. One soft radial does it.
+     * The tube's own outer passes are the light on the wall beside it; this is
+     * the faint wash it puts across the glass and the reveal inside the shape,
+     * which is what makes a lit window frame read as lighting the window
+     * rather than as a line drawn round it.
      */
     if (p.spill > 0) {
       glow(
         g, shape.bbox.cx, shape.bbox.cy,
-        Math.max(shape.bbox.w, shape.bbox.h) * 1.2,
-        p.color, 0.1 * p.spill * bright * level
+        Math.max(shape.bbox.w, shape.bbox.h) * 1.1,
+        p.color, 0.07 * p.spill * bright * level
       );
     }
 
@@ -212,6 +350,25 @@ const neon = {
 /* ------------------------------------------------------------------ *
  * Neon sign
  * ------------------------------------------------------------------ */
+
+/**
+ * A rounded rectangle, as bent glass, into the current path. Returns its length.
+ */
+function traceFrame(g, x, y, w, h, r) {
+  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+  g.beginPath();
+  g.moveTo(x + rr, y);
+  g.lineTo(x + w - rr, y);
+  g.quadraticCurveTo(x + w, y, x + w, y + rr);
+  g.lineTo(x + w, y + h - rr);
+  g.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  g.lineTo(x + rr, y + h);
+  g.quadraticCurveTo(x, y + h, x, y + h - rr);
+  g.lineTo(x, y + rr);
+  g.quadraticCurveTo(x, y, x + rr, y);
+  g.closePath();
+  return 2 * (w + h) - rr * 1.7;
+}
 
 const neonSign = {
   id: 'neon-sign',
@@ -248,13 +405,25 @@ const neonSign = {
     if (level <= 0) return;
 
     /**
-     * One character per cell down the shape, sized to fit whichever way it is
-     * running — so the same sign works on a chimney (tall, narrow, one column)
-     * and along a bay window (wide, short, one row) without being told which.
+     * The sign is bolted *to* the shape, so it fits inside it.
+     *
+     * The frame used to be sized round the lettering, which was sized to the
+     * shape — so a framed sign was always bigger than the thing it was bolted
+     * to, and on the chimney the box hung off the top and down over the roof.
+     * Now the frame is the shape less a margin, and the lettering is sized to
+     * the inside of the frame. One character per cell along whichever way it
+     * runs, so the same sign works on a chimney (tall, narrow, one column) and
+     * along a bay window (wide, short, one row) without being told which.
      */
-    const along = down ? bbox.h : bbox.w;
-    const across = down ? bbox.w : bbox.h;
-    const cell = Math.min(along / (chars.length * p.spacing), across * 0.92);
+    const minSide = Math.min(bbox.w, bbox.h);
+    const framed = p.frame > 0;
+    const margin = framed ? minSide * 0.05 : minSide * 0.03;
+    const boxW = Math.max(4, bbox.w - margin * 2);
+    const boxH = Math.max(4, bbox.h - margin * 2);
+    const pad = framed ? Math.min(boxW, boxH) * 0.05 : 0;
+    const along = (down ? boxH : boxW) - pad * 2;
+    const across = (down ? boxW : boxH) - pad * 2;
+    const cell = Math.max(4, Math.min(along / (chars.length * p.spacing), across * 0.92));
     const px = Math.max(6, cell * clamp(p.size, 0.05, 2));
 
     g.save();
@@ -281,6 +450,9 @@ const neonSign = {
 
     const span = chars.length * cell * p.spacing;
     const start = -span / 2 + (cell * p.spacing) / 2;
+    // The rim colour: the gas, lifted a little, so the edge of each stroke is
+    // the most saturated bright thing on the sign.
+    const rim = mixLinear(p.color, '#ffffff', 0.12);
 
     for (let i = 0; i < chars.length; i++) {
       const offset = start + i * cell * p.spacing;
@@ -296,41 +468,62 @@ const neonSign = {
       }
       if (charBright <= 0.01) continue;
 
-      const passes = [
-        [px * 0.34, 0.05 * level],
-        [px * 0.16, 0.13 * level],
-        [px * 0.07, 0.5 * level],
+      /**
+       * A character as tube, inside out.
+       *
+       * The halo first, wide and faint and in the gas colour. Then the face of
+       * the character in the core colour — the white-hot gas. Then, painted
+       * *over* the face rather than added to it, a narrow band of the gas
+       * colour along every edge, which leaves the white only down the middle
+       * of each stroke. That is the cross-section of a lit tube: white where
+       * you look through the most glowing gas, coloured at the walls, colour
+       * again in the air round it. Filling the character white and stopping
+       * there is a white letter with a pink glow, which is what this was.
+       */
+      const halos = [
+        [px * 0.34, 0.04],
+        [px * 0.19, 0.08],
+        [px * 0.1, 0.18],
       ];
-      for (const [w, a] of passes) {
+      for (const [w, a] of halos) {
         g.lineWidth = w;
-        g.strokeStyle = rgba(p.color, a * charBright);
+        g.strokeStyle = rgba(p.color, Math.min(1, a * charBright * level));
         g.strokeText(chars[i], x, y);
       }
-      g.fillStyle = rgba(p.core, 0.95 * charBright * level);
+      g.fillStyle = rgba(p.core, Math.min(1, 0.95 * charBright * level));
       g.fillText(chars[i], x, y);
+      g.globalCompositeOperation = 'source-over';
+      g.lineWidth = Math.max(1, px * 0.024);
+      g.strokeStyle = rgba(rim, Math.min(1, 0.92 * charBright * level));
+      g.strokeText(chars[i], x, y);
+      g.globalCompositeOperation = 'lighter';
     }
 
     /* --- The box it is bolted into --- */
 
-    if (p.frame > 0) {
-      const pad = cell * 0.34;
-      const w = (down ? cell : span) + pad * 2;
-      const h = (down ? span : cell) + pad * 2;
-      g.beginPath();
-      g.rect(bbox.cx - w / 2, bbox.cy - h / 2, w, h);
-      strokeNeon(g, null, Math.max(1.5, px * 0.06 * p.frame), p.frameColor, p.core, bright, level * 0.8);
+    if (framed) {
+      const fw = Math.max(1.5, px * 0.06 * p.frame);
+      const fx = bbox.cx - boxW / 2;
+      const fy = bbox.cy - boxH / 2;
+      const length = traceFrame(g, fx, fy, boxW, boxH, fw * 2.2);
+      // The frame is one length of glass too, with its join on the bottom edge.
+      const gap = fw * 1.9;
+      g.setLineDash([length - gap, gap]);
+      g.lineDashOffset = (length - gap) - (boxW * 1.7 + boxH);
+      strokeNeon(g, fw, p.frameColor, p.core, bright, level * 0.8, p.spill * 0.7);
+      g.setLineDash([]);
     }
 
     if (p.subtitle) {
-      // A Latin line under the sign, half the size, in the frame's colour.
-      // Every one of these signs in every one of these films has one.
+      // A Latin line under the sign, small, in the frame's colour. Every one of
+      // these signs in every one of these films has one.
       const small = px * 0.26;
       g.font = `600 ${small}px system-ui, sans-serif`;
       const y = bbox.cy + (down ? span / 2 + small * 1.6 : cell * 0.9);
-      g.lineWidth = small * 0.22;
-      g.strokeStyle = rgba(p.frameColor, 0.16 * level);
+      g.lineWidth = small * 0.3;
+      g.strokeStyle = rgba(p.frameColor, 0.22 * bright * level);
       g.strokeText(p.subtitle, bbox.cx, y);
-      g.fillStyle = rgba(p.core, 0.8 * bright * level);
+      g.fillStyle = rgba(p.core, 0.85 * bright * level);
       g.fillText(p.subtitle, bbox.cx, y);
     }
 
@@ -379,17 +572,42 @@ const hologram = {
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
 
+    /**
+     * The projector's own flicker: a hologram is a picture being *made*, so its
+     * brightness is never quite still — a slow wobble, and every so often a
+     * dip of a few frames as if the beam had stuttered. A function of `t`, so
+     * every tab dips together.
+     */
+    const dip = makeRng(`holo-dip:${shape.id}:${Math.floor(t * 5)}`)() < 0.04 ? 0.55 : 1;
+    const wobble = (0.9 + 0.1 * Math.sin(t * 2.3) * Math.sin(t * 5.1 + 1.3)) * dip;
+    const lit = level * wobble;
+
     // The volume the thing is supposed to be hanging in. A hologram in a film
     // is always in slightly foggy air, because otherwise there is nothing for
     // it to be projected *onto* and it reads as a sticker.
     if (p.haze > 0) {
       const haze = g.createLinearGradient(0, bbox.y, 0, bbox.y + bbox.h);
-      haze.addColorStop(0, rgba(p.color, 0.05 * p.haze * level));
-      haze.addColorStop(0.5, rgba(p.color, 0.12 * p.haze * level));
-      haze.addColorStop(1, rgba(p.color, 0.02 * p.haze * level));
+      haze.addColorStop(0, rgba(p.color, 0.05 * p.haze * lit));
+      haze.addColorStop(0.5, rgba(p.color, 0.12 * p.haze * lit));
+      haze.addColorStop(1, rgba(p.color, 0.02 * p.haze * lit));
       g.fillStyle = haze;
       g.fillRect(bbox.x, bbox.y, bbox.w, bbox.h);
     }
+
+    /**
+     * The refresh band: a soft bright bar rolling slowly down the picture, the
+     * way a scanned display shows its refresh to a camera. It is the one moving
+     * thing in the picture that is not the content, and it is what says
+     * "display" rather than "lettering".
+     */
+    const roll = frac(t * 0.11 + (hashString(`${shape.id}`) % 997) / 997);
+    const bandY = bbox.y - bbox.h * 0.15 + roll * bbox.h * 1.3;
+    const band = g.createLinearGradient(0, bandY - bbox.h * 0.12, 0, bandY + bbox.h * 0.12);
+    band.addColorStop(0, rgba(p.color, 0));
+    band.addColorStop(0.5, rgba(p.color, 0.06 * lit));
+    band.addColorStop(1, rgba(p.color, 0));
+    g.fillStyle = band;
+    g.fillRect(bbox.x, bandY - bbox.h * 0.12, bbox.w, bbox.h * 0.24);
 
     g.font = `600 ${px}px ${JP_STACK}`;
     g.textAlign = 'center';
@@ -398,6 +616,10 @@ const hologram = {
     const step = px * 1.12;
     const rows = Math.ceil(bbox.h / step) + 2;
     const scroll = t * p.speed;
+    // The lettering's own colour: the projector's colour pushed most of the way
+    // to white, so the characters are the brightest thing in it and readable,
+    // but still unmistakably that colour rather than print on a wall.
+    const face = mixLinear(p.color, '#ffffff', 0.55);
 
     for (let c = 0; c < columns; c++) {
       const x = bbox.x + ((c + 0.5) / columns) * bbox.w;
@@ -430,22 +652,23 @@ const hologram = {
           const bucket = Math.floor(t * 7);
           const rng = makeRng(`tear:${shape.id}:${bucket}`);
           if (rng() < p.glitch * 0.35) {
-            const band = Math.floor(rng() * rows);
-            if (Math.abs(r - band) < 2) tear = (rng() - 0.5) * bbox.w * 0.25;
+            const band2 = Math.floor(rng() * rows);
+            if (Math.abs(r - band2) < 2) tear = (rng() - 0.5) * bbox.w * 0.25;
           }
         }
 
         // Fringing: the same glyph drawn twice more, pulled apart horizontally
         // in two opposed colours. It is the cheapest possible chromatic
         // aberration and it is the single strongest "this is a projection"
-        // cue there is.
+        // cue there is. Fainter than the face, so it reads as fringing round a
+        // character rather than as two more characters.
         if (p.split > 0) {
-          g.fillStyle = rgba(p.fringe, 0.35 * level);
+          g.fillStyle = rgba(p.fringe, 0.26 * lit);
           g.fillText(ch, x + tear - p.split, y);
-          g.fillStyle = rgba(p.color, 0.35 * level);
+          g.fillStyle = rgba(p.color, 0.3 * lit);
           g.fillText(ch, x + tear + p.split, y);
         }
-        g.fillStyle = rgba('#ffffff', 0.55 * level);
+        g.fillStyle = rgba(face, 0.72 * lit);
         g.fillText(ch, x + tear, y);
       }
     }
@@ -457,6 +680,9 @@ const hologram = {
      * are the only part of the effect that does not move with the content: the
      * lettering scrolls *behind* a fixed comb, which is what your eye reads as
      * "this is being displayed on something" rather than "this is painted on".
+     * Thinner than the gaps between them — a comb of half-and-half bars took
+     * half the light out of the lettering, and a hologram nobody can read is
+     * not advertising anything.
      */
     if (p.scanlines > 0 && level > 0) {
       g.globalCompositeOperation = 'source-over';
@@ -464,10 +690,11 @@ const hologram = {
       // of the effect that *subtracts*, so at zero they have to go: a layer
       // turned down to nothing that still paints black bands across the
       // brickwork is not off, it is a mask.
-      g.fillStyle = rgba('#000000', 0.35 * Math.min(1, level));
+      g.fillStyle = rgba('#000000', 0.38 * Math.min(1, level));
       const gap = Math.max(2, p.scanlines);
+      const line = Math.max(1, gap * 0.7);
       for (let y = bbox.y; y < bbox.y + bbox.h; y += gap * 2) {
-        g.fillRect(bbox.x, y, bbox.w, gap);
+        g.fillRect(bbox.x, y, bbox.w, line);
       }
     }
 
