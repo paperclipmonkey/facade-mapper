@@ -2762,9 +2762,10 @@ function webGeometry(state, shape, base) {
  * - **A swell.** How high the bank stands rises and falls along the street, a
  *   long slow swell with a shorter one on it, so the top is never ruled.
  * - **Wisps.** Over the surface, a noise squashed flat along the ground and
- *   lifting gives long thin veils peeling off the bank, curled at their ends by
- *   the same divergence-free flow — faint, because they are the bank coming
- *   apart, not more of it.
+ *   lifting gives thin veils peeling off the bank, curled at their ends by the
+ *   same divergence-free flow and torn along their length by another, so they
+ *   come and go rather than running the width of the house — faint, because
+ *   they are the bank coming apart, not more of it.
  *
  * And it is lit. Each column is walked from the top down, adding up the fog a
  * short way above each cell; what light gets through that is what the cell
@@ -2904,24 +2905,27 @@ const fog = {
           // faint — they are the bank coming apart, not more of it. Squashed
           // only so far: much thinner than two cells and the grid shows
           // through as a string of beads.
-          const w = noise.noise3(sx * 0.6 + 71.3, sy * 3.3 - rise * yScale * 3, t * 0.06) - 0.22;
-          if (w > 0) v = w * 1.1 * Math.min(1, (rel - 0.75) * 4) * Math.exp(-(rel - 1) * 2);
+          const w = noise.noise3(sx * 0.9 + 71.3, sy * 3.3 - rise * yScale * 3, t * 0.06) - 0.22;
+          if (w > 0) {
+            // And torn along their length by a second noise, so a veil comes
+            // and goes across the street. Left whole, the warp could bend one
+            // into a single smooth ribbon the width of the house, which reads
+            // as a stage effect rather than as mist.
+            const torn = clamp(0.45 + 1.3 * noise.noise3(sx * 1.6 - 9.1, sy * 1.4 + 2.3, t * 0.08), 0, 1);
+            v = w * 0.95 * torn * Math.min(1, (rel - 0.75) * 4) * Math.exp(-(rel - 1) * 2.2);
+          }
         }
         dens[y * cols + x] = d > 0 ? d : 0;
         wisp[y * cols + x] = v;
       }
     }
 
-    // The fog colour in shadow, and catching the light: scaled in linear light
-    // and pushed towards white at the lit end, as bytes, once a frame.
-    const ramp = state.ramp || (state.ramp = new Array(FOG_RAMP * 3).fill(0));
+    // The fog colour, in linear light: in shade inside the bank, and paler and
+    // pushed towards white where it catches the light.
     linearRgb(p.color, RGB);
-    for (let k = 0; k < FOG_RAMP; k++) {
-      const lit = k / (FOG_RAMP - 1);
-      const gain = 0.84 + 0.36 * lit;
-      const white = 0.2 * lit * lit;
-      for (let c = 0; c < 3; c++) ramp[k * 3 + c] = srgbByte(RGB[c] * gain * (1 - white) + white);
-    }
+    const fr = RGB[0];
+    const fg = RGB[1];
+    const fb = RGB[2];
 
     // Optical depth: how much of the bank one cell's worth of density is.
     const tauCell = clamp(p.density, 0, 1) * 7.2;
@@ -2946,8 +2950,11 @@ const fog = {
         // halo on the bank under every one.
         const light = Math.exp(-above);
         above += d * shadeCell;
-        const k = Math.min(FOG_RAMP - 1, (light * (FOG_RAMP - 1) + 0.5) | 0);
-        field.set(x, y, ramp[k * 3], ramp[k * 3 + 1], ramp[k * 3 + 2], alpha);
+        // Worked out exactly per cell rather than looked up in a short ramp:
+        // sixteen steps of shading showed as contour lines inside the bank.
+        const white = 0.2 * light * light;
+        const keep = (0.84 + 0.36 * light) * (1 - white);
+        field.set(x, y, srgbByte(fr * keep + white), srgbByte(fg * keep + white), srgbByte(fb * keep + white), alpha);
       }
     }
 
@@ -2957,8 +2964,6 @@ const fog = {
     g.restore();
   },
 };
-
-const FOG_RAMP = 16;
 
 /**
  * A plume of smoke, lit.
