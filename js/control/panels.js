@@ -200,15 +200,19 @@ export function renderLayerList(node, app) {
     const issues = layerIssues(app.project, layer, effect)
       .filter((i) => i.key !== 'bypassed' && i.key !== 'solo');
 
+    // Name over what-and-where, on two lines: the panel is narrow, and a
+    // layer row has two buttons either side of its text.
     const item = el('div', { class: `list-item${selected ? ' selected' : ''}` }, [
       power,
       solo,
-      el('span', { class: 'item-title', text: title, title }),
-      el('span', {
-        class: 'item-sub',
-        text: named ? `${effectName} · ${targets}` : targets,
-        title: named ? `${effectName} on ${targets}` : `on ${targets}`,
-      }),
+      el('div', { class: 'item-text' }, [
+        el('span', { class: 'item-title', text: title, title }),
+        el('span', {
+          class: 'item-sub',
+          text: named ? `${effectName} · ${targets}` : targets,
+          title: named ? `${effectName} on ${targets}` : `on ${targets}`,
+        }),
+      ]),
       issues.length
         ? el('span', {
             class: `chip ${issues[0].level}`,

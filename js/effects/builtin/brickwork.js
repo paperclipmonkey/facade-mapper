@@ -18,15 +18,21 @@
  * The second design problem is resolution. This is aimed at a projector, and a
  * domestic one puts about half a pixel on the wall for every pixel an effect
  * draws in. Mortar lines at their true 10mm scale land under one projector
- * pixel and turn into grey haze; brick bevels a pixel wide do nothing at all.
- * So everything structural here is deliberately fatter than life — see the note
- * on the four-pixel floor in docs/effects.md — and the shading is done with
- * whole-face tone steps rather than thin highlight lines, because a face that
- * covers twenty pixels survives being halved and a line that covers one does
- * not.
+ * pixel and turn into grey haze. So everything structural here is deliberately
+ * fatter than life — see the note on the four-pixel floor in docs/effects.md —
+ * and what makes the wall read as masonry from the pavement is carried by
+ * things that are big: every brick its own tone, the odd over-burnt one nearly
+ * black, a shadow along the underside of every course where the joint is set
+ * back, and staining that spreads across whole patches of the wall.
+ *
+ * The fine work — pitting, sand, a knocked corner, a lit arris — is under that
+ * floor, and is drawn anyway, because it is baked once and costs nothing after.
+ * On the wall it averages into the brick's tone, which is what fired clay does
+ * at six metres; in a photograph of the house, or from the front path, it is
+ * the difference between brick and a picture of brick.
  */
 
-import { rgba, clamp, TAU, mixHex, makeRng, pointInPolygon, smoothstep } from '../../core/math.js';
+import { rgba, clamp, TAU, mixHex, makeRng, pointInPolygon, smoothstep, hexToRgb } from '../../core/math.js';
 import { collectObstacles, isClear, nearestSurface } from '../obstacles.js';
 import { offscreen, glow } from '../lib.js';
 
@@ -109,27 +115,357 @@ function layCourses(bbox, w, h, gap, origin = { x: 0, y: 0 }) {
 }
 
 /**
- * One brick face, with the light coming from the top left.
+ * A brick's place in the lattice, as thirty-two well-mixed bits.
  *
- * Three flat tones rather than a gradient and a hairline: the top and left
- * edges a step lighter, the bottom and right a step darker, the face itself in
- * between. Each of those bands is a good fraction of the brick, so all three
- * survive being scaled down to a projector. It is also about ten times cheaper
- * than a gradient per brick, which matters when there are four thousand of them
- * even if it only happens once.
+ * Everything about how a brick looks is drawn from this rather than from one
+ * generator run down the wall in laying order, and that is what lets two layers
+ * agree about a single brick. In laying order, the colour of the brick at a
+ * given course and column would depend on how many bricks had been laid before
+ * it — which depends on where the shape's bounding box starts — so Breach could
+ * not know the colour of the brick it takes out, and retracing the wall by a
+ * pixel would reshuffle every brick on it. Hashed from (row, col), a brick is
+ * the same brick whichever layer asks and however the shape was traced.
  */
-function drawBrick(c, x, y, w, h, face, relief) {
-  const bevel = Math.max(1, Math.min(w, h) * 0.16);
-  c.fillStyle = face;
+function brickHash(seed, row, col) {
+  let h = (Math.imul(col | 0, 374761393) + Math.imul(row | 0, 668265263)
+    + Math.imul((seed | 0) + 40503, 2246822519)) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+/**
+ * Which delivery a brick came from: a slow wander across the wall, in [0, 1].
+ *
+ * Value noise on a lattice four courses by three bricks. Real walls are not an
+ * independent draw per brick — a pallet of slightly darker bricks goes into one
+ * stretch and a paler one into the next — and per-brick noise alone reads as
+ * television static at house scale, where the patches are the first thing the
+ * eye finds.
+ */
+function batchAt(seed, row, col) {
+  const fy = row / 4;
+  const fx = col / 3;
+  const y0 = Math.floor(fy);
+  const x0 = Math.floor(fx);
+  const ty = smoothstep(0, 1, fy - y0);
+  const tx = smoothstep(0, 1, fx - x0);
+  const v = (r, c) => (brickHash(seed + 7919, r, c) & 0xffff) / 0xffff;
+  const top = v(y0, x0) + (v(y0, x0 + 1) - v(y0, x0)) * tx;
+  const bottom = v(y0 + 1, x0) + (v(y0 + 1, x0 + 1) - v(y0 + 1, x0)) * tx;
+  return top + (bottom - top) * ty;
+}
+
+/** Over-fired: the clinker end of the kiln, nearly black with a purple cast. */
+const BURNT = '#2b1c22';
+/** Under-fired: soft, sandy and salmon. */
+const PALE = '#c4916d';
+
+/**
+ * The colour a brick was fired, and the generator its texture is drawn from.
+ *
+ * Three things vary, at three scales. Each brick takes its own mix of the two
+ * colours, its own lean in hue and its own lightness — that is the difference
+ * between masonry and graph paper. Patches of the wall lean one way together
+ * (`batchAt`), as a delivery from one firing does. And a few in a hundred are
+ * the odd ones out: over-burnt bricks, which go nearly black and are the
+ * single most recognisable thing about an old brick wall seen from across a
+ * road, and the occasional soft pale one.
+ *
+ * Variation scales all of it, so at nought every brick is exactly `color` and
+ * the wall is a tidy diagram of one.
+ */
+function brickLook(p, row, col) {
+  const v = clamp(Number(p.variation) || 0, 0, 1);
+  const rng = makeRng(brickHash(p.seed, row, col));
+  const batch = batchAt(p.seed, row, col) - 0.5;
+  const mix = clamp(rng() * v * 0.9 + batch * v * 0.8, 0, 1);
+  let tone = mixHex(p.color, p.color2, mix);
+  // Hue as well as depth: some bricks come out of the kiln oranger, some
+  // towards plum. Mixing only between the two chosen colours gives a wall in
+  // one hue at several brightnesses, which is a print rather than a wall.
+  const hue = (rng() - 0.5) * v * 0.5;
+  tone = mixHex(tone, hue > 0 ? '#c0642f' : '#5b3440', Math.abs(hue));
+  const shade = (rng() - 0.5) * v * 0.6 + batch * v * 0.24;
+  tone = mixHex(tone, shade > 0 ? '#ffffff' : '#000000', Math.abs(shade));
+  const fate = rng();
+  if (fate < 0.09 * v) tone = mixHex(tone, BURNT, 0.4 + rng() * 0.28);
+  else if (fate > 1 - 0.05 * v) tone = mixHex(tone, PALE, 0.16 + rng() * 0.2);
+  return { tone, rng };
+}
+
+/**
+ * One brick in the baked wall, lit from the top left, standing proud of a joint
+ * that is set back from it.
+ *
+ * The face rectangle comes first and is exactly the brick, filled in its own
+ * tone; everything after it is laid over that rectangle or into the joint
+ * beside it, never over a neighbour. In order:
+ *
+ *  - **Clay.** A patch or two lighter or darker, and one end of some bricks
+ *    darkened where the kiln flame reached it — fired clay is never one colour
+ *    from end to end, and a face that is reads as plastic.
+ *  - **Grain.** Pits and grains of sand, a couple of pixels each. Under the
+ *    projector floor and deliberately so: see the note at the top.
+ *  - **Light.** The face a touch brighter along the top and darker towards the
+ *    bottom, as one soft gradient: hard light and dark bands along the edges
+ *    read as the bevel on a cartoon brick. The top arris catches the light in
+ *    the brick's own colour; the right-hand one is turned away.
+ *  - **The joint.** Recessed mortar is what makes brickwork look laid rather
+ *    than printed. Each brick throws a shadow across the top of the bed joint
+ *    under it, and the bottom of that joint, out of the shadow, is lit — so
+ *    every joint is dark above and light below, and every course appears to
+ *    stand forward of the one beneath it. Drawn in the joint, outside the face,
+ *    so the face rectangle still tells Breach exactly where the brick is.
+ *
+ * And now and then a knocked corner, in the darker clay behind the face.
+ */
+function layBrick(c, x, y, w, h, gap, look, relief, variation, recess, fine) {
+  const r = look.rng;
+  c.fillStyle = look.tone;
   c.fillRect(x, y, w, h);
   if (relief <= 0) return;
 
-  c.fillStyle = rgba('#ffffff', 0.16 * relief);
-  c.fillRect(x, y, w, bevel);
-  c.fillRect(x, y, bevel, h);
-  c.fillStyle = rgba('#000000', 0.26 * relief);
-  c.fillRect(x, y + h - bevel, w, bevel);
-  c.fillRect(x + w - bevel, y, bevel, h);
+  if (fine) {
+    const blots = r() < 0.55 ? 2 : 1;
+    for (let k = 0; k < blots; k++) {
+      const bx = x + r() * w;
+      const by = y + r() * h;
+      const rad = h * (0.7 + r() * 1.2);
+      const dark = r() < 0.62;
+      const a = (dark ? 0.1 + r() * 0.14 : 0.05 + r() * 0.08) * (0.35 + variation);
+      const ink = dark ? '34,12,8' : '255,226,196';
+      const blot = c.createRadialGradient(bx, by, 0, bx, by, rad);
+      blot.addColorStop(0, `rgba(${ink},${a})`);
+      blot.addColorStop(1, `rgba(${ink},0)`);
+      c.fillStyle = blot;
+      c.fillRect(x, y, w, h);
+    }
+
+    if (r() < 0.45) {
+      const fromLeft = r() < 0.5;
+      const x0 = fromLeft ? x : x + w;
+      const x1 = fromLeft ? x + w * (0.35 + r() * 0.3) : x + w * (0.65 - r() * 0.3);
+      const flash = c.createLinearGradient(x0, 0, x1, 0);
+      const a = (0.1 + r() * 0.18) * (0.3 + variation);
+      flash.addColorStop(0, `rgba(30,12,16,${a})`);
+      flash.addColorStop(1, 'rgba(30,12,16,0)');
+      c.fillStyle = flash;
+      c.fillRect(x, y, w, h);
+    }
+
+    // By area, so a big brick is as gritty as a small one, up to a ceiling
+    // that keeps the bake of a large wall of large bricks quick.
+    const specks = Math.min(150, Math.round(((w * h) / 46) * relief));
+    if (specks > 0) {
+      c.beginPath();
+      for (let k = 0; k < specks; k++) {
+        const s = 0.7 + r() * 1.4;
+        c.rect(x + r() * (w - s), y + r() * (h - s), s, s);
+      }
+      c.fillStyle = 'rgba(18,6,4,0.34)';
+      c.fill();
+      c.beginPath();
+      for (let k = 0; k < specks * 0.6; k++) {
+        const s = 0.6 + r() * 1.1;
+        c.rect(x + r() * (w - s), y + r() * (h - s), s, s);
+      }
+      c.fillStyle = 'rgba(255,232,206,0.22)';
+      c.fill();
+    }
+  }
+
+  const lit = c.createLinearGradient(0, y, 0, y + h);
+  lit.addColorStop(0, `rgba(255,236,214,${0.14 * relief})`);
+  lit.addColorStop(0.3, 'rgba(255,236,214,0)');
+  lit.addColorStop(0.6, 'rgba(0,0,0,0)');
+  lit.addColorStop(1, `rgba(0,0,0,${0.3 * relief})`);
+  c.fillStyle = lit;
+  c.fillRect(x, y, w, h);
+
+  const edge = Math.max(1, Math.min(w, h) * 0.07);
+  c.fillStyle = rgba(mixHex(look.tone, '#fff0dc', 0.55), 0.42 * relief);
+  c.fillRect(x, y, w, edge);
+  c.fillStyle = rgba(mixHex(look.tone, '#fff0dc', 0.4), 0.16 * relief);
+  c.fillRect(x, y + edge, edge, h - edge);
+  c.fillStyle = `rgba(0,0,0,${0.22 * relief})`;
+  c.fillRect(x + w - edge, y + edge, edge, h - edge);
+
+  if (fine && r() < 0.13 * relief) {
+    const corner = Math.floor(r() * 4);
+    const cw = Math.min(w * 0.2, h * (0.18 + r() * 0.22));
+    const ch = cw * (0.6 + r() * 0.5);
+    const cx = corner & 1 ? x + w : x;
+    const cy = corner & 2 ? y + h : y;
+    const sx = corner & 1 ? -1 : 1;
+    const sy = corner & 2 ? -1 : 1;
+    c.beginPath();
+    c.moveTo(cx, cy);
+    c.lineTo(cx + sx * cw, cy);
+    c.lineTo(cx + sx * cw * 0.45, cy + sy * ch * 0.45);
+    c.lineTo(cx, cy + sy * ch);
+    c.closePath();
+    c.fillStyle = mixHex(look.tone, recess, 0.55);
+    c.fill();
+  }
+
+  if (gap > 0) {
+    // Into the bed joint below: the shadow of this brick across the top of it,
+    // and the bottom of it, out of that shadow, catching the light. With a dark
+    // mortar the lit strip is what carries it — a projector cannot make the
+    // shadow darker than a wall it is not lighting.
+    c.fillStyle = `rgba(0,0,0,${0.55 * relief})`;
+    c.fillRect(x, y + h, w + gap * 0.3, gap * 0.5);
+    c.fillStyle = rgba(mixHex(recess, '#e9dccb', 0.3), 0.75 * relief);
+    c.fillRect(x - gap * 0.5, y + h + gap * 0.66, w + gap, gap * 0.34);
+    // And the end joint to the right, in shadow on its near side.
+    c.fillStyle = `rgba(0,0,0,${0.4 * relief})`;
+    c.fillRect(x + w, y, gap * 0.4, h + gap * 0.5);
+  }
+}
+
+/**
+ * A brick that is out of the wall, or on its way out — Breach's, drawn live.
+ *
+ * The same light as `layBrick` at a fraction of the cost: the face in the
+ * brick's own tone, the soft top-to-bottom shading, the lit arris and a grain
+ * stamped from one sprite rather than drawn speck by speck. A brick that is
+ * rattling or tumbling is moving too fast for its pits to be told from the
+ * wall's, and a dozen of them a frame have to fit in the budget.
+ *
+ * Drawn about its own centre, so the caller rotates rather than does
+ * trigonometry.
+ */
+function paintLooseBrick(g, w, h, tone, grain) {
+  const x = -w / 2;
+  const y = -h / 2;
+  g.fillStyle = tone;
+  g.fillRect(x, y, w, h);
+  if (grain) g.drawImage(grain, x, y, w, h);
+  const edge = Math.max(1, Math.min(w, h) * 0.08);
+  g.fillStyle = 'rgba(255,236,214,0.2)';
+  g.fillRect(x, y, w, edge);
+  g.fillStyle = 'rgba(0,0,0,0.32)';
+  g.fillRect(x, y + h - edge * 1.6, w, edge * 1.6);
+  g.fillStyle = 'rgba(0,0,0,0.18)';
+  g.fillRect(x + w - edge, y, edge, h);
+}
+
+/**
+ * The grain `paintLooseBrick` stamps: pits, sand, a soft patch and the face's
+ * top-to-bottom light, on transparency, so one sprite serves every tone.
+ */
+function bakeGrain(w, h, seed) {
+  const pw = Math.max(8, Math.round(w));
+  const ph = Math.max(4, Math.round(h));
+  const canvas = offscreen(pw, ph);
+  const c = canvas.getContext('2d');
+  const r = makeRng(`brick-grain:${seed}`);
+  const lit = c.createLinearGradient(0, 0, 0, ph);
+  lit.addColorStop(0, 'rgba(255,236,214,0.14)');
+  lit.addColorStop(0.3, 'rgba(255,236,214,0)');
+  lit.addColorStop(0.6, 'rgba(0,0,0,0)');
+  lit.addColorStop(1, 'rgba(0,0,0,0.3)');
+  c.fillStyle = lit;
+  c.fillRect(0, 0, pw, ph);
+  const bx = pw * (0.2 + r() * 0.6);
+  const blot = c.createRadialGradient(bx, ph * 0.5, 0, bx, ph * 0.5, ph * 1.3);
+  blot.addColorStop(0, 'rgba(34,12,8,0.2)');
+  blot.addColorStop(1, 'rgba(34,12,8,0)');
+  c.fillStyle = blot;
+  c.fillRect(0, 0, pw, ph);
+  const specks = Math.min(60, Math.round((pw * ph) / 40));
+  c.beginPath();
+  for (let k = 0; k < specks; k++) c.rect(r() * (pw - 1.5), r() * (ph - 1.5), 0.8 + r() * 1.2, 0.8 + r() * 1.2);
+  c.fillStyle = 'rgba(18,6,4,0.34)';
+  c.fill();
+  c.beginPath();
+  for (let k = 0; k < specks * 0.6; k++) c.rect(r() * (pw - 1.5), r() * (ph - 1.5), 0.7 + r(), 0.7 + r());
+  c.fillStyle = 'rgba(255,232,206,0.22)';
+  c.fill();
+  return canvas;
+}
+
+/**
+ * Weather the whole wall, once the bricks are in.
+ *
+ * Per-brick variation is texture; this is history, and it is what makes a wall
+ * look like it has been standing in the rain rather than delivered this
+ * morning. Three kinds, all soft and all large enough to read from the road:
+ *
+ *  - grime and the odd paler patch, spread across several bricks at a time;
+ *  - the bottom few courses darkened, where rain splashes back off the ground;
+ *  - and a stain running down from under every sill, darkest at the ends where
+ *    the water drips off. That last one is cheap and does more than anything
+ *    else here to make the projected wall belong to the house — it is the
+ *    brickwork knowing where the real windows are.
+ *
+ * All scaled by Variation, so a wall asked to be uniform stays uniform.
+ */
+function weather(c, bbox, p, obstacles, rng, w, h, gap) {
+  const v = clamp(Number(p.variation) || 0, 0, 1);
+  if (v <= 0) return;
+  const span = Math.max(w, h);
+
+  const count = clamp(Math.round((bbox.w * bbox.h) / 60000), 2, 28);
+  for (let i = 0; i < count; i++) {
+    const cx = bbox.x + rng() * bbox.w;
+    const cy = bbox.y + rng() * bbox.h;
+    const rad = span * (1.4 + rng() * 3.4);
+    const dark = rng() < 0.72;
+    const a = (dark ? 0.09 + rng() * 0.13 : 0.04 + rng() * 0.06) * v;
+    const ink = dark ? '22,10,8' : '255,228,200';
+    const patch = c.createRadialGradient(cx, cy, 0, cx, cy, rad);
+    patch.addColorStop(0, `rgba(${ink},${a})`);
+    patch.addColorStop(0.55, `rgba(${ink},${a * 0.45})`);
+    patch.addColorStop(1, `rgba(${ink},0)`);
+    c.fillStyle = patch;
+    c.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+  }
+
+  const pitch = h + gap;
+  if (bbox.h > pitch * 8) {
+    const top = bbox.y + bbox.h - Math.min(bbox.h * 0.16, pitch * 6);
+    const splash = c.createLinearGradient(0, top, 0, bbox.y + bbox.h);
+    splash.addColorStop(0, 'rgba(14,8,6,0)');
+    splash.addColorStop(1, `rgba(14,8,6,${0.32 * v})`);
+    c.fillStyle = splash;
+    c.fillRect(bbox.x, top, bbox.w, bbox.y + bbox.h - top);
+  }
+
+  // Under the sills. Paths rather than rectangles, and not for the look: the
+  // count of rectangles laid is the count of bricks laid, and it should not
+  // depend on how many windows there are.
+  for (const o of obstacles) {
+    const b = o.bbox;
+    const top = b.y + b.h;
+    const below = bbox.y + bbox.h - top;
+    if (below < pitch * 3) continue;
+    if (b.x + b.w < bbox.x || b.x > bbox.x + bbox.w || top < bbox.y) continue;
+    const len = Math.min(below * 0.8, Math.max(b.h * 1.1, pitch * 4));
+    const stain = c.createLinearGradient(0, top, 0, top + len);
+    stain.addColorStop(0, `rgba(16,10,10,${0.26 * v})`);
+    stain.addColorStop(0.35, `rgba(16,10,10,${0.12 * v})`);
+    stain.addColorStop(1, 'rgba(16,10,10,0)');
+    c.fillStyle = stain;
+    c.beginPath();
+    c.moveTo(b.x + b.w * 0.03, top);
+    c.lineTo(b.x + b.w * 0.97, top);
+    c.lineTo(b.x + b.w * (0.84 - rng() * 0.08), top + len);
+    c.lineTo(b.x + b.w * (0.16 + rng() * 0.08), top + len);
+    c.closePath();
+    c.fill();
+    for (const at of [0.05, 0.95]) {
+      const run = len * (1.1 + rng() * 0.5);
+      const wide = Math.max(3, span * 0.12);
+      const drip = c.createLinearGradient(0, top, 0, top + run);
+      drip.addColorStop(0, `rgba(12,8,8,${0.3 * v})`);
+      drip.addColorStop(1, 'rgba(12,8,8,0)');
+      c.fillStyle = drip;
+      c.beginPath();
+      c.rect(b.x + b.w * at - wide / 2, top, wide, run);
+      c.fill();
+    }
+  }
 }
 
 /**
@@ -147,24 +483,28 @@ function bakeWall(bbox, p, obstacles, rng) {
   const w = Math.max(6, p.brickW);
   const h = Math.max(3, p.brickH);
   const gap = Math.max(0, p.gap);
+  const relief = clamp(Number(p.relief) || 0, 0, 1);
+  const variation = clamp(Number(p.variation) || 0, 0, 1);
 
   // The mortar is the background, showing through the joints. Drawing it as a
   // solid field and laying bricks on top is both simpler and more convincing
   // than stroking lines between them, because the joints then have real width
-  // and pick up the brick shadows at their edges.
+  // and take the shadow of the course above.
   c.fillStyle = p.mortar;
   c.fillRect(bbox.x, bbox.y, bbox.w, bbox.h);
 
+  // The texture is skipped where it could not be seen: a brick under six
+  // pixels tall on the baked bitmap — a huge traced area, or the smallest
+  // bricks the slider allows — keeps its tone and its joint and loses the pits,
+  // which also keeps the bake of forty thousand of them to a blink.
+  const fine = h * scale >= 6;
+  const recess = mixHex(p.mortar, '#000000', 0.4);
   const bricks = layCourses(bbox, w, h, gap, { x: p.originX || 0, y: p.originY || 0 });
   for (const brick of bricks) {
-    // Per-brick colour variation is the whole difference between masonry and
-    // graph paper. Two independent draws — one towards the second colour, one
-    // in overall lightness — so a wall does not read as two alternating tints.
-    const mix = rng() * p.variation;
-    const shade = 1 + (rng() - 0.5) * p.variation * 0.55;
-    const face = mixHex(mixHex(p.color, p.color2, mix), shade > 1 ? '#ffffff' : '#000000', Math.abs(shade - 1));
-    drawBrick(c, brick.x, brick.y, w, h, face, p.relief);
+    layBrick(c, brick.x, brick.y, w, h, gap, brickLook(p, brick.row, brick.col), relief, variation, recess, fine);
   }
+
+  weather(c, bbox, p, obstacles, rng, w, h, gap);
 
   /**
    * Then cut the openings out, as the shapes they actually are.
@@ -252,6 +592,13 @@ const brickwork = {
       gap: Math.max(0, stable.gap),
       originX: stable.originX || 0,
       originY: stable.originY || 0,
+      // And what the bricks look like, so the brick that falls out of the wall
+      // is the brick that was in it. `brickLook` is a function of these and the
+      // brick's place in the lattice, and of nothing else.
+      color: stable.color,
+      color2: stable.color2,
+      variation: stable.variation,
+      seed: stable.seed,
     });
   },
   draw({ g, p, shape, state, shapes, stable }) {
@@ -303,30 +650,211 @@ function wallKey(shape, p, obstacles) {
  *
  * Stroking would be a third of the code, and wrong. A stroke has one width, so
  * a tentacle cannot taper; and `lineWidth` under a couple of pixels is exactly
- * the thing that vanishes on a projector. A ribbon tapers, takes a highlight
- * down one side as a second filled shape, and is honest about what it covers.
+ * the thing that vanishes on a projector. A ribbon tapers, and the skin is
+ * built as ribbons nested inside one another on the same spine — `scale` is the
+ * fraction of the fitted width each one takes — which is honest about what it
+ * covers, because every one of them is inside the outline that was fitted.
  */
-function tentacleRibbon(g, joints, widths) {
+function tentacleRibbon(g, joints, widths, scale = 1, nx = null, ny = null) {
+  if (!nx) {
+    jointNormals(joints);
+    nx = NX;
+    ny = NY;
+  }
   g.beginPath();
   for (let i = 0; i < joints.length; i++) {
-    const a = joints[i];
-    const b = joints[Math.min(i + 1, joints.length - 1)];
-    const prev = joints[Math.max(i - 1, 0)];
-    const angle = Math.atan2(b.y - prev.y, b.x - prev.x) + Math.PI / 2;
-    const wx = Math.cos(angle) * widths[i];
-    const wy = Math.sin(angle) * widths[i];
-    if (i === 0) g.moveTo(a.x + wx, a.y + wy);
-    else g.lineTo(a.x + wx, a.y + wy);
+    const wx = nx[i] * widths[i] * scale;
+    const wy = ny[i] * widths[i] * scale;
+    if (i === 0) g.moveTo(joints[i].x + wx, joints[i].y + wy);
+    else g.lineTo(joints[i].x + wx, joints[i].y + wy);
   }
   for (let i = joints.length - 1; i >= 0; i--) {
-    const a = joints[i];
-    const b = joints[Math.min(i + 1, joints.length - 1)];
-    const prev = joints[Math.max(i - 1, 0)];
-    const angle = Math.atan2(b.y - prev.y, b.x - prev.x) + Math.PI / 2;
-    g.lineTo(a.x - Math.cos(angle) * widths[i], a.y - Math.sin(angle) * widths[i]);
+    g.lineTo(joints[i].x - nx[i] * widths[i] * scale, joints[i].y - ny[i] * widths[i] * scale);
   }
   g.closePath();
   g.fill();
+}
+
+/**
+ * The unit normal at every joint — from the joints either side, which is the
+ * one `fitWidths` measures against — into `NX` and `NY`.
+ *
+ * Worked out once an arm and shared by every ribbon of its skin and its sheen,
+ * which would otherwise each work out the same few hundred angles again.
+ */
+let NX = new Float64Array(1024);
+let NY = new Float64Array(1024);
+function jointNormals(joints) {
+  const n = joints.length;
+  if (NX.length < n) {
+    NX = new Float64Array(n * 2);
+    NY = new Float64Array(n * 2);
+  }
+  for (let i = 0; i < n; i++) {
+    const b = joints[Math.min(i + 1, n - 1)];
+    const prev = joints[Math.max(i - 1, 0)];
+    const tx = b.x - prev.x;
+    const ty = b.y - prev.y;
+    const len = Math.hypot(tx, ty);
+    if (len > 0) {
+      NX[i] = -ty / len;
+      NY[i] = tx / len;
+    } else {
+      NX[i] = 0;
+      NY[i] = 1;
+    }
+  }
+}
+
+/** A closed outline into the current path, for clipping. */
+function traceRing(g, points) {
+  if (!points || points.length < 3) return;
+  g.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) g.lineTo(points[i].x, points[i].y);
+  g.closePath();
+}
+
+/**
+ * What the bricks in this wall look like, for the bricks Breach takes out of it.
+ *
+ * The Brickwork layer's own colours when the two are matched, so the brick that
+ * rattles loose and falls is the brick that was there — `brickLook` is a pure
+ * function of these and the brick's place in the lattice. Otherwise the Falling
+ * brick colour, varied the same way, for a wall that is brick already.
+ */
+function wallLookFor(stable, share, shape) {
+  const laid = stable.match ? share?.get(`brickwork:${shape.id}`) : null;
+  if (laid && laid.color) return laid;
+  return { color: stable.brick, color2: mixHex(stable.brick, '#000000', 0.3), variation: 0.55, seed: stable.seed };
+}
+
+/**
+ * Sprites for the moving parts, baked once per brick size and colour.
+ *
+ * A grain for loose bricks, a soft puff for the dust, and the light on the end
+ * of each arm. Keyed on `stable` and kept apart from the layout, so turning the
+ * tip colour does not drop every hole in the wall.
+ */
+function spritesFor(state, stable, w, h) {
+  const key = `${w}|${h}|${stable.armTip}|${stable.innerGlow}|${stable.seed}`;
+  if (state.spriteKey === key) return state.sprites;
+  state.spriteKey = key;
+
+  const puff = offscreen(64, 64);
+  {
+    const c = puff.getContext('2d');
+    const soft = c.createRadialGradient(32, 32, 0, 32, 32, 32);
+    soft.addColorStop(0, 'rgba(196,182,160,0.9)');
+    soft.addColorStop(0.35, 'rgba(196,182,160,0.5)');
+    soft.addColorStop(0.7, 'rgba(196,182,160,0.14)');
+    soft.addColorStop(1, 'rgba(196,182,160,0)');
+    c.fillStyle = soft;
+    c.fillRect(0, 0, 64, 64);
+  }
+
+  // Inverse-square, like every other light in the library, in a colour between
+  // the tip's own and the light inside the wall: whatever is behind the bricks,
+  // the arms are lit by it.
+  const tip = offscreen(64, 64);
+  {
+    const c = tip.getContext('2d');
+    const { r, g: gr, b } = hexToRgb(mixHex(mixHex(stable.armTip, stable.innerGlow, 0.6), '#ffffff', 0.15));
+    const light = c.createRadialGradient(32, 32, 0, 32, 32, 32);
+    for (const [at, fall] of [[0, 1], [0.08, 0.8], [0.18, 0.45], [0.35, 0.16], [0.6, 0.05], [1, 0]]) {
+      light.addColorStop(at, `rgba(${r},${gr},${b},${fall})`);
+    }
+    c.fillStyle = light;
+    c.fillRect(0, 0, 64, 64);
+  }
+
+  state.sprites = { grain: bakeGrain(w, h, stable.seed), puff, tip };
+  return state.sprites;
+}
+
+/** Thirty-two bits, from a brick and a place on it, as a fraction in [0, 1]. */
+function jag(brick, side, k) {
+  return (brickHash(side * 131 + k + 17, brick.row, brick.col) & 1023) / 1023;
+}
+
+/** Is this point inside a gone brick other than `self`, grown by the joint? */
+function inOtherGone(hole, self, x, y, w, h, gap) {
+  for (const b of hole.gone) {
+    if (b === self) continue;
+    if (x > b.x - gap && x < b.x + w + gap && y > b.y - gap && y < b.y + h + gap) return true;
+  }
+  return false;
+}
+
+/**
+ * The outline of a hole, into the current path.
+ *
+ * The gone bricks grown by their joint — which is what merges five removed
+ * bricks into one hole rather than five letterboxes — and then, along the
+ * edges that face wall rather than more hole, the odd shard out of a
+ * neighbouring brick. Bricks do not come out of a wall cleanly at the joint:
+ * they take corners of their neighbours with them, and a hole whose edge is a
+ * perfect staircase reads as a rectangle somebody drew, not as damage.
+ *
+ * Bites are turned rectangles, each a subpath of its own: angular, because
+ * broken brick is, and sparse, because a hole whose whole edge is nibbled
+ * reads as a cloud. All of it is a pure function of the bricks, so the same
+ * outline drawn again under a translation is the back of the same hole (see
+ * `backOf`). `rects` leaves the bricks out, for the one pass that fills them
+ * one at a time instead.
+ */
+function holeOutline(g, hole, w, h, gap, bite, rects = true) {
+  if (rects) {
+    for (const brick of hole.gone) {
+      g.rect(brick.x - gap, brick.y - gap, w + gap * 2, h + gap * 2);
+    }
+  }
+  if (bite <= 0) return;
+  for (const brick of hole.gone) {
+    const x0 = brick.x - gap;
+    const y0 = brick.y - gap;
+    const x1 = brick.x + w + gap;
+    const y1 = brick.y + h + gap;
+    const across = Math.max(1, Math.round((x1 - x0) / (bite * 3)));
+    const down = Math.max(1, Math.round((y1 - y0) / (bite * 3)));
+    for (let side = 0; side < 4; side++) {
+      const n = side & 1 ? down : across;
+      for (let k = 0; k < n; k++) {
+        // Not every stretch of edge loses a piece: about half do.
+        if (jag(brick, side + 8, k) < 0.48) continue;
+        const u = (k + 0.2 + 0.6 * jag(brick, side + 4, k)) / n;
+        let px;
+        let py;
+        let nx = 0;
+        let ny = 0;
+        if (side === 0) { px = x0 + (x1 - x0) * u; py = y0; ny = -1; }
+        else if (side === 1) { px = x1; py = y0 + (y1 - y0) * u; nx = 1; }
+        else if (side === 2) { px = x0 + (x1 - x0) * u; py = y1; ny = 1; }
+        else { px = x0; py = y0 + (y1 - y0) * u; nx = -1; }
+        if (inOtherGone(hole, brick, px + nx * 2, py + ny * 2, w, h, gap)) continue;
+        // A shard: a rectangle turned off the line of the edge, so what is
+        // left of the neighbour has a corner knocked off rather than a bite.
+        const long = bite * (0.5 + 0.7 * jag(brick, side, k));
+        const deep = bite * (0.35 + 0.5 * jag(brick, side + 12, k));
+        const turn = Math.atan2(ny, nx) + Math.PI / 2 + (jag(brick, side + 16, k) - 0.5) * 1.2;
+        g.save();
+        g.translate(px, py);
+        g.rotate(turn);
+        g.rect(-long, -deep, long * 2, deep * 2);
+        g.restore();
+      }
+    }
+  }
+}
+
+/** How far a hole reaches from its centre: to the far corner of its furthest brick. */
+function holeReach(hole, w, h, gap) {
+  let reach = Math.max(w, h) * 0.5;
+  for (const b of hole.gone) {
+    const dx = Math.max(Math.abs(b.x - gap - hole.cx), Math.abs(b.x + w + gap - hole.cx));
+    const dy = Math.max(Math.abs(b.y - gap - hole.cy), Math.abs(b.y + h + gap - hole.cy));
+    reach = Math.max(reach, Math.hypot(dx, dy));
+  }
+  return reach;
 }
 
 /**
@@ -446,7 +974,7 @@ const breach = {
     { key: 'seed', type: 'range', label: 'Seed', default: 1, min: 1, max: 99, step: 1 },
   ],
   init() {
-    return { key: '', holes: [], falling: [], motes: [], since: 0 };
+    return { key: '', holes: [], falling: [], motes: [], since: 0, primed: false };
   },
   /**
    * The wall coming apart, as a function of the step number and nothing else.
@@ -463,7 +991,7 @@ const breach = {
    * `age`, with a constant `dt`, and seeds `rng` from the step index. Nothing in
    * here may look at the frame rate, and there is no canvas to draw on.
    */
-  step({ p, shape, t, dt, rng, state, shapes, stable, share }) {
+  step({ p, shape, t, dt, rng, state, shapes, stable, share, i = 0 }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2) return;
 
@@ -481,21 +1009,50 @@ const breach = {
 
     /* --- open a new hole --- */
 
-    state.since += step;
     const interval = p.rate > 0 ? 60 / p.rate : Infinity;
+    /**
+     * The first one comes early.
+     *
+     * Waiting a whole interval for it meant five a minute opened nothing for
+     * the first twelve seconds and had nothing out of the wall for fifteen —
+     * long enough for somebody who has just added the layer to decide it is
+     * not working, and the whole of the first still anybody takes. So the
+     * clock starts part-way round: a third of the interval for the first wall,
+     * and a different fraction for each wall after it, stepped by the golden
+     * ratio, so a layer on two walls does not open both at the same instant.
+     */
+    if (!state.primed) {
+      state.primed = true;
+      const wait = 0.3 + 0.7 * (((i || 0) * 0.618034) % 1);
+      state.since = interval * (1 - wait);
+    }
+    state.since += step;
     if (state.since > interval && state.holes.length < maxHoles && state.taken.size < grid.length) {
       state.since = 0;
       // Somewhere that is not already open, and not touching an existing hole —
       // two holes side by side read as one big rectangle rather than as two
-      // things pushing through.
+      // things pushing through. And of the first few such places, the one with
+      // the most bare wall round it: a hole squeezed between a sill and the
+      // ground can only put its arms out flat along the gap, which reads as
+      // something lying on the wall rather than reaching out of it. Best of a
+      // few rather than the roomiest anywhere, so the holes still turn up all
+      // over the wall and not always in the same open patch.
       let seed = null;
-      for (let attempt = 0; attempt < 24 && !seed; attempt++) {
+      let room = -1;
+      let found = 0;
+      for (let attempt = 0; attempt < 24 && found < 4; attempt++) {
         const candidate = grid[Math.floor(rng() * grid.length)];
         if (state.taken.has(candidate)) continue;
         const clear = state.holes.every(
           (hole) => Math.hypot(hole.cx - candidate.cx, hole.cy - candidate.cy) > Math.max(w, h) * 2.2
         );
-        if (clear) seed = candidate;
+        if (!clear) continue;
+        found++;
+        const r = roomAt(shape, obstacles, candidate.cx, candidate.cy, Math.max(w, h) * 3);
+        if (r > room) {
+          room = r;
+          seed = candidate;
+        }
       }
 
       if (seed) {
@@ -520,9 +1077,17 @@ const breach = {
           chosen.push(best);
         }
 
+        // What each of them looks like, worked out once, here, so the brick
+        // that rattles and falls is drawn in the colour it had in the wall.
+        const look = wallLookFor(stable, share, shape);
+        const tones = new Map(chosen.map((b) => [b, brickLook(look, b.row, b.col).tone]));
+
         state.holes.push({
           /** Still in the wall, rattling. Bricks move from here to `gone`. */
           pending: chosen,
+          tones,
+          /** The colour of the broken brick round the edge. */
+          edge: tones.get(seed),
           /** Out. These are the rectangles that read as hole. */
           gone: [],
           cx: seed.cx,
@@ -551,14 +1116,39 @@ const breach = {
         const brick = hole.pending.shift();
         hole.gone.push(brick);
         hole.nextDrop = t + 0.16 + rng() * 0.16;
+        const tone = hole.tones?.get(brick) || p.brick;
+        // Positions are centres from here on, so a brick and a fragment of one
+        // are the same kind of thing to the fall and to the paint.
         state.falling.push({
-          x: brick.x, y: brick.y,
+          x: brick.cx, y: brick.cy, fw: w, fh: h,
           vx: (rng() - 0.5) * 90,
           vy: 20 + rng() * 60,
           spin: (rng() - 0.5) * 5,
           angle: 0,
-          tint: rng(),
+          tone,
         });
+        /**
+         * And the bits that come with it.
+         *
+         * A brick shoved out of a wall from behind does not leave alone — it
+         * takes the corners off itself and its neighbours, and a handful of
+         * small, fast, spinning pieces falling with it is most of the
+         * difference between a brick being knocked out and one being deleted.
+         */
+        const bits = 2 + Math.floor(rng() * 3);
+        for (let k = 0; k < bits; k++) {
+          state.falling.push({
+            x: brick.cx + (rng() - 0.5) * w * 0.9,
+            y: brick.cy + (rng() - 0.5) * h * 0.7,
+            fw: w * (0.1 + rng() * 0.16),
+            fh: h * (0.22 + rng() * 0.32),
+            vx: (rng() - 0.5) * 200,
+            vy: -30 + rng() * 110,
+            spin: (rng() - 0.5) * 16,
+            angle: rng() * TAU,
+            tone: mixHex(tone, '#000000', 0.15 * rng()),
+          });
+        }
         if (p.dust > 0) {
           const puffs = 2 + Math.round(rng() * 4 * p.dust);
           for (let d = 0; d < puffs; d++) {
@@ -744,8 +1334,18 @@ const breach = {
    * Called once per rendered frame with the frame's own time, so a tab drawing
    * at 120fps still gets 120 pictures of a simulation that ran at 60 — and two
    * tabs drawing at different rates get the same picture of the same wall.
+   *
+   * Clipped to the wall, and — around anything that comes near a window —
+   * to the wall minus its openings as well, so that what is drawn there cannot
+   * land on the glass whatever the geometry upstream decided: a cast shadow or
+   * the light on a tip reaching a pixel past a fitted outline is still off the
+   * window. Locally, because the wall alone is a rectangle the canvas clips to
+   * for nothing, and the wall with its windows cut out is a mask the size of
+   * the wall, every frame, which costs more than the arms do. What falls is
+   * never guarded: a brick dropping past a window is in front of it, and
+   * clipping it to the brickwork would make it fall behind the glass.
    */
-  draw({ g, p, shape, t, rng, state, shapes, stable, share }) {
+  draw({ g, p, shape, t, rng, state, shapes, stable, share, world }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2) return;
     const layout = layoutFor({ stable, shape, shapes, share, state });
@@ -753,121 +1353,328 @@ const breach = {
     const { w, h, gap } = layout;
     const armCount = Math.round(clamp(p.arms, 0, 8));
     const obstacles = collectObstacles(shapes, p.obstacles, shape.id);
-
+    const sprites = spritesFor(state, stable, w, h);
+    const bite = Math.max(1.5, Math.min(w, h) * 0.3);
+    const glowing = clamp(p.glowAmount, 0, 3);
+    // The eye every hole is seen from (see `backOf`): the frame's, so the
+    // holes on two walls agree about where the street is, or this wall's
+    // where there is no frame to go by.
+    const span = world?.h > 0 ? world.h : bbox.h;
+    const eyeX = world?.w > 0 ? world.w * 0.5 : bbox.x + bbox.w * 0.5;
+    const eyeY = world?.h > 0 ? world.h * 0.65 : bbox.y + bbox.h * 0.7;
+    // Multiplied into rather than assigned over, so the layer's opacity and the
+    // master fader still reach a layer drawing straight into the frame.
+    const alpha = g.globalAlpha;
 
     g.save();
     g.clip(shape.path);
 
-    // The voids, then whatever is inside them, then the tentacles over the top
+    // The openings, then what is coming loose, then the tentacles over the top
     // — the only order in which an arm reads as coming *out* of the wall.
     for (const hole of state.holes) {
       if (!hole.gone.length) continue;
-      const solidity = 1 - hole.closing;
-      // Grown by the mortar joint, so neighbouring gaps merge. Without this
-      // the mortar between two removed bricks survives as a line across the
-      // opening, and a five-brick breach reads as five letterboxes rather than
-      // as one hole with something behind it.
-      g.globalAlpha = solidity;
-      g.fillStyle = p.void;
-      for (const brick of hole.gone) {
-        g.fillRect(brick.x - gap, brick.y - gap, w + gap * 2, h + gap * 2);
+      // Out to the far corner of the largest shard.
+      const pad = gap + bite * 1.8;
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const b of hole.gone) {
+        x0 = Math.min(x0, b.x - pad);
+        y0 = Math.min(y0, b.y - pad);
+        x1 = Math.max(x1, b.x + w + pad);
+        y1 = Math.max(y1, b.y + h + pad);
       }
-      g.globalAlpha = 1;
-
+      const guarded = guardOpenings(g, obstacles, x0, y0, x1, y1);
+      drawOpening(g, p, hole, t, w, h, gap, bite, alpha, backOf(hole, eyeX, eyeY, span, h + gap), sprites.grain);
+      if (guarded) g.restore();
     }
 
-    // Bricks that are still in the wall but on their way out get a shudder and
-    // darken as the mortar goes. It is a few pixels of jitter and it is most of
-    // what sells the effect: something that falls without warning reads as a
-    // glitch, and something that rattles first reads as a thing coming through.
+    /**
+     * Bricks still in the wall but on their way out.
+     *
+     * The joint opens up round each one as the mortar goes, and the brick
+     * itself — in the colour it has in the wall, drawn loose over its own place
+     * — rattles in it. A few pixels of jitter is most of what sells the effect:
+     * something that falls without warning reads as a glitch, and something
+     * that rattles first reads as a thing coming through.
+     */
     for (const hole of state.holes) {
       if (!hole.pending.length) continue;
       const ready = clamp((t - hole.bornAt) / SHUDDER, 0, 1);
-      const shake = ready * Math.max(1.5, Math.min(w, h) * 0.06);
-      g.fillStyle = rgba('#000000', 0.2 + 0.35 * ready);
+      const shake = ready * Math.max(1.5, Math.min(w, h) * 0.07);
       for (const brick of hole.pending) {
-        g.fillRect(
-          brick.x + (rng() - 0.5) * shake * 2,
-          brick.y + (rng() - 0.5) * shake * 2,
-          w,
-          h
-        );
+        g.fillStyle = rgba(p.void, 0.3 + 0.6 * ready);
+        g.fillRect(brick.x - gap * 0.6, brick.y - gap * 0.6, w + gap * 1.2, h + gap * 1.2);
+        g.save();
+        g.translate(brick.cx + (rng() - 0.5) * shake * 2, brick.cy + (rng() - 0.5) * shake * 2);
+        g.rotate((rng() - 0.5) * 0.06 * ready);
+        paintLooseBrick(g, w, h, hole.tones?.get(brick) || p.brick, sprites.grain);
+        g.restore();
       }
     }
 
     if (armCount > 0) {
       for (const hole of state.holes) {
         for (const arm of hole.arms) {
-          drawArm(g, p, hole, arm, t, w, h, 1 - hole.closing, shape, obstacles);
+          drawArm(g, p, hole, arm, t, w, h, 1 - hole.closing, shape, obstacles, sprites);
         }
       }
     }
 
     /**
-     * The mouth: darkness over the roots, then the light behind them.
+     * The mouth, over the roots of the arms.
      *
      * An arm is a ribbon, and a ribbon has to start somewhere — so its base was
-     * a flat cut end sitting in the middle of a lit opening, which reads as a
+     * a flat cut end sitting in the middle of the opening, which reads as a
      * length of something lying on the wall rather than as anything coming out
      * of it. No amount of work on the arm itself fixes that, because the fault
      * is that you can see where it begins.
      *
-     * So the opening is drawn twice. Once underneath, as the hole; and once
-     * over the top of the arms, as a shadow strongest at the middle and gone by
-     * the rim — which swallows the roots exactly where they are flattest and
-     * leaves the arm emerging from black. The glow then goes over that rather
-     * than under it, so the light from inside spills across the arms at the
-     * mouth and settles the whole thing into the wall.
+     * So the inside of the opening is drawn twice: once under the arms, as the
+     * dark and the light behind it, and once over them, as depth — darkness
+     * over the roots, and the light from inside laid over that, so they go
+     * down into a glow rather than ending in a cut, and the parts of them still
+     * in the wall are lit the colour of whatever is in there. Only in the back
+     * opening, so the lit thickness of the wall round it stays in front of the
+     * roots, and gone by its edge, so everything that has come out stays
+     * itself.
+     *
+     * In the light's own colour, and never whitened: whitened, the haze turns
+     * the whole opening grey on the wall, which reads as fog rather than as a
+     * hole with something lit at the back of it.
      */
     for (const hole of state.holes) {
       if (!hole.gone.length) continue;
       const solidity = 1 - hole.closing;
-      if (solidity <= 0.02) continue;
+      if (solidity <= 0.02 || p.throat <= 0) continue;
+      const reach = holeReach(hole, w, h, gap);
+      const pulse = openingPulse(t, hole);
+      const back = backOf(hole, eyeX, eyeY, span, h + gap);
+      const bx = back.x;
+      const by = back.y;
+      const cx = hole.cx + bx;
+      const cy = hole.cy + by;
 
       g.save();
       g.beginPath();
-      for (const brick of hole.gone) g.rect(brick.x - gap, brick.y - gap, w + gap * 2, h + gap * 2);
+      holeOutline(g, hole, w, h, gap, bite);
+      g.clip();
+      g.translate(bx, by);
+      g.beginPath();
+      holeOutline(g, hole, w, h, gap, bite);
+      g.translate(-bx, -by);
       g.clip();
 
-      if (p.throat > 0) {
-        const reach = Math.max(w, h) * 1.35;
-        const shade = g.createRadialGradient(hole.cx, hole.cy, 0, hole.cx, hole.cy, reach);
-        shade.addColorStop(0, rgba(p.void, 0.97 * p.throat * solidity));
-        shade.addColorStop(0.5, rgba(p.void, 0.8 * p.throat * solidity));
+      // Just the roots: they come out of the middle and are cut off within a
+      // brick or so of it, and a shade any wider puts out the light behind.
+      const r = Math.min(reach * 0.7, Math.max(w, h) * 1.15);
+      const dark = p.throat * (1 - 0.35 * Math.min(1, glowing)) * solidity;
+      if (dark > 0.01) {
+        const shade = g.createRadialGradient(cx, cy, 0, cx, cy, r);
+        shade.addColorStop(0, rgba(p.void, 0.95 * dark));
+        shade.addColorStop(0.5, rgba(p.void, 0.65 * dark));
         shade.addColorStop(1, rgba(p.void, 0));
         g.fillStyle = shade;
-        g.fillRect(hole.cx - reach, hole.cy - reach, reach * 2, reach * 2);
+        g.fillRect(cx - r, cy - r, r * 2, r * 2);
       }
-
-      if (p.glowAmount > 0) {
-        const pulse = 0.55 + 0.45 * Math.sin(t * 1.7 + hole.cx * 0.01);
+      if (glowing > 0) {
         g.globalCompositeOperation = 'lighter';
-        glow(g, hole.cx, hole.cy, Math.max(w, h) * 1.6, p.innerGlow, 0.5 * p.glowAmount * pulse * solidity);
+        const haze = clamp(0.34 * glowing * pulse * solidity * p.throat, 0, 1);
+        glow(g, cx, cy + h * 0.3, reach * 0.95, p.innerGlow, haze);
       }
       g.restore();
     }
 
+    // No glow is spread over the bricks round the hole: the light inside is
+    // bright enough for the bloom downstream to spill it onto them, which is
+    // where spill on a wall comes from anyway — and a gradient two holes wide
+    // would be the dearest thing this layer drew.
+
+    /**
+     * What is falling: whole bricks, and the pieces that came with them.
+     *
+     * Each with a little of its own path behind it — two fainter copies a
+     * quarter and a half of a frame back along its velocity — because a brick
+     * a second into its fall is moving at the height of a course every frame,
+     * and a perfectly sharp one reads as a sticker sliding down the wall rather
+     * than as something dropping.
+     */
     for (const b of state.falling) {
-      g.save();
-      g.translate(b.x + w / 2, b.y + h / 2);
-      g.rotate(b.angle);
-      drawBrick(g, -w / 2, -h / 2, w, h, mixHex(p.brick, '#000000', b.tint * 0.35), 0.8);
-      g.restore();
+      const smear = Math.hypot(b.vx, b.vy) / 60;
+      const ghosts = smear > b.fh * 0.4 ? 2 : 0;
+      for (let k = ghosts; k >= 0; k--) {
+        const back = k / 240;
+        g.globalAlpha = alpha * (k === 0 ? 1 : 0.34 / k);
+        g.save();
+        g.translate(b.x - b.vx * back, b.y - b.vy * back);
+        g.rotate(b.angle - b.spin * back);
+        paintLooseBrick(g, b.fw, b.fh, b.tone || p.brick, sprites.grain);
+        g.restore();
+      }
     }
 
-    if (p.dust > 0 && state.motes.length) {
+    if (p.dust > 0) {
       for (const m of state.motes) {
         const fade = 1 - m.age / m.life;
-        g.fillStyle = rgba('#b9a893', 0.4 * fade * p.dust);
-        g.beginPath();
-        g.arc(m.x, m.y, m.r * (1 + m.age), 0, TAU);
-        g.fill();
+        const size = m.r * (1 + m.age * 1.4) * 2.6;
+        g.globalAlpha = alpha * clamp(0.55 * fade * p.dust, 0, 1);
+        g.drawImage(sprites.puff, m.x - size / 2, m.y - size / 2, size, size);
       }
     }
-
+    g.globalAlpha = alpha;
     g.restore();
   },
 };
+
+/**
+ * A surface of colour `hex` under a light of colour `light`: the product of the
+ * two, scaled by `gain`, plus a little of the surface's own colour for the
+ * light that is not coming from that source.
+ */
+function litBy(hex, light, gain, ambient) {
+  const s = hexToRgb(hex);
+  const l = hexToRgb(light);
+  const ch = (a, b) => Math.round(clamp(a * (b / 255) * gain + a * ambient, 0, 255)).toString(16).padStart(2, '0');
+  return `#${ch(s.r, l.r)}${ch(s.g, l.g)}${ch(s.b, l.b)}`;
+}
+
+/**
+ * Breathing rather than blinking: two slow sines a third of the way apart, so
+ * the light in a hole swells and settles without ever going out.
+ */
+function openingPulse(t, hole) {
+  const s = Math.sin(t * 1.7 + hole.cx * 0.01) * 0.6 + Math.sin(t * 0.63 + hole.cy * 0.013) * 0.4;
+  return 0.72 + 0.28 * s;
+}
+
+/**
+ * Where the back of a hole is, seen from the street, as an offset from its
+ * front: into `BACK`, which every caller reads at once and never keeps.
+ *
+ * A wall has a thickness, and a hole through it is two openings — one in each
+ * face — that only line up for somebody looking straight down the middle. Seen
+ * from anywhere else the far one is shifted towards the eye, by the depth of
+ * the wall over the distance to it, and what shows between the two is the
+ * inside of the wall: the broken ends of the bricks round the hole. That band
+ * is what makes a dark patch read as a hole *through* something rather than a
+ * shape painted on it, and it is only ever on the side away from the eye — the
+ * underside of the top edge for an opening above head height, the far jamb for
+ * one off to the side — which is why it cannot be a rim drawn all the way round.
+ *
+ * The eye is across the road, opposite the middle of the frame, at head height
+ * — about the middle of the front door. The shift grows with distance from it,
+ * between half a course and one: less and the hole is flat, more and the inside
+ * of the wall is wider than the gap it frames and the hole reads as a box. Less
+ * of it sideways than up and down, because the side of a hole is the ragged
+ * ends of bricks, one course at a time, and a lot of it reads as teeth.
+ */
+const BACK = { x: 0, y: 0 };
+function backOf(hole, eyeX, eyeY, span, course) {
+  let dx = ((eyeX - hole.cx) / span) * course * 1.1;
+  let dy = ((eyeY - hole.cy) / span) * course * 2.2;
+  const m = Math.hypot(dx, dy);
+  const want = clamp(m, course * 0.5, course);
+  if (m < 1e-6) {
+    dx = 0;
+    dy = want;
+  } else {
+    dx *= want / m;
+    dy *= want / m;
+  }
+  BACK.x = dx;
+  BACK.y = dy;
+  return BACK;
+}
+
+/**
+ * One opening in the wall, under everything that comes out of it.
+ *
+ * Three passes:
+ *
+ *  1. The void, one rectangle per brick plus the shards knocked out of its
+ *     neighbours. These are where the wall actually is open, and the tests
+ *     that keep the holes off the windows and on the bricks read them.
+ *  2. The inside of the wall, within the opening and nowhere else: all of it
+ *     in brick lit from within, then the back of the hole — the same outline
+ *     moved by `back` — in the dark over that. What survives is the band of
+ *     broken brick on the far side from the eye, brightest nearest the light,
+ *     and it follows every shard because it is the shard, seen end on. Lit
+ *     means the brick's colour multiplied by the light's: a green light on red
+ *     brick makes a dull olive, where mixing the two makes a pale khaki that
+ *     reads as paint.
+ *  3. The light behind, in the back opening only: a hot, nearly white core low
+ *     in the hole, falling off as an inverse square to nothing at its edge. So
+ *     the hole is lit at the back, framed by the lit thickness of the wall and
+ *     in shadow at the sides — how a hole in a wall with a lamp behind it looks.
+ *
+ * Nothing is drawn round the outside. A band of lit brick on the face of the
+ * wall all the way round a hole reads as a line somebody painted round it, and
+ * light coming out of a hole cannot reach the face it is cut in anyway: what
+ * spills onto that is the bloom's to add, and it does.
+ */
+function drawOpening(g, p, hole, t, w, h, gap, bite, alpha, back, grain) {
+  const solidity = 1 - hole.closing;
+  if (solidity <= 0.005) return;
+  const reach = holeReach(hole, w, h, gap);
+  const glowing = clamp(p.glowAmount, 0, 3);
+  const lift = Math.min(1, glowing);
+  const edge = hole.edge || p.brick;
+  const gx = hole.cx + back.x;
+  const gy = hole.cy + back.y + h * 0.35;
+
+  g.globalAlpha = alpha * solidity;
+  g.fillStyle = p.void;
+  g.beginPath();
+  holeOutline(g, hole, w, h, gap, bite, false);
+  g.fill();
+  for (const brick of hole.gone) g.fillRect(brick.x - gap, brick.y - gap, w + gap * 2, h + gap * 2);
+
+  g.save();
+  g.beginPath();
+  holeOutline(g, hole, w, h, gap, bite);
+  g.clip();
+  // Out past the far edge, because the inside of the wall faces the light
+  // where the front of it does not: the underside of the top of a hole is
+  // lit almost as well as the bottom of it.
+  const lit = g.createRadialGradient(gx, gy, 0, gx, gy, reach * 1.5 + bite);
+  lit.addColorStop(0, litBy(edge, p.innerGlow, 1.1 * lift, 0.45));
+  lit.addColorStop(0.5, litBy(edge, p.innerGlow, 0.7 * lift, 0.45));
+  lit.addColorStop(1, litBy(edge, p.innerGlow, 0.25 * lift, 0.4));
+  g.fillStyle = lit;
+  g.fill();
+  // The same pits and sand as a loose brick, laid on the course, so the
+  // inside of the wall is broken brick rather than a flat lit shape.
+  if (grain) {
+    for (const brick of hole.gone) g.drawImage(grain, brick.x, brick.y, w, h);
+  }
+  g.translate(back.x, back.y);
+  g.fillStyle = p.void;
+  g.beginPath();
+  holeOutline(g, hole, w, h, gap, bite);
+  g.fill();
+
+  if (glowing > 0) {
+    // Clipped to the back opening, built in its own place, and then back to
+    // the wall's coordinates to draw the light where it is.
+    g.clip();
+    g.translate(-back.x, -back.y);
+    g.globalAlpha = alpha;
+    g.globalCompositeOperation = 'lighter';
+    const r = reach * 1.05;
+    const a = clamp(1.05 * glowing * openingPulse(t, hole) * solidity, 0, 1);
+    const light = g.createRadialGradient(gx, gy, 0, gx, gy, r);
+    light.addColorStop(0, rgba(mixHex(p.innerGlow, '#ffffff', 0.35), a));
+    light.addColorStop(0.12, rgba(p.innerGlow, a * 0.9));
+    light.addColorStop(0.35, rgba(p.innerGlow, a * 0.55));
+    light.addColorStop(0.7, rgba(p.innerGlow, a * 0.2));
+    light.addColorStop(1, rgba(p.innerGlow, 0));
+    g.fillStyle = light;
+    g.fillRect(gx - r, gy - r, r * 2, r * 2);
+  }
+  g.restore();
+  g.globalAlpha = alpha;
+}
 
 
 /**
@@ -1301,6 +2108,59 @@ function subdivide(joints, widths, k, container, obstacles) {
 }
 
 /**
+ * Is every point within `r` of (x, y) clear — not just the few `isClear` would
+ * be asked about?
+ *
+ * Deliberately pessimistic: a disc that so much as touches an opening's
+ * bounding box, or comes within `r` of the container's edge, is "not known to
+ * be clear" and goes on to the exact tests. What it buys is the common case.
+ * Fitting a width is up to thirty-six containment tests a vertex, three rounds
+ * of it, on several hundred vertices an arm — most of what an arm would cost —
+ * while nearly all of those vertices sit in open brickwork where one look at
+ * the disc answers every radius on both flanks at once.
+ */
+function discClear(container, obstacles, x, y, r) {
+  for (const o of obstacles) {
+    const b = o.bbox;
+    if (x + r > b.x && x - r < b.x + b.w && y + r > b.y && y - r < b.y + b.h) return false;
+  }
+  if (!container) return true;
+  const b = container.bbox;
+  if (x - r < b.x || x + r > b.x + b.w || y - r < b.y || y + r > b.y + b.h) return false;
+  const pts = container.points;
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const ax = pts[j].x;
+    const ay = pts[j].y;
+    const dx = pts[i].x - ax;
+    const dy = pts[i].y - ay;
+    const len2 = dx * dx + dy * dy;
+    const u = len2 > 0 ? clamp(((x - ax) * dx + (y - ay) * dy) / len2, 0, 1) : 0;
+    const ex = x - (ax + dx * u);
+    const ey = y - (ay + dy * u);
+    if (ex * ex + ey * ey < r * r) return false;
+    if ((pts[i].y > y) !== (ay > y) && x < (dx * (y - pts[i].y)) / (dy || 1e-12) + pts[i].x) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * The radius of the largest disc at (x, y) that `discClear` passes, to within a
+ * sixty-fourth of `limit`, and `limit` itself if that much fits.
+ */
+function roomAt(container, obstacles, x, y, limit) {
+  if (discClear(container, obstacles, x, y, limit)) return limit;
+  let lo = 0;
+  let hi = limit;
+  for (let k = 0; k < 6; k++) {
+    const mid = (lo + hi) / 2;
+    if (discClear(container, obstacles, x, y, mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
  * Pull in the half-width anywhere the ribbon's own outline would not fit.
  *
  * Uses exactly the normal `tentacleRibbon` uses, because the whole point is to
@@ -1359,7 +2219,10 @@ function fitWidths(container, obstacles, joints, widths) {
      * — so the wider ribbon passed and the narrower one drawn inside it landed
      * on the glass. Every radius that actually gets drawn is checked.
      */
-    for (let tries = 0; tries < 6; tries++) {
+    // Most of an arm is nowhere near a window or an edge, and for those
+    // vertices one test of the whole disc settles every radius at once.
+    if (discClear(container, obstacles, a.x, a.y, w)) fits = true;
+    for (let tries = 0; tries < 6 && !fits; tries++) {
       let clear = true;
       for (const f of [1, 0.85, 0.45]) {
         if (!isClear(container, obstacles, a.x + cx * w * f, a.y + cy * w * f)
@@ -1445,7 +2308,7 @@ function fitWidths(container, obstacles, joints, widths) {
       let w = widths[i];
       // Only a width of exactly nothing is accepted unchecked. A fifth of a pixel
       // sounds like nothing and is still a pixel wide once it is projected.
-      let fits = w <= 0;
+      let fits = w <= 0 || discClear(container, obstacles, a.x, a.y, w);
       for (let tries = 0; tries < 6 && !fits; tries++) {
         // Every radius that gets drawn, not just the outermost: the rim goes at
         // the full width and the body inside it at 85%, and a ray that crosses a
@@ -1481,7 +2344,7 @@ function fitWidths(container, obstacles, joints, widths) {
  * arm that has snarled itself over three metres of brickwork still breathes,
  * without any of it sliding across the wall.
  */
-function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacles = []) {
+function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacles = [], sprites = null) {
   const age = t - arm.bornAt;
   if (age < 0 || alive <= 0.02 || !arm.path || arm.path.length < 2) return;
 
@@ -1649,41 +2512,39 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
      * Thickness, from two things that are not the same.
      *
      * The **taper** is a property of the limb: how thick it is a given distance
-     * from the body. Held wide down most of it and falling away late, because
-     * `1 - u` gives a triangle and a triangle is a leaf. Measured against a
-     * little over half the arm's full reach rather than all of it — an arm that
-     * only ever grows to a third of its limit otherwise never thins at all, and
-     * comes out a uniform tube, which is what these were.
+     * from the body. It thins from the moment it leaves the wall, measured
+     * against most of the arm's full reach rather than all of it — an arm that
+     * only ever grows to part of its limit would otherwise barely thin, and
+     * comes out a uniform tube. The exponent is doing the real work, and it is
+     * easy to get wrong in both directions. Thinned early, the arm is a fat
+     * shoulder and a long whip. Held at full width for most of its reach and
+     * then pinched, it is fine at full stretch, but an arm only a little way
+     * out is all shoulder, and a short fat lozenge with a point on the end is
+     * a leaf — as is the triangle a straight `1 - u` gives. An exponent of 1.5
+     * thins it steadily, a little fuller than a straight line, so whatever
+     * length of it is out reads as the base of something longer.
      *
      * The **tip** is a property of the end: whatever is currently the leading
      * few centimetres is thin, and stops being thin once it is no longer the
      * end. That is not a contradiction of the above, it is the difference
      * between a limb and its growing point, and without it every arm finishes
-     * in a club the same width as its middle — which is the single thing that
-     * still read as wrong. Its length scales with the arm's own girth, so a fat
-     * tentacle gets a proportionally long point rather than a stubbed one.
-     */
-    /**
-     * Held full for most of the arm, then falling away.
-     *
-     * The exponent is doing the real work. At 1.9 against half the reach the
-     * width was down to a fifth by the halfway point — a fat shoulder and then
-     * a long thin whip, which is a bullwhip rather than a limb. A steeper curve
-     * over more of the length keeps it near full width to about two thirds and
-     * spends the taper where a taper belongs, near the end.
+     * in a club the same width as its middle. Its length scales with the arm's
+     * own girth, so a fat tentacle gets a proportionally long point rather
+     * than a stubbed one.
      */
     const taperScale = Math.max(1, fullReach * 0.85);
     const d = along[i];
-    const taper = 1 - 0.7 * Math.pow(Math.min(1, d / taperScale), 3.2);
+    const taper = 1 - 0.72 * Math.pow(Math.min(1, d / taperScale), 1.5);
     const fromTip = along[n - 1] - d;
     /**
      * Floored, not run to zero. A point that tapers all the way out spends its
      * last eighty pixels under one projector pixel — which is the four-pixel
      * floor, and it comes out as a hair that flickers rather than a tip. A
      * sixth of the base width is fine enough to read as a point and thick
-     * enough to survive being projected.
+     * enough to survive being projected. Drawn out over three widths rather
+     * than two, so it is a tapering tip and not a nib.
      */
-    const point = 0.16 + 0.84 * smoothstep(0, base * 2.4, fromTip);
+    const point = 0.16 + 0.84 * smoothstep(0, base * 3.2, fromTip);
     /**
      * A slow swell along the length, so it is a limb rather than a cone — but
      * gently. At a sixth either way over a 180-pixel period it was beading the
@@ -1745,6 +2606,63 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
   }
 
   /**
+   * The tip curls.
+   *
+   * The last few widths of the arm are turned progressively further towards
+   * the belly — a little at first and a lot at the very end, so it spirals
+   * rather than bending at a hinge — by an amount that breathes with the
+   * writhe. It is the one gesture that is unmistakably a tentacle, and a
+   * straight point, however well shaded, is half a leaf.
+   *
+   * Every curled joint is a new position, so each is checked like the sway
+   * is, and a curl that would put the tip anywhere it should not be is tried
+   * at half and a quarter before being given up for this frame. Still at no
+   * writhe, like everything else.
+   */
+  if (n > 8) {
+    const curlLen = base * 2.8;
+    let acc = 0;
+    let start = n - 1;
+    while (start > 1 && acc < curlLen) {
+      acc += Math.hypot(joints[start].x - joints[start - 1].x, joints[start].y - joints[start - 1].y);
+      start--;
+    }
+    const span = n - 1 - start;
+    if (CURL.length < n * 2) CURL = new Float64Array(n * 4);
+    if (span >= 2) {
+      const want = (arm.side ?? 1) * (1.5 + 0.9 * Math.sin(wave * 0.55 + arm.phase * 1.7)) * emerge;
+      for (const scale of [1, 0.5, 0.25]) {
+        const total = want * scale;
+        let px = joints[start].x;
+        let py = joints[start].y;
+        let ok = true;
+        for (let i = start + 1; i < n; i++) {
+          const turn = total * ((i - start) / span) ** 1.6;
+          const dx = joints[i].x - joints[i - 1].x;
+          const dy = joints[i].y - joints[i - 1].y;
+          const c = Math.cos(turn);
+          const s = Math.sin(turn);
+          px += dx * c - dy * s;
+          py += dx * s + dy * c;
+          if (container && !stepClear(container, obstacles, px, py, Math.atan2(dy, dx) + turn, widths[i])) {
+            ok = false;
+            break;
+          }
+          CURL[i * 2] = px;
+          CURL[i * 2 + 1] = py;
+        }
+        if (ok) {
+          for (let i = start + 1; i < n; i++) {
+            joints[i].x = CURL[i * 2];
+            joints[i].y = CURL[i * 2 + 1];
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  /**
    * Take the sharpest corners out of the swayed spine before anything is drawn.
    *
    * A ribbon of half-width `w` following a curve of radius `R` turns inside out
@@ -1769,8 +2687,11 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
       const my = (joints[i - 1].y + joints[i + 1].y) * 0.5;
       const sx = joints[i].x + (mx - joints[i].x) * 0.34;
       const sy = joints[i].y + (my - joints[i].y) * 0.34;
+      // In place: these are this frame's own points, never the crawl's, and
+      // the pass already reads the neighbour behind it after moving it.
       if (!container || stepClear(container, obstacles, sx, sy, 0, widths[i] * 0.7)) {
-        joints[i] = { x: sx, y: sy };
+        joints[i].x = sx;
+        joints[i].y = sy;
       }
     }
   }
@@ -1799,153 +2720,275 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
   if (container) fitWidths(container, obstacles, joints, widths);
 
   /**
-   * Base to tip as one gradient down the arm's own axis.
+   * The skin: one fitted outline, and everything inside it.
    *
-   * The cheap version of this — fill the whole arm dark, then fill the outer
-   * half light — puts a hard tonal step across the middle of every tentacle,
-   * and the eye reads that step as a joint in the limb.
+   * What makes a dark ribbon on a lit wall read as a tentacle rather than as a
+   * leaf is that it is *round* and that it has an underside — so the shading
+   * goes across the limb as much as along it, and the suckers are on one flank
+   * only. In order:
+   *
+   *  1. **Its shadow on the wall**, the same outline moved down and to the
+   *     right, away from the light the bricks are lit by. A projector cannot
+   *     darken the wall beside the arm by much, but by enough: it is the one
+   *     cue that says the arm is lying *on* the brickwork rather than printed
+   *     into it, and it costs one fill.
+   *  2. **The silhouette**, nearly black, at the full fitted width. A limb on a
+   *     lit wall needs an edge or it reads as a decal, and a stroked outline is
+   *     not an option — two pixels of line is nothing on a projector — so the
+   *     rest is drawn at fractions of the width inside it and the edge is what
+   *     is left. Nothing is drawn wider than `widths`: that is the contract
+   *     the fitting above exists to keep.
+   *  3. **The body** at 85%, darkest at the root and lightening towards the tip
+   *     as one gradient down the arm's axis — a hard tonal step anywhere along
+   *     it reads as a joint in the limb.
+   *  4. **The round of it** at 45%, lighter again and translucent: with the
+   *     edge band and the body, a cylinder in three soft steps.
+   *  5. **Markings and suckers.** Soft dark blotches along the top; pale,
+   *     cupped suckers down the belly, in a staggered double row where the arm
+   *     is thick and a single one as it thins.
+   *  6. **A wet sheen** down the back, broken into glints that come and go as
+   *     it writhes. Strokes, not another fitted ribbon: they ride inside the
+   *     body, and the clip keeps them off the glass.
+   *  7. **A light at the tip**, from a sprite in the colour of whatever is in
+   *     the wall — not a disc on the end, which read as a firefly on a stalk,
+   *     but light along the last stretch of the arm.
+   *
+   * 1, 2 and 3–4 are fills of the same nested outline at fractions the fitting
+   * has measured (1, 0.85, 0.45), so every one of them is clear of the glass on
+   * its own merits.
    */
   const tip0 = joints[n - 1];
-  const ramp = g.createLinearGradient(joints[0].x, joints[0].y, tip0.x, tip0.y);
-  ramp.addColorStop(0, mixHex(p.armColor, '#000000', 0.35));
+  const root = joints[0];
+  const fade = g.globalAlpha;
+
+  // Everything below stays within a few widths of the spine — the shadow is
+  // moved by half of one, the light on the tip reaches four — so that box is
+  // all that has to be kept off the glass, and only if there is glass in it.
+  let bx0 = Infinity;
+  let by0 = Infinity;
+  let bx1 = -Infinity;
+  let by1 = -Infinity;
+  for (let i = 0; i < n; i++) {
+    bx0 = Math.min(bx0, joints[i].x);
+    by0 = Math.min(by0, joints[i].y);
+    bx1 = Math.max(bx1, joints[i].x);
+    by1 = Math.max(by1, joints[i].y);
+  }
+  const pad = base * 4.2;
+  const guarded = container
+    ? guardOpenings(g, obstacles, bx0 - pad, by0 - pad, bx1 + pad, by1 + pad)
+    : false;
+
+  jointNormals(joints);
+  const nx = NX;
+  const ny = NY;
+
+  const drop = base * 0.42 * emerge;
+  if (drop > 0.5) {
+    g.save();
+    g.translate(drop * 0.5, drop * 0.86);
+    g.fillStyle = 'rgba(0,0,0,0.34)';
+    tentacleRibbon(g, joints, widths, 1, nx, ny);
+    g.restore();
+  }
+
+  g.fillStyle = mixHex(p.armColor, '#040604', 0.78);
+  tentacleRibbon(g, joints, widths, 1, nx, ny);
+
+  const ramp = g.createLinearGradient(root.x, root.y, tip0.x, tip0.y);
+  ramp.addColorStop(0, mixHex(p.armColor, '#000000', 0.5));
   ramp.addColorStop(0.45, p.armColor);
-  // All the way to the tip colour, not three quarters of the way. With a light
-  // tip that hardly showed; with the darker one asked for it left the arm a
-  // flat shape with no form at all — a silhouette on the brick rather than
-  // something with a lit side.
-  ramp.addColorStop(1, p.armTip);
-  /**
-   * A dark rim, then the body inside it.
-   *
-   * A limb on a lit brick wall needs an edge or it reads as a decal, and a
-   * stroked outline is not an option — two pixels of line is nothing on a
-   * projector. So the rim is the full fitted width and the body is drawn at
-   * 85% of it, which leaves a band of shadow all the way round.
-   *
-   * The obvious way round — body at full width, rim *wider* — puts the rim
-   * outside the width that was fitted to the space available, and the arm goes
-   * straight back to painting the windows. Nothing may be drawn wider than
-   * `widths`; that is the whole contract.
-   */
-  g.fillStyle = rgba('#000000', 0.5);
-  tentacleRibbon(g, joints, widths);
-
+  ramp.addColorStop(1, mixHex(p.armColor, p.armTip, 0.45));
   g.fillStyle = ramp;
-  tentacleRibbon(g, joints, widths.map((v) => v * 0.85));
+  tentacleRibbon(g, joints, widths, 0.85, nx, ny);
+
+  const round = g.createLinearGradient(root.x, root.y, tip0.x, tip0.y);
+  round.addColorStop(0, rgba(mixHex(p.armColor, p.armTip, 0.4), 0));
+  round.addColorStop(0.35, rgba(mixHex(p.armColor, p.armTip, 0.5), 0.22));
+  round.addColorStop(1, rgba(p.armTip, 0.32));
+  g.fillStyle = round;
+  tentacleRibbon(g, joints, widths, 0.45, nx, ny);
+
+  const side = arm.side ?? 1;
 
   /**
-   * A highlight down one side, as a narrower ribbon rather than a stroked line.
-   * At projector resolution a one-pixel specular line is not there at all; a
-   * shape a third the width of the arm survives being halved.
-   *
-   * Offset along the arm's own normal, and kept inside the width that has
-   * already been fitted to the space available — 0.32 out plus 0.3 of its own
-   * is 0.62 of the main ribbon, so it cannot reach anywhere the main ribbon has
-   * not already been cleared for. The previous version offset it along a fixed
-   * diagonal, which took no account of which way the arm was pointing and put
-   * it outside the fitted envelope wherever the arm ran at forty-five degrees.
+   * Markings down the back, spaced by distance from the root with a draw per
+   * spot, so they belong to the limb and stay put on it as it grows.
    */
-  const lit = joints.map((j, i) => {
-    const b = joints[Math.min(i + 1, n - 1)];
-    const prev = joints[Math.max(i - 1, 0)];
-    const nrm = Math.atan2(b.y - prev.y, b.x - prev.x) + Math.PI / 2;
-    const lx = j.x + Math.cos(nrm) * widths[i] * 0.28;
-    const ly = j.y + Math.sin(nrm) * widths[i] * 0.28;
-    // `fitWidths` bounds a ribbon's flanks against its own spine; it cannot
-    // rescue a spine that is itself somewhere it should not be. The main one is
-    // clear by construction — the crawl put it there — but this one is offset
-    // from it, so it gets checked.
-    // With room for its own width, not merely on the right side of the line:
-    // a spine cleared to the last pixel leaves its flanks over the edge.
-    if (container && !stepClear(container, obstacles, lx, ly, nrm - Math.PI / 2, widths[i] * 0.4)) {
-      return { x: j.x, y: j.y };
+  {
+    g.beginPath();
+    let travelled = 0;
+    let next = base * 0.8;
+    let k = 0;
+    for (let i = 1; i < n - 2; i++) {
+      travelled += Math.hypot(joints[i].x - joints[i - 1].x, joints[i].y - joints[i - 1].y);
+      if (travelled < next) continue;
+      const r = widths[i] * (0.16 + 0.16 * spot(k, arm.phase));
+      next += base * (0.9 + 1.1 * spot(k + 7, arm.phase));
+      k++;
+      if (r < 1) continue;
+      const a = Math.atan2(joints[i + 1].y - joints[i - 1].y, joints[i + 1].x - joints[i - 1].x) - (Math.PI / 2) * side;
+      const off = widths[i] * (0.2 * spot(k + 3, arm.phase) - 0.12);
+      const x = joints[i].x + Math.cos(a) * off;
+      const y = joints[i].y + Math.sin(a) * off;
+      g.moveTo(x + r, y);
+      g.arc(x, y, r, 0, TAU);
     }
-    return { x: lx, y: ly };
-  });
-  const litWidths = widths.map((v) => v * 0.26);
-  // The highlight is a second polygon with its own spine and its own bends, so
-  // it needs the same treatment as the first. Fitting the main ribbon and
-  // assuming the smaller one inside it must be fine is exactly the kind of
-  // reasoning that has been wrong twice already in this file.
-  if (container) fitWidths(container, obstacles, lit, litWidths);
-  g.fillStyle = rgba('#ffffff', 0.13);
-  tentacleRibbon(g, lit, litWidths);
+    g.fillStyle = rgba(mixHex(p.armColor, '#000000', 0.6), 0.24);
+    g.fill();
+  }
 
-  /**
-   * Suckers, down one side.
-   *
-   * The thing that finally stops this reading as foliage. Sized off the local
-   * width so they thin out with the arm, and spaced by index rather than by
-   * distance because the path is already evenly stepped. At the resolution this
-   * is aimed at, the smallest of them is still a couple of projector pixels
-   * across — which is why they are discs rather than the ring-and-centre a
-   * photograph would show.
-   */
   if (p.suckers > 0) {
     /**
-     * Spaced along the arm, not one per joint.
+     * Spaced along the arm by distance, not one per joint.
      *
-     * They used to be placed per joint, and the joint spacing is set by the
-     * crawl step and then tripled by the smoothing — so they came out as a
-     * solid overlapping chain, which is most of what read as blocky. Walking
-     * the arm by distance and dropping one every couple of diameters puts them
-     * where they belong regardless of how finely the spine happens to be
-     * divided, and they thin out towards the tip with the arm.
+     * Per joint they came out as a solid overlapping chain, because the joint
+     * spacing is the crawl step tripled by the smoothing. By distance, and a
+     * couple of diameters apart, they thin out towards the tip with the arm.
      *
-     * Ellipses rather than circles, squashed along the arm's own axis: a sucker
-     * is a disc on the side of a cylinder, so from any angle worth drawing it
-     * is foreshortened. That one detail does more than the size or the spacing.
+     * Each one a pale rim with a dark cup in it, foreshortened across the arm
+     * because it is a disc on the side of a cylinder — and gathered into one
+     * path per colour, so a long arm's thirty suckers are two fills rather than
+     * sixty with a save and a restore round each.
      */
-    const side = arm.side ?? 1;
+    let count = 0;
     let since = Infinity;
-    for (let i = 1; i < n - 1; i++) {
+    for (let i = 1; i < n - 1 && count < MAX_SUCKERS; i++) {
       const a = joints[i];
       const b = joints[i + 1];
-      const seg = Math.hypot(b.x - a.x, b.y - a.y);
-      since += seg;
-      const r = widths[i] * 0.24;
-      if (r < 1.2) continue;
-      if (since < r * 3.6) continue;
+      since += Math.hypot(b.x - a.x, b.y - a.y);
+      const r = widths[i] * 0.2;
+      if (r < 1.3 || since < r * 2.9) continue;
       since = 0;
-
       const along = Math.atan2(b.y - a.y, b.x - a.x);
       const nrm = along + (Math.PI / 2) * side;
-      // A little variation in size and offset, or a row of identical discs
-      // reads as machined rather than grown.
-      const vary = 0.82 + 0.36 * Math.abs(Math.sin(i * 1.7 + arm.phase));
-      // Lifted well clear of the arm's own colour. They were mixed a tenth of
-      // the way to white off the *tip* colour, so darkening the tip took the
-      // suckers down with it and they all but vanished — the one detail that
-      // says this is not a plant.
-      g.fillStyle = rgba(mixHex(p.armTip, '#ffffff', 0.3), 0.42 * p.suckers);
-      g.save();
-      g.translate(a.x + Math.cos(nrm) * widths[i] * 0.4, a.y + Math.sin(nrm) * widths[i] * 0.4);
-      g.rotate(along);
+      const vary = 0.75 + 0.5 * Math.abs(Math.sin(i * 1.7 + arm.phase));
+      // Two rows, staggered, while there is room for two — down the underside,
+      // towards the edge, where a sucker shows as a rim rather than a target.
+      const row = widths[i] > base * 0.55 ? (count & 1 ? 0.46 : 0.68) : 0.62;
+      SUCKERS[count * 4] = a.x + Math.cos(nrm) * widths[i] * row;
+      SUCKERS[count * 4 + 1] = a.y + Math.sin(nrm) * widths[i] * row;
+      SUCKERS[count * 4 + 2] = r * vary;
+      SUCKERS[count * 4 + 3] = along;
+      count++;
+    }
+    if (count) {
       g.beginPath();
-      g.ellipse(0, 0, r * vary * 0.62, r * vary, 0, 0, TAU);
+      for (let k = 0; k < count; k++) {
+        const x = SUCKERS[k * 4];
+        const y = SUCKERS[k * 4 + 1];
+        const r = SUCKERS[k * 4 + 2];
+        const a = SUCKERS[k * 4 + 3];
+        g.moveTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+        g.ellipse(x, y, r, r * 0.78, a, 0, TAU);
+      }
+      g.fillStyle = rgba(mixHex(p.armTip, '#dccbab', 0.35), 0.62 * clamp(p.suckers, 0, 1));
       g.fill();
-      // The rim, a shade darker, which is what stops them looking like paint.
-      g.fillStyle = rgba(mixHex(p.armColor, '#000000', 0.5), 0.45 * p.suckers);
       g.beginPath();
-      g.ellipse(0, r * vary * 0.22, r * vary * 0.34, r * vary * 0.42, 0, 0, TAU);
+      for (let k = 0; k < count; k++) {
+        const x = SUCKERS[k * 4];
+        const y = SUCKERS[k * 4 + 1];
+        const r = SUCKERS[k * 4 + 2] * 0.46;
+        const a = SUCKERS[k * 4 + 3];
+        g.moveTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+        g.ellipse(x, y, r, r * 0.74, a, 0, TAU);
+      }
+      g.fillStyle = rgba(mixHex(p.armColor, '#000000', 0.5), 0.6 * clamp(p.suckers, 0, 1));
       g.fill();
-      g.restore();
     }
   }
 
-  // A blunt, rounded end rather than a point with a light on it — that version
-  // read as a firefly sitting on a stalk.
-  // Inside the fitted width like everything else — this is a disc centred on
-  // the tip, and the tip is exactly where the fitting is tightest.
-  const tipR = Math.max(0.5, widths[n - 1] * 0.95);
-  g.fillStyle = mixHex(p.armColor, p.armTip, 0.75);
-  g.beginPath();
-  g.arc(tip0.x, tip0.y, tipR, 0, TAU);
-  g.fill();
+  /**
+   * The sheen, down the back of the arm: the flank without the suckers.
+   *
+   * It followed the light at first, offset by how squarely each flank faced
+   * it — right for a plain cylinder, and wrong for this one, because an arm
+   * reaching up towards the light put its highlight on the centreline, where
+   * it read as the midrib of a leaf. On the back it says which side is which,
+   * and it never crosses the arm.
+   */
+  {
+    const glints = 5;
+    const first = Math.floor(n * 0.06);
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    for (let s = 0; s < glints; s++) {
+      const i0 = first + Math.floor(((n - first) * s) / glints);
+      const i1 = first + Math.floor(((n - first) * (s + 0.55)) / glints);
+      if (i1 - i0 < 2) continue;
+      let sum = 0;
+      g.beginPath();
+      for (let i = i0; i <= i1; i++) {
+        const off = -side * widths[i] * 0.38;
+        if (i === i0) g.moveTo(joints[i].x + nx[i] * off, joints[i].y + ny[i] * off);
+        else g.lineTo(joints[i].x + nx[i] * off, joints[i].y + ny[i] * off);
+        sum += widths[i];
+      }
+      const glint = 0.5 + 0.5 * Math.sin(wave * 1.3 + s * 2.1 + arm.phase);
+      g.lineWidth = Math.max(1.2, (sum / (i1 - i0 + 1)) * 0.13);
+      g.strokeStyle = rgba('#f4ffe8', (0.1 + 0.34 * glint) * emerge);
+      g.stroke();
+    }
+  }
+
+  if (p.armGlow > 0 && sprites?.tip) {
+    g.save();
+    g.globalCompositeOperation = 'lighter';
+    for (let k = 0; k < 3; k++) {
+      const i = Math.max(0, n - 1 - Math.round(k * n * 0.05));
+      const at = joints[i];
+      const size = Math.max(8, widths[i] * (8 - k * 2));
+      g.globalAlpha = fade * clamp(0.34 * p.armGlow * emerge * (1 - k * 0.25), 0, 1);
+      g.drawImage(sprites.tip, at.x - size / 2, at.y - size / 2, size, size);
+    }
+    g.restore();
+  }
+  if (guarded) g.restore();
+}
+
+/**
+ * Keep what is drawn next off the glass — but only inside a box, and only if
+ * there is glass in the box. Returns whether it saved a clip for the caller to
+ * restore.
+ *
+ * The box is part of the clip, and that is the point of it: the mask a canvas
+ * builds for a clip covers the clip's extent, so the wall with every opening
+ * cut out of it costs a mask the size of the wall, while one arm's box with
+ * the one window it is lying beside costs a mask the size of the arm. Even-odd
+ * against the box makes each opening a hole in it.
+ */
+function guardOpenings(g, obstacles, x0, y0, x1, y1) {
+  let any = false;
+  for (const o of obstacles) {
+    const b = o.bbox;
+    if (b.x < x1 && b.x + b.w > x0 && b.y < y1 && b.y + b.h > y0) {
+      any = true;
+      break;
+    }
+  }
+  if (!any) return false;
   g.save();
-  g.globalCompositeOperation = 'lighter';
-  glow(g, tip0.x, tip0.y, tipR * 3, p.armTip, 0.22 * emerge);
-  g.restore();
+  g.beginPath();
+  g.rect(x0, y0, x1 - x0, y1 - y0);
+  for (const o of obstacles) {
+    const b = o.bbox;
+    if (b.x < x1 && b.x + b.w > x0 && b.y < y1 && b.y + b.h > y0) traceRing(g, o.points);
+  }
+  g.clip('evenodd');
+  return true;
+}
+
+/** Suckers an arm can carry, and a scratch table for them: x, y, radius, angle. */
+const MAX_SUCKERS = 160;
+const SUCKERS = new Float64Array(MAX_SUCKERS * 4);
+
+/** Trial positions for a curling tip, grown if an arm is ever longer than this. */
+let CURL = new Float64Array(2048);
+
+/** A draw in [0, 1] for the k-th marking on an arm, the same every frame. */
+function spot(k, phase) {
+  const s = Math.sin(k * 12.9898 + phase * 78.233) * 43758.5453;
+  return s - Math.floor(s);
 }
 
 export default [brickwork, breach];

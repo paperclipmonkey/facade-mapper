@@ -49,10 +49,10 @@
  * through the bay window.
  */
 
-import { rgba, clamp, lerp, TAU, mixHex, makeRng, smoothstep, pointInPolygon } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, mixHex, makeRng, smoothstep, pointInPolygon, hashString } from '../../core/math.js';
 import { waterAbsorb } from '../color.js';
 import { collectObstacles, deflect, surfaceNormal, nearestSurface, isClear, findFreeSpot } from '../obstacles.js';
-import { glow, curveThrough } from '../lib.js';
+import { glow, curveThrough, offscreen } from '../lib.js';
 
 /* ------------------------------------------------------------------ *
  * Depth
@@ -160,25 +160,65 @@ const G = 9.81;
  * metres, and the local slope, which is what a glint needs.
  */
 export function waveTrain(xm, t, amplitude, wavelength) {
-  // Harmonics of the primary, at the amplitude ratios a real wind sea carries:
-  // most of the energy in the swell, a third in the chop, a little in the ripple.
-  const parts = [
-    [1, 1],
-    [0.47, 2.7],
-    [0.21, 6.3],
-  ];
+  waveAt(xm, t, amplitude, wavelength);
+  return { height: WAVE.height, slope: WAVE.slope };
+}
+
+/**
+ * Harmonics of the primary, at the amplitude ratios a real wind sea carries:
+ * most of the energy in the swell, a third in the chop, a little in the ripple.
+ * As [amplitude, harmonic] pairs.
+ */
+const WAVE_PARTS = [
+  [1, 1],
+  [0.47, 2.7],
+  [0.21, 6.3],
+];
+
+/** Where `waveAt` leaves its answer, so a loop over a few thousand samples allocates nothing. */
+const WAVE = { height: 0, slope: 0, curvature: 0, outline: 0 };
+
+/**
+ * How much of each component survives into the *outline* of the surface seen
+ * edge-on, as opposed to its height at one point.
+ *
+ * A swell is long-crested — its crests run for tens of metres side by side —
+ * so seen along its length it lines up and the edge of the water rolls with
+ * it. Chop is shorter-crested and a ripple barely has a crest at all: seen
+ * edge-on across a metre of water, the ripples in front and behind are at
+ * every phase at once and average out. So the rim you can see is mostly swell,
+ * while the facets that make the glints are mostly ripple — and drawing the
+ * rim from the full height instead is what made it a nervous scribble.
+ */
+const OUTLINE_WEIGHTS = [1, 0.55, 0.12];
+
+/**
+ * `waveTrain`, written into `WAVE` instead of returned — the waterline asks it
+ * a couple of thousand times a frame — and with the curvature as well, which
+ * is what decides whether a stretch of surface focuses light or spreads it,
+ * and the edge-on outline described above.
+ */
+function waveAt(xm, t, amplitude, wavelength) {
   let height = 0;
   let slope = 0;
-  for (let i = 0; i < parts.length; i++) {
-    const [amp, harmonic] = parts[i];
-    const k = (TAU * harmonic) / Math.max(0.2, wavelength);
+  let curvature = 0;
+  let outline = 0;
+  for (let i = 0; i < WAVE_PARTS.length; i++) {
+    const amp = WAVE_PARTS[i][0];
+    const k = (TAU * WAVE_PARTS[i][1]) / Math.max(0.2, wavelength);
     const omega = Math.sqrt(G * k);
     // Offset in phase per component so the crests do not all start stacked.
     const phase = k * xm - omega * t + i * 1.7;
-    height += amplitude * amp * Math.sin(phase);
+    const s = Math.sin(phase);
+    height += amplitude * amp * s;
     slope += amplitude * amp * k * Math.cos(phase);
+    curvature -= amplitude * amp * k * k * s;
+    outline += amplitude * amp * OUTLINE_WEIGHTS[i] * s;
   }
-  return { height, slope };
+  WAVE.height = height;
+  WAVE.slope = slope;
+  WAVE.curvature = curvature;
+  WAVE.outline = outline;
 }
 
 /**
@@ -200,75 +240,60 @@ export function orbitalDecay(z, lambda) {
  * ------------------------------------------------------------------ */
 
 /**
- * How many depths a shaft's gradient is sampled at.
+ * Where along a shaft its colour is sampled, from the surface down.
  *
- * Absorption is exponential, and a two-stop gradient across ten metres of it is
- * visibly a straight line where the curve should be steepest. Six is enough
- * that the knee is smooth, and it is six `waterAbsorb` calls per shaft per
- * frame — about sixty for a full fan, which is nothing.
+ * Absorption is exponential, and a two-stop gradient across ten metres of it
+ * is visibly a straight line where the curve should be steepest. So eight
+ * stops, bunched near the top where two things change fast — the shaft
+ * fading *in* out of the bright band under the surface over its first few
+ * per cent, and the knee of the absorption just below — and spread out over
+ * the long tail. Eight `waterAbsorb` calls per shaft per frame, cached and
+ * quantised: about a hundred for a full fan, which is nothing.
  */
-const SHAFT_STOPS = 6;
+const SHAFT_STOPS = [0, 0.035, 0.1, 0.2, 0.34, 0.52, 0.74, 1];
 
 /**
- * The cross-section of a shaft, as [width, alpha] pairs, widest first.
+ * How a shaft is drawn.
  *
- * The slices are drawn additively one inside the next, so what the eye sees at
- * a given distance from the centre is the *sum* of every slice that reaches
- * it. Getting a Gaussian section out of that means each slice carries the
- * **increment** between its own reach and the previous one's — not the value
- * of the curve at its own width, which is what this used to do.
+ * Canvas has no gradient across the width of a shape, and a beam with a hard
+ * edge is a plank. The old answer was a dozen nested quads, each carrying an
+ * increment of a Gaussian — but the outermost still stood at a tenth of the
+ * peak, so every shaft had a visible edge at its full width and read as a slab
+ * of cellophane; and the stack painted the middle of every beam twelve times
+ * over, which made the shafts the dearest thing in the set.
  *
- * That distinction is the whole difference between a shaft and a streak. With
- * the raw values the innermost sliver carried full alpha and the stack summed
- * to three at the centre, so the beam clipped to flat white over about a sixth
- * of the width the slider asked for, with a faint halo outside it that read as
- * a separate thing. On a wall that is a hard bright stripe: cellophane, not
- * light. With increments the sum reaches one exactly at the centre and falls
- * off across the full width, which is what a shaft of sunlight in water
- * actually looks like.
+ * Now a shaft is cut lengthways into strips a few pixels wide that cover it
+ * once, each filled with the shaft's own gradient — the absorption down its
+ * length — at the brightness of the light across it at that strip. The light
+ * across it is a soft Gaussian body reaching out until it is under a
+ * hundredth of the peak, so the beam has no edge anywhere; a narrower core
+ * that wanders from side to side as the lens above it changes; and a few
+ * thin rays drifting slowly through it — light gathered by a moving lens and
+ * caught by whatever is suspended in the water, not shone through a slot.
  *
- * Twelve slices rather than five, because the steps are now what you would see
- * if you saw anything: each is under a tenth of the peak, which is below the
- * threshold at which a gradient bands. Twelve fills of a quad is nothing next
- * to the gradient each one is filled with, which is made once per shaft.
+ * A fill costs about the same whatever is in it, so the strips are gathered
+ * by brightness into eleven levels and each level is one path, a run of
+ * neighbours at the same level being one quad. The levels are spaced in
+ * proportion, closer together at the dim end, so the faint fringe of a shaft
+ * fades out in steps nobody can see rather than stopping at the first one.
  */
-const SHAFT_SLICES_MAX = 12;
-const SHAFT_SLICES_MIN = 4;
+const SHAFT_REACH = 1.4;
+const SHAFT_STRIPS_MIN = 8;
+const SHAFT_STRIPS_MAX = 34;
+const SHAFT_LEVELS = [0.015, 0.04, 0.075, 0.12, 0.18, 0.25, 0.34, 0.45, 0.58, 0.74, 0.92];
 
-/** Normalised so the centre is 1; 2.2 puts the knee inside the stated width. */
-const shaftReach = (scale) => Math.exp(-2.2 * scale * scale);
+/** Each strip's level for the shaft being drawn, or -1 for none. Scratch. */
+const shaftStripLevel = new Int8Array(SHAFT_STRIPS_MAX);
 
 /**
- * A section for every slice count, built once.
- *
- * How many slices a shaft needs is a question about how wide it is on the
- * wall, not about the effect: the steps are only visible if there are enough
- * pixels between them to see. A shaft forty pixels across looks identical at
- * four slices and at twelve, and a fan of forty narrow ones would pay for the
- * other eight on every one of them, every frame.
+ * The light across a shaft at `x` half-widths from its axis, 0..1 of the
+ * peak: the body, the core centred at `core`, and three rays at `ray0..2`.
  */
-const SHAFT_SECTIONS = (() => {
-  const table = [];
-  for (let slices = 0; slices <= SHAFT_SLICES_MAX; slices++) {
-    if (slices < SHAFT_SLICES_MIN) { table.push(null); continue; }
-    const out = [];
-    let previous = 0;
-    for (let i = 0; i < slices; i++) {
-      // Down to a sliver rather than to zero: the last slice is the core.
-      const scale = 1 - (i / slices) * 0.93;
-      const here = shaftReach(scale);
-      out.push([scale, here - previous]);
-      previous = here;
-    }
-    table.push(out);
-  }
-  return table;
-})();
-
-/** As many slices as the width can show, and no more. About one per ten pixels. */
-function shaftSection(widthPx) {
-  const wanted = Math.round(widthPx / 10);
-  return SHAFT_SECTIONS[clamp(wanted, SHAFT_SLICES_MIN, SHAFT_SLICES_MAX)];
+function shaftLight(x, core, ray0, ray1, ray2) {
+  let light = 0.62 * Math.exp(-2.2 * x * x) + 0.38 * Math.exp(-((x - core) ** 2) / 0.1);
+  light += 0.28 * (Math.exp(-((x - ray0) ** 2) / 0.006) + Math.exp(-((x - ray1) ** 2) / 0.004)
+    + Math.exp(-((x - ray2) ** 2) / 0.009));
+  return Math.min(1, light);
 }
 
 const godrays = {
@@ -277,7 +302,7 @@ const godrays = {
   category: 'underwater',
   scope: 'shape',
   description:
-    'Sunlight coming down through the surface in shafts, swaying with the swell and reddening out of existence as it goes deeper. The colour is absorption rather than a tint, so the depth reads even in a still.',
+    'Sunlight coming down through the surface in soft shafts, brightest just under it, swaying and shimmering with the swell and reddening out of existence as it goes deeper. The colour is absorption rather than a tint, so the depth reads even in a still.',
   params: [
     { key: 'color', type: 'color', label: 'Light at the surface', default: '#eaf7ff' },
     ...SURFACE_PARAMS,
@@ -319,8 +344,8 @@ const godrays = {
      */
     if (p.haze > 0) {
       const wash = g.createLinearGradient(0, top, 0, bottom);
-      for (let i = 0; i < SHAFT_STOPS; i++) {
-        const u = i / (SHAFT_STOPS - 1);
+      for (let i = 0; i < 6; i++) {
+        const u = i / 5;
         const y = lerp(top, bottom, u);
         const colour = waterAbsorb(p.color, depthAt(p, y, world), p.turbidity);
         wash.addColorStop(u, rgba(colour, p.haze * 0.16 * p.intensity * (1 - u * 0.45)));
@@ -347,14 +372,12 @@ const godrays = {
        * rather than as searchlights. Same phase, different consequence.
        */
       const phase = t * swell + jitter * TAU;
-      const angle = tiltRad + fan * spreadRad + Math.sin(phase) * p.sway * 0.16;
+      const angle = clamp(tiltRad + fan * spreadRad + Math.sin(phase) * p.sway * 0.16, -1.4, 1.4);
       const focus = 0.5 + 0.5 * Math.cos(phase * 1.37 + jitter * 3.1);
-
-      const length = (bottom - top) / Math.max(0.15, Math.cos(clamp(angle, -1.4, 1.4)));
-      const dx = Math.sin(angle);
-      const dy = Math.cos(angle);
-      const endX = originX + dx * length;
-      const endY = top + dy * length;
+      const slant = 1 / Math.max(0.15, Math.cos(angle));
+      // All the way down: every shaft ends at the foot of the shape.
+      const endX = originX + Math.tan(angle) * (bottom - top);
+      const endY = bottom;
 
       const w0 = bbox.w * p.width * (0.55 + 0.9 * (1 - focus)) * (0.7 + jitter * 0.6);
       // Beams widen going down: the surface is a rough lens, not a slit.
@@ -363,48 +386,81 @@ const godrays = {
       // The shimmer is the surface breaking up, and it is independent per shaft
       // — a fan that brightens as one reads as a lamp behind a fan blade.
       const shimmer = 1 - p.shimmer * 0.5 * (0.5 + 0.5 * noise.noise2(i * 3.7, t * 0.9));
-      /**
-       * Raised to match what the section now sums to.
-       *
-       * The old stack reached three times this at the centre and was clipped
-       * there by the compositor; the new one reaches one, so the same number
-       * would have made the shafts a third of the brightness they were. This
-       * is the figure that keeps a default shaft as bright as it looked, while
-       * spending that brightness across the width instead of piling it into a
-       * sliver.
-       */
-      const peak = 0.85 * p.intensity * shimmer * (0.6 + 0.4 * focus);
+      // A focused shaft is narrower and brighter at once: the lens again.
+      const peak = p.intensity * shimmer * (0.6 + 0.4 * focus);
+      if (peak <= 0.002) continue;
 
+      /**
+       * The colour down the shaft.
+       *
+       * The light as it arrives after the water it has actually crossed — and
+       * a slanting shaft has crossed more of it than its depth: to get `z`
+       * metres down at an angle θ off vertical, sunlight travels `z / cos θ`.
+       * So the shafts at the edge of a fan redden out sooner than the ones
+       * coming straight down, which is the only reason a fan of them is not
+       * one colour.
+       */
       const grad = g.createLinearGradient(originX, top, endX, endY);
-      for (let s = 0; s < SHAFT_STOPS; s++) {
-        const u = s / (SHAFT_STOPS - 1);
+      for (const u of SHAFT_STOPS) {
         const y = lerp(top, endY, u);
-        const colour = waterAbsorb(p.color, depthAt(p, y, world), p.turbidity);
-        // Fades out along its own length as well as reddening: a shaft ends
-        // because the light in it has been scattered away, not at a hard edge.
-        grad.addColorStop(u, rgba(colour, peak * (1 - u) ** 1.6));
+        const colour = waterAbsorb(p.color, depthAt(p, y, world) * slant, p.turbidity);
+        /**
+         * Out of the surface band, brightest a little way down, then fading
+         * along its own length as well as reddening: a shaft ends because the
+         * light in it has been scattered away, not at a hard edge — and it
+         * does not begin at one either. The first few per cent rise out of
+         * the bright mirror under the waterline instead of starting at a ruled
+         * line across the top of the picture.
+         */
+        const rise = smoothstep(0, 0.12, u);
+        grad.addColorStop(u, rgba(colour, rise * (1 - u) ** 1.2));
       }
-
-      /**
-       * Nested quads rather than one, because Canvas has no gradient across the
-       * width of a shape and a beam with a hard edge is a plank.
-       *
-       * Five rather than three, and this is worth the extra two fills: the
-       * widths are a geometric series and the alphas are the Gaussian
-       * `exp(−2u²)` evaluated at them, so the stack sums to a smooth section
-       * instead of to visible steps. At three the steps are plainly there on a
-       * wide shaft — the beam reads as three planks stacked, which is worse
-       * than one plank because it looks like a mistake rather than a style.
-       */
       g.fillStyle = grad;
-      for (const [scale, alpha] of shaftSection(w1)) {
-        g.globalAlpha = alpha;
+
+      // Where the core and the rays are this frame: drifting, slowly, each on
+      // its own noise, so the grain of the shaft moves as the surface does.
+      const wander = p.shimmer;
+      const core = 0.45 * wander * noise.noise2(i * 2.3 + 7.1, t * 0.35);
+      const ray0 = 0.9 * noise.noise2(i * 4.1 + 1.3, t * 0.12);
+      const ray1 = 0.9 * noise.noise2(i * 4.1 + 9.7, t * 0.15 + 3.1);
+      const ray2 = 0.9 * noise.noise2(i * 4.1 + 17.3, t * 0.1 + 6.4);
+
+      // The strips, and which level each lands on.
+      const strips = clamp(Math.round((w1 * SHAFT_REACH * 2) / 6), SHAFT_STRIPS_MIN, SHAFT_STRIPS_MAX);
+      for (let s = 0; s < strips; s++) {
+        const x = (((s + 0.5) / strips) * 2 - 1) * SHAFT_REACH;
+        const light = shaftLight(x, core, ray0, ray1, ray2) * Math.min(1, peak);
+        // The nearest level, in ratio: the steps are proportional at every brightness.
+        let level = -1;
+        for (let k = 0; k < SHAFT_LEVELS.length; k++) {
+          if (light >= SHAFT_LEVELS[k] * 0.82) level = k;
+        }
+        shaftStripLevel[s] = level;
+      }
+      for (let k = 0; k < SHAFT_LEVELS.length; k++) {
+        let any = false;
         g.beginPath();
-        g.moveTo(originX - w0 * scale * 0.5, top);
-        g.lineTo(originX + w0 * scale * 0.5, top);
-        g.lineTo(endX + w1 * scale * 0.5, endY);
-        g.lineTo(endX - w1 * scale * 0.5, endY);
-        g.closePath();
+        for (let s = 0; s < strips; s++) {
+          if (shaftStripLevel[s] !== k) continue;
+          // A run of neighbours at the same level is one quad.
+          let e = s;
+          while (e + 1 < strips && shaftStripLevel[e + 1] === k) e++;
+          const lo = ((s / strips) * 2 - 1) * SHAFT_REACH;
+          const hi = (((e + 1) / strips) * 2 - 1) * SHAFT_REACH;
+          // Offsets taken along the surface rather than square to the shaft,
+          // so a slanting shaft does not poke a corner up out of the water.
+          g.moveTo(originX + lo * w0 * 0.5, top);
+          g.lineTo(originX + hi * w0 * 0.5, top);
+          g.lineTo(endX + hi * w1 * 0.5, endY);
+          g.lineTo(endX + lo * w1 * 0.5, endY);
+          g.closePath();
+          any = true;
+          s = e;
+        }
+        if (!any) continue;
+        // Brightness above one is the gradient at full strength: it already
+        // carries the shaft's light, and a level is a fraction of it.
+        g.globalAlpha = Math.min(1, SHAFT_LEVELS[k] * Math.max(1, peak));
         g.fill();
       }
       g.globalAlpha = 1;
@@ -418,8 +474,201 @@ const godrays = {
  * The waterline
  * ------------------------------------------------------------------ */
 
-/** Horizontal samples across the surface. Enough for the shortest harmonic. */
-const SURFACE_SAMPLES = 96;
+/**
+ * The most samples the surface is ever traced with, and the scratch they live in.
+ *
+ * Module-level and reused: the surface is traced once for the rim and again
+ * for every row of the mirror band under it, which is a couple of thousand
+ * samples a frame, and a fresh set of arrays for each would be garbage on
+ * every one of them.
+ */
+const SURFACE_MAX = 480;
+const surfX = new Float64Array(SURFACE_MAX + 1);
+const surfY = new Float64Array(SURFACE_MAX + 1);
+const surfSlope = new Float64Array(SURFACE_MAX + 1);
+const surfBend = new Float64Array(SURFACE_MAX + 1);
+const rowY = new Float64Array(SURFACE_MAX + 1);
+const rowLight = new Float64Array(SURFACE_MAX + 1);
+
+/**
+ * The rows of the mirror band, nearest first.
+ *
+ * Seen from below, the underside of the surface is not a line but a sheet
+ * running away from you, and perspective packs it into a band under the rim:
+ * the nearest metre of it gets most of the height and the far side of the
+ * water is a hairline at the bottom. So the rows are spaced geometrically —
+ * each gap about two thirds of the one above — and each is a fresh look at
+ * the same wave train a little further back, which is why their highlights do
+ * not stack up vertically into stripes.
+ *
+ * `[offset, distance, perspective]` — how far down the band the row sits (0..1),
+ * how many metres behind the rim it is, and how much of the wave's height
+ * survives being seen that far off.
+ */
+const MIRROR_ROWS = (() => {
+  const rows = [];
+  const count = 5;
+  const ratio = 0.64;
+  const total = 1 - ratio ** count;
+  for (let k = 1; k <= count; k++) {
+    const offset = (1 - ratio ** k) / total;
+    rows.push([offset, 0.55 * 1.85 ** (k - 1), 1 - offset * 0.78]);
+  }
+  return rows;
+})();
+
+/**
+ * The rim, as three strokes from the outside in: `[width as a fraction of the
+ * frame height, alpha, how far towards white]`. A tight glow, a narrow
+ * shoulder and a hot core, and nothing wider — the bloom does the spreading.
+ */
+const RIM_PASSES = [[0.012, 0.12, 0], [0.0055, 0.3, 0.2], [0.0022, 0.75, 0.6]];
+
+/**
+ * The top of the water body, as stops `[crests, bands, brightness]`: where
+ * each sits, in wave heights above the mean surface and mirror-band depths
+ * below it, and how bright the water is there against the water below. The
+ * dip to a half just under the line is the mirror of total internal
+ * reflection; see the drawing.
+ */
+const BODY_BAND = [[-2, 0, 0.62], [0, 0.35, 0.5], [0, 0.85, 0.9], [0, 1.6, 1]];
+
+/**
+ * How squarely a facet of slope `s` throws light at the viewer, 0..1.
+ *
+ * A glint is a mirror pointing the right way: the surface has to be tilted at
+ * the one angle that sends the light into your eye, and a little either side
+ * of it is nothing. `aim` is that angle's slope. Narrow on purpose, because
+ * the narrowness is what makes the highlights sparkle — a broad lobe lights
+ * whole flanks at once and the surface reads as a glowing ribbon.
+ *
+ * Flat water has no facet at that angle anywhere, so it has no glints at all,
+ * which is correct and is also the thing the old window got wrong: it lit a
+ * level surface along its entire length.
+ */
+function facetLight(s, aim) {
+  const off = Math.abs(s - aim) * 6.5;
+  return off >= 1 ? 0 : 1 - off;
+}
+
+/**
+ * A soft fleck of light at the peak of every run of `light` along a row of the
+ * surface, as long as the run it stands for.
+ *
+ * One per run, not one per sample: a facet ten samples wide is one highlight,
+ * and ten overlapping ones are a bar. Flecks rather than strokes, because a
+ * stroke that switches on and off along its length has ends, and a band of
+ * ends reads as rows of dashes — rain, or morse — rather than as light on
+ * water. Alpha is `(light − offset) × gain` at the peak.
+ */
+function stampFlecks(g, sprite, ys, light, count, spacing, tall, peak, run, minWide, stretch, offset, gain) {
+  for (let i = 1; i < count - 1; i++) {
+    const here = light[i];
+    if (here < peak || here < light[i - 1] || here <= light[i + 1]) continue;
+    let back = 1;
+    while (back < 16 && i - back > 0 && light[i - back] > run) back++;
+    let ahead = 1;
+    while (ahead < 16 && i + ahead < count - 1 && light[i + ahead] > run) ahead++;
+    const wide = Math.max(minWide, (back + ahead) * spacing * stretch);
+    g.globalAlpha = clamp((here - offset) * gain, 0, 1);
+    g.drawImage(sprite, surfX[i] - wide / 2, ys[i] - tall / 2, wide, tall);
+  }
+  g.globalAlpha = 1;
+}
+
+/**
+ * A glint, baked once per colour.
+ *
+ * A hot white point with a soft skirt and a long thin streak either side of it
+ * — the streak is what sunlight broken up on moving water actually looks like,
+ * stretched along the surface because the facets are long in that direction
+ * and short across it. Stamped with `drawImage`, because there are dozens of
+ * them a frame and each would otherwise be a radial gradient built and thrown
+ * away.
+ */
+const GLINT_SIZE = 96;
+
+function bakeGlint(colour) {
+  const sprite = offscreen(GLINT_SIZE, GLINT_SIZE);
+  const g = sprite.getContext('2d');
+  const m = GLINT_SIZE / 2;
+  g.globalCompositeOperation = 'lighter';
+
+  const halo = g.createRadialGradient(m, m, 0, m, m, m * 0.5);
+  halo.addColorStop(0, rgba('#ffffff', 1));
+  halo.addColorStop(0.12, rgba('#ffffff', 0.7));
+  halo.addColorStop(0.32, rgba(colour, 0.24));
+  halo.addColorStop(0.62, rgba(colour, 0.06));
+  halo.addColorStop(1, rgba(colour, 0));
+  g.fillStyle = halo;
+  g.fillRect(0, 0, GLINT_SIZE, GLINT_SIZE);
+
+  // The streak, tapering out to both ends: a horizontal gradient through a
+  // thin bar, and a fainter, shorter one across it so the core reads as a
+  // point of light rather than a dash.
+  const streak = g.createLinearGradient(0, 0, GLINT_SIZE, 0);
+  streak.addColorStop(0, rgba(colour, 0));
+  streak.addColorStop(0.3, rgba(colour, 0.18));
+  streak.addColorStop(0.5, rgba('#ffffff', 0.9));
+  streak.addColorStop(0.7, rgba(colour, 0.18));
+  streak.addColorStop(1, rgba(colour, 0));
+  g.fillStyle = streak;
+  g.fillRect(0, m - 1.5, GLINT_SIZE, 3);
+  const spike = g.createLinearGradient(0, m * 0.75, 0, m * 1.25);
+  spike.addColorStop(0, rgba(colour, 0));
+  spike.addColorStop(0.5, rgba('#ffffff', 0.35));
+  spike.addColorStop(1, rgba(colour, 0));
+  g.fillStyle = spike;
+  g.fillRect(m - 1, m * 0.75, 2, m * 0.5);
+  return sprite;
+}
+
+/**
+ * A soft round patch of light, baked once per colour and stamped stretched.
+ *
+ * Drawn much wider than it is tall it is a fleck of light on the underside of
+ * the surface: a facet a metre long and a hand's width deep, foreshortened.
+ * A Gaussian rather than a disc, so a run of them merges into a shimmer
+ * instead of into a string of beads.
+ */
+const PATCH_SIZE = 48;
+
+function bakePatch(colour) {
+  const sprite = offscreen(PATCH_SIZE, PATCH_SIZE);
+  const g = sprite.getContext('2d');
+  const m = PATCH_SIZE / 2;
+  const soft = g.createRadialGradient(m, m, 0, m, m, m);
+  for (let i = 0; i <= 6; i++) {
+    const u = i / 6;
+    soft.addColorStop(u, rgba(i === 0 ? mixHex(colour, '#ffffff', 0.5) : colour, Math.exp(-u * u * 4.5) * (1 - u)));
+  }
+  g.fillStyle = soft;
+  g.fillRect(0, 0, PATCH_SIZE, PATCH_SIZE);
+  return sprite;
+}
+
+/**
+ * Every sprite one waterline needs, baked together the first time it draws
+ * and kept in its state: the glint, a fleck for each row of the mirror band
+ * in the colour of the water that row is seen through, and a fleck for the
+ * light above the line.
+ *
+ * In `state` rather than shared, as every cache in this library is, so a tab
+ * builds exactly the canvases another tab builds, in the same order; and all
+ * at once, so which of them exists never depends on which frames a tab
+ * happened to paint. Keyed on `stable`: a murkiness bound to an LFO must not
+ * bake a new set a frame.
+ */
+function waterlineSprites(state, stable) {
+  const key = `${stable.color}|${stable.turbidity}`;
+  if (state.spriteKey === key) return state.sprites;
+  const rows = MIRROR_ROWS.map(([, distance]) =>
+    bakePatch(waterAbsorb(stable.color, distance * 0.6, stable.turbidity)));
+  const surface = waterAbsorb(stable.color, 0, stable.turbidity);
+  state.sprites = { glint: bakeGlint(surface), rows, spill: bakePatch(surface) };
+  state.spriteKey = key;
+  return state.sprites;
+}
 
 const waterline = {
   id: 'waterline',
@@ -427,7 +676,7 @@ const waterline = {
   category: 'underwater',
   scope: 'shape',
   description:
-    'The surface of the water crossing the house, with everything under it absorbed towards blue and the light of the surface dancing on the wall above. Three wave components on the real dispersion relation, so it never repeats.',
+    'The surface of the water crossing the house, seen from underneath: a bright rim rolling on the swell, the mirror under it, glints running along the crests and the light it throws up the wall above. Three wave components on the real dispersion relation, so it never repeats.',
   params: [
     { key: 'color', type: 'color', label: 'Light on the water', default: '#dff2ff' },
     /**
@@ -451,12 +700,14 @@ const waterline = {
     { key: 'spill', type: 'range', label: 'Light above the line', default: 0.7, min: 0, max: 2, step: 0.01 },
     { key: 'level', type: 'range', label: 'Brightness', default: 1, min: 0, max: 3, step: 0.05 },
   ],
-  draw({ g, p, shape, t, world }) {
+  draw({ g, p, stable, shape, t, world, state }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2 || p.level <= 0) return;
 
     const metresPerPixel = (p.metres || 14) / Math.max(1, world.h);
     const pixelsPerMetre = 1 / Math.max(1e-6, metresPerPixel);
+    const level = p.level;
+    const sprites = waterlineSprites(state, stable);
 
     /**
      * The tide, which is the difference between a picture of water and water.
@@ -473,59 +724,169 @@ const waterline = {
     const water = fraction === p.surface ? p : { ...p, surface: fraction };
 
     const baseY = fraction * world.h + tide;
-    const amplitude = (p.wave / 100) * pixelsPerMetre;
+    const metresHigh = p.wave / 100;
+    const amplitude = metresHigh * pixelsPerMetre;
 
     const left = bbox.x;
     const right = bbox.x + bbox.w;
     const bottom = bbox.y + bbox.h;
 
-    // Sample the surface once and reuse it for the body, the meniscus, the
-    // glints and the spill — four passes that must agree about where the water
-    // is, and would drift apart if each computed its own.
-    const xs = new Array(SURFACE_SAMPLES + 1);
-    const ys = new Array(SURFACE_SAMPLES + 1);
-    const slopes = new Array(SURFACE_SAMPLES + 1);
-    for (let i = 0; i <= SURFACE_SAMPLES; i++) {
-      const u = i / SURFACE_SAMPLES;
-      const x = lerp(left, right, u);
-      const wave = waveTrain(x * metresPerPixel, t, p.wave / 100, p.wavelength);
-      xs[i] = x;
-      ys[i] = baseY + wave.height * pixelsPerMetre;
-      slopes[i] = wave.slope;
+    /**
+     * Sampled finely enough that the shortest ripple is a curve.
+     *
+     * The old trace took ninety-six samples whatever the wave was, which at
+     * the defaults put three and a half of them on each ripple — a ripple
+     * drawn as a triangle, and a surface drawn as a row of triangles is a
+     * mountain range, or lightning. Eight to a ripple, traced through with
+     * `curveThrough`, and the same numbers come out as a swell.
+     */
+    const ripplePx = (Math.max(0.2, p.wavelength) / WAVE_PARTS[WAVE_PARTS.length - 1][1]) * pixelsPerMetre;
+    const spacing = clamp(ripplePx / 8, 4, 14);
+    const count = Math.min(SURFACE_MAX, Math.max(24, Math.ceil(bbox.w / spacing))) + 1;
+    for (let i = 0; i < count; i++) {
+      const x = lerp(left, right, i / (count - 1));
+      waveAt(x * metresPerPixel, t, metresHigh, p.wavelength);
+      surfX[i] = x;
+      // The edge-on outline for where the rim goes, and the full slope and
+      // curvature for what it does with the light — see `OUTLINE_WEIGHTS`.
+      surfY[i] = baseY + WAVE.outline * pixelsPerMetre;
+      surfSlope[i] = WAVE.slope;
+      surfBend[i] = WAVE.curvature;
     }
+
+    /**
+     * How tall the mirror band under the rim is, in world pixels.
+     *
+     * The underside of the surface is a sheet seen nearly edge-on, so its
+     * height on the wall is a matter of how far below it you are standing —
+     * a few per cent of the picture — plus the swell itself, because a rough
+     * surface is a thicker sheet than a calm one.
+     */
+    const band = world.h * 0.035 + amplitude * 1.4;
+    const surfaceColour = waterAbsorb(p.color, 0, p.turbidity);
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
 
-    /* The body of the water, absorbed with depth. */
+    /**
+     * The body of the water, absorbed with depth, and dark just under the rim.
+     *
+     * Brightest a band's depth below the surface and falling away beneath:
+     * two separate things are happening and they pull the same way — the
+     * light has further to travel, and what is left of it has been scattered
+     * out of the line of sight. Both are exponential, and the `waterAbsorb`
+     * only accounts for the first, hence the falloff term. Without it the deep
+     * water is a saturated blue slab, which is what a gel looks like and not
+     * what water looks like.
+     *
+     * The dip right under the rim is total internal reflection. Seen from
+     * below at a grazing angle the underside of the surface is a perfect
+     * mirror, and what it mirrors is the water beneath — so the strip just
+     * under the line is not lit by the sky at all but holds a reflection of
+     * the deep. It is darker than the water a metre further down, and that
+     * darkness is what makes the rim above it read as a surface rather than as
+     * a line drawn across the wall.
+     */
     if (p.body > 0 && bottom > baseY - amplitude) {
       const gradTop = Math.max(bbox.y, baseY - amplitude * 2);
+      const span = Math.max(1, bottom - gradTop);
       const grad = g.createLinearGradient(0, gradTop, 0, bottom);
+      // Four stops through the band, where the shape of the curve is, and the
+      // rest spread over the long exponential tail below it.
+      const banded = BODY_BAND.length;
+      let last = -1;
       for (let i = 0; i < 8; i++) {
-        const u = i / 7;
-        const y = lerp(gradTop, bottom, u);
-        const colour = waterAbsorb(p.color, depthAt(water, y, world), p.turbidity);
-        /**
-         * Brightest immediately under the surface and falling away below.
-         *
-         * Two separate things are happening and they pull the same way: the
-         * light has further to travel, and what is left of it has been
-         * scattered out of the line of sight. Both are exponential, and the
-         * `waterAbsorb` above only accounts for the first — hence the second
-         * term. Without it the deep water is a saturated blue slab, which is
-         * what a gel looks like and not what water looks like.
-         */
-        const falloff = Math.exp(-u * 1.6);
-        grad.addColorStop(u, rgba(colour, p.body * 0.5 * p.level * falloff));
+        let y;
+        let lift;
+        if (i < banded) {
+          const [crest, depth, dip] = BODY_BAND[i];
+          y = baseY + crest * amplitude + depth * band;
+          lift = dip;
+        } else {
+          y = lerp(baseY + band * 1.6, bottom, (i - banded + 1) / (8 - banded));
+          lift = 1;
+        }
+        // Monotonic and inside the gradient, whatever the shape cuts off.
+        const offset = Math.max(last + 1e-4, clamp((y - gradTop) / span, 0, 1));
+        if (offset > 1) break;
+        last = offset;
+        const below = Math.max(0, gradTop + offset * span - baseY);
+        const falloff = Math.exp(-(below / span) * 1.6);
+        const colour = waterAbsorb(p.color, depthAt(water, gradTop + offset * span, world), p.turbidity);
+        grad.addColorStop(offset, rgba(colour, p.body * 0.5 * level * falloff * lift));
       }
       g.fillStyle = grad;
       g.beginPath();
       g.moveTo(left, bottom);
-      for (let i = 0; i <= SURFACE_SAMPLES; i++) g.lineTo(xs[i], ys[i]);
+      curveThrough(g, surfX, surfY, count);
       g.lineTo(right, bottom);
       g.closePath();
       g.fill();
+    }
+
+    /**
+     * The mirror band: the underside of the surface running away from you.
+     *
+     * First the sheen — the mirror itself, which is lit by the bright water
+     * just under the rim and fades out as the sheet it belongs to recedes.
+     * Flat water is still a mirror, just one with nothing sparkling in it.
+     *
+     * Then the rows. Each is the same wave train looked at a little further
+     * back, so its swell is flatter (perspective) and its phase has moved on
+     * (it is a different stretch of water), and each puts light only where a
+     * facet in it is tilted to send the light down to you: a soft fleck,
+     * stretched along the surface, at the peak of each run of facing water.
+     * Packed tighter and dimmer towards the bottom of the band, that is the
+     * shimmer on the ceiling of a swimming pool seen from the deep end.
+     *
+     * Flecks rather than the broken strokes this started as: a stroke that
+     * switches on and off along its length has ends, and a band of ends reads
+     * as rows of dashes — rain, or morse — rather than as light on water.
+     */
+    {
+      const sheen = g.createLinearGradient(0, baseY - amplitude, 0, baseY + band);
+      sheen.addColorStop(0, rgba(surfaceColour, clamp(0.16 * level, 0, 1)));
+      sheen.addColorStop(0.5, rgba(surfaceColour, clamp(0.07 * level, 0, 1)));
+      sheen.addColorStop(1, rgba(surfaceColour, 0));
+      g.fillStyle = sheen;
+      g.beginPath();
+      curveThrough(g, surfX, surfY, count, { move: true });
+      g.lineTo(right, baseY + band);
+      g.lineTo(left, baseY + band);
+      g.closePath();
+      g.fill();
+    }
+    for (let r = 0; r < MIRROR_ROWS.length; r++) {
+      const [offset, distance, perspective] = MIRROR_ROWS[r];
+      const drop = band * offset;
+      // Further back, the light has crossed more water to get here.
+      const rowColour = waterAbsorb(p.color, distance * 0.6, p.turbidity);
+      const aim = 0.15 + r * 0.03;
+      for (let i = 0; i < count; i++) {
+        waveAt(surfX[i] * metresPerPixel + distance * 0.8, t, metresHigh, p.wavelength);
+        rowY[i] = baseY + drop + WAVE.outline * pixelsPerMetre * perspective;
+        // Wider than the rim's window: these are reflections of reflections,
+        // softened by the water they have crossed.
+        rowLight[i] = facetLight(WAVE.slope * 0.75, aim * 0.75);
+      }
+      const fade = 1 - offset * 0.6;
+      const tall = Math.max(2, world.h * 0.011 * perspective);
+
+      // The wrinkle itself — soft, wide and faint, so it reads as a fold in a
+      // sheet of light rather than as a line ruled across it.
+      g.strokeStyle = rgba(rowColour, clamp(0.09 * fade * level, 0, 1));
+      g.lineWidth = tall * 0.7;
+      g.beginPath();
+      curveThrough(g, surfX, rowY, count, { move: true });
+      g.stroke();
+
+      if (p.glint > 0) {
+        stampFlecks(g, sprites.rows[r], rowY, rowLight, count, spacing, tall,
+          0.3, 0.1, tall * 6, 1.4, 0.15, 0.9 * fade * p.glint * level);
+      }
     }
 
     /**
@@ -535,95 +896,104 @@ const waterline = {
      * is about 2% face-on and effectively 100% at the horizon — so the line
      * where it meets the wall is the brightest thing in the picture by a long
      * way. Getting this too dim is the single commonest way an underwater look
-     * fails to read: without a bright meniscus there is no surface, and with no
+     * fails to read: without a bright rim there is no surface, and with no
      * surface there is no "under".
-     */
-    const surfaceColour = waterAbsorb(p.color, 0, p.turbidity);
-    g.strokeStyle = rgba(surfaceColour, clamp(0.7 * p.level, 0, 1));
-    g.lineWidth = Math.max(1.5, world.h * 0.003);
-    g.lineJoin = 'round';
-    g.beginPath();
-    g.moveTo(xs[0], ys[0]);
-    for (let i = 1; i <= SURFACE_SAMPLES; i++) g.lineTo(xs[i], ys[i]);
-    g.stroke();
-
-    /**
-     * The halo under the line — the part of the surface light that got through.
      *
-     * Three widening passes rather than one wide one. A single fat stroke has
-     * an edge of its own, and an edge under a waterline reads as a second
-     * waterline, which is the one thing there cannot be two of. Widening and
-     * fading gives a skirt that ends where the eye cannot find it.
+     * A tight glow and a hot core, and nothing wider. The old version hung
+     * three ever-wider strokes under the line and each had an edge of its own,
+     * so the surface came with a stack of contour lines beneath it — a wide
+     * halo that read as lightning's, not as water's. The bloom downstream does
+     * the spreading, and does it without edges.
      */
-    for (const [spread, alpha] of [[0.4, 0.1], [1, 0.06], [2.2, 0.035]]) {
-      g.strokeStyle = rgba(surfaceColour, clamp(alpha * p.level, 0, 1));
-      g.lineWidth = Math.max(4, world.h * 0.018 * spread);
-      const drop = g.lineWidth * 0.4;
+    for (const [width, alpha, white] of RIM_PASSES) {
+      g.strokeStyle = rgba(mixHex(surfaceColour, '#ffffff', white), clamp(alpha * level, 0, 1));
+      g.lineWidth = Math.max(1.2, world.h * width);
       g.beginPath();
-      g.moveTo(xs[0], ys[0] + drop);
-      for (let i = 1; i <= SURFACE_SAMPLES; i++) g.lineTo(xs[i], ys[i] + drop);
+      curveThrough(g, surfX, surfY, count, { move: true });
       g.stroke();
     }
 
     /**
-     * Glints, on the faces that are pointing at the light.
+     * Glints, on the facets pointing at the light.
      *
      * A specular highlight is not "on the crest"; it is wherever the surface
-     * slope happens to satisfy the reflection, which is on the *flanks* and
-     * moves along the wave rather than with it. Driving them off the slope
-     * gives that for nothing, and it is the reason they sparkle in and out
-     * instead of marching sideways in a row.
+     * slope happens to satisfy the reflection, which is on the flanks just
+     * short of each crest, and it moves along the wave rather than with it.
+     * Driving them off the slope gives that for nothing, and it is the reason
+     * they sparkle in and out instead of marching sideways in a row.
+     *
+     * One per facet — at the peak of each run of light, not at every sample
+     * in it — or a facet ten samples wide is ten glints welded into a bar.
      */
     if (p.glint > 0) {
-      for (let i = 1; i < SURFACE_SAMPLES; i++) {
-        const facing = clamp(1 - Math.abs(slopes[i] * 3 - 0.55), 0, 1);
-        if (facing < 0.35) continue;
-        const strength = (facing - 0.35) / 0.65;
-        glow(
-          g,
-          xs[i],
-          ys[i],
-          world.h * 0.012 * (0.6 + strength),
-          surfaceColour,
-          clamp(strength * strength * 0.7 * p.glint * p.level, 0, 1)
-        );
+      const sprite = sprites.glint;
+      for (let i = 1; i < count - 1; i++) {
+        const here = facetLight(surfSlope[i], 0.16);
+        if (here < 0.55) continue;
+        if (here < facetLight(surfSlope[i - 1], 0.16) || here <= facetLight(surfSlope[i + 1], 0.16)) continue;
+        // Brighter where the facet is also curved towards you: a convex patch
+        // gathers the light it reflects into a smaller, hotter image.
+        const focus = clamp(0.6 + Math.abs(surfBend[i]) * 0.35, 0.6, 1.4);
+        const strength = (here - 0.55) / 0.45;
+        const size = world.h * (0.035 + 0.05 * strength) * focus;
+        g.globalAlpha = clamp(strength * 0.95 * p.glint * level, 0, 1);
+        g.drawImage(sprite, surfX[i] - size / 2, surfY[i] - size / 2, size, size);
       }
+      g.globalAlpha = 1;
     }
 
     /**
      * The light that gets past the surface and lands on the wall above it.
      *
      * The bit of a swimming pool everybody has actually looked at: bright
-     * ripples crawling up the wall above the water, brightest right at the line
-     * and gone within a metre or so. It is a caustic, it comes from the same
-     * wave train, and it is the cheapest possible confirmation that the wave is
-     * real rather than drawn — the two agree because they are the same numbers.
+     * ripples crawling up the wall above the water, brightest right at the
+     * line and gone within a metre or so. It is a caustic, it comes from the
+     * same wave train, and it is the cheapest possible confirmation that the
+     * wave is real rather than drawn — the two agree because they are the
+     * same numbers.
+     *
+     * Each band is a stretch of the surface thrown up the wall — the light
+     * landing higher came off water further out, so each is the same wave
+     * train sampled further back and stretched sideways by the angle it
+     * arrives at — and it is lit only where that water is curved the way
+     * that focuses light: a trough is a concave mirror and gathers what it
+     * reflects into a bright line, a crest spreads it out to nothing. That is
+     * why the real thing is dappled — bright flecks that swell and slide and
+     * go out — and why a band drawn all the way across reads as a contour
+     * line rather than as light. Drawn as soft flecks rather than as strokes
+     * for the same reason as the mirror band: a thin bright stroke with ends
+     * is a scratch, and a wall of them is a wall of scratches.
      */
     if (p.spill > 0 && baseY > bbox.y) {
-      /**
-       * Four broad bands, not seven thin ones.
-       *
-       * A caustic on a wall is a band of light with soft edges, and drawing it
-       * as a hairline traces the *outline* of one — which above a dark
-       * waterline reads as scribble rather than as light. Wide, few, and faint
-       * is the same amount of light in a shape the eye accepts.
-       */
       const reach = world.h * 0.12;
-      for (let band = 1; band <= 4; band++) {
-        const up = (band / 4) ** 1.5 * reach;
-        const fade = (1 - band / 5) ** 2;
-        g.lineWidth = Math.max(3, world.h * 0.012 * (0.6 + band * 0.5));
-        g.strokeStyle = rgba(surfaceColour, clamp(fade * 0.16 * p.spill * p.level, 0, 1));
-        g.beginPath();
-        for (let i = 0; i <= SURFACE_SAMPLES; i++) {
-          // The caustic above the line is the surface slope, magnified — where
-          // the water is steep the light is bent furthest up the wall.
-          const y = ys[i] - up * (0.6 + slopes[i] * 1.4);
-          if (i === 0) g.moveTo(xs[i], y);
-          else g.lineTo(xs[i], y);
+      const sprite = sprites.spill;
+      for (let b = 1; b <= 4; b++) {
+        const up = (b / 4) ** 1.3 * reach * 0.85;
+        const fade = (1 - b / 5) ** 1.5 * p.spill * level;
+        const stretch = 1 / (1 + b * 0.4);
+        for (let i = 0; i < count; i++) {
+          waveAt((surfX[i] * stretch) * metresPerPixel + b * 2.3, t, metresHigh, p.wavelength);
+          // The vertical swing is the surface's own, magnified a little by
+          // the throw: it is the same lens, further from what it lights.
+          rowY[i] = baseY - up + WAVE.outline * pixelsPerMetre * (1 + b * 0.3);
+          rowLight[i] = clamp(WAVE.curvature * 0.3, 0, 1);
         }
-        g.stroke();
+        // Further up the wall the light has spread: wider, taller, fainter.
+        const tall = world.h * (0.012 + b * 0.005);
+        stampFlecks(g, sprite, rowY, rowLight, count, spacing, tall, 0.12, 0.05, tall * 3.5, 1.1, 0, 1.3 * fade);
       }
+      // And a faint wash of all of it together, right at the line.
+      const wash = g.createLinearGradient(0, baseY - reach * 0.6, 0, baseY);
+      wash.addColorStop(0, rgba(surfaceColour, 0));
+      wash.addColorStop(1, rgba(surfaceColour, clamp(0.08 * p.spill * level, 0, 1)));
+      g.fillStyle = wash;
+      g.beginPath();
+      g.moveTo(left, baseY - reach * 0.6);
+      g.lineTo(right, baseY - reach * 0.6);
+      g.lineTo(surfX[count - 1], surfY[count - 1]);
+      for (let i = count - 2; i >= 0; i--) g.lineTo(surfX[i], surfY[i]);
+      g.closePath();
+      g.fill();
     }
 
     g.restore();
@@ -669,9 +1039,9 @@ function angleDelta(from, to) {
  * every one of them was lit up like a strip light while it happened.
  */
 const SPECIES = {
-  sardine: { depth: 0.28, fork: 1, dorsal: 0.5, cruise: 1, bars: 0, radius: 2.2 },
-  reef: { depth: 0.46, fork: 0.5, dorsal: 0.8, cruise: 0.82, bars: 0.55, radius: 1.3 },
-  angelfish: { depth: 0.78, fork: 0.05, dorsal: 1.1, cruise: 0.62, bars: 0.9, radius: 0.8 },
+  sardine: { depth: 0.28, fork: 1, dorsal: 0.5, cruise: 1, radius: 2.2 },
+  reef: { depth: 0.46, fork: 0.5, dorsal: 0.8, cruise: 0.82, radius: 1.3 },
+  angelfish: { depth: 0.78, fork: 0.05, dorsal: 1.1, cruise: 0.62, radius: 0.8 },
 };
 const SPECIES_NAMES = Object.keys(SPECIES);
 
@@ -779,9 +1149,9 @@ const shoal = {
      * Nothing stopped it being, and for the third of the time it was the whole
      * shoal was being steered *into* the glass while the avoidance below shoved
      * it back out. The two settle against each other rather than cancelling:
-     * every fish ends up pressed on the sill, holding station, buzzing, and
-     * since they are drawn additively the pile reads as one white smear with
-     * fins. It is the standoff that looks broken, not either force.
+     * every fish ends up pressed on the sill, holding station, buzzing — a
+     * pile of fish where there should be a shoal. It is the standoff that
+     * looks broken, not either force.
      *
      * Sliding it out to the nearest edge keeps the tour going — the shoal
      * rounds the window instead of parking on it — and costs one surface query
@@ -1135,27 +1505,39 @@ const shoal = {
   draw({ g, p, shape, state, world }) {
     if (!state.fish?.length) return;
     const size = Math.max(3, p.size);
-    // Constant for every fish, so built once rather than forty times a frame.
-    const eyeInk = rgba('#04121b', 0.85);
 
+    /**
+     * Fish are painted over one another, not added.
+     *
+     * A fish is not a light, it is a thing in front of the wall — and in a
+     * shoal the nearer fish hides the one behind it. Drawn additively, as
+     * they were, every place two fish crossed was brighter than either, and
+     * a shoal packed into a corner or streaming along an edge summed to a
+     * white bar with fins. Painted, the overlap is just the nearer fish, so a
+     * dense shoal stays a crowd of fish however dense it gets. Only the
+     * flash adds, because the flash is light: the mirror of the flank
+     * throwing the sky at you.
+     */
     g.save();
     g.clip(shape.path);
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
 
     for (const f of state.fish) {
       const kind = speciesFor(p.species, f.tint);
       const len = size * f.scale;
       const half = len * 0.5;
-      const body = len * kind.depth;
       /**
-       * How deep the drawn outline actually is.
+       * How deep the fish is either side of its midline, at its deepest.
        *
-       * `body` is the control point of the curve that makes the flank, and a
-       * quadratic passes nowhere near its control point — the silhouette peaks
-       * at a little over half of it. Anything that has to sit *on* the fish
-       * rather than stick out of it needs this number, and using `body` puts
-       * bars and fins in the water beside the animal.
+       * Everything that has to sit *on* the fish — the fins, the stripe —
+       * is measured from this, and the outline reaches it exactly: the flank
+       * is drawn with cubics whose shoulder is an end point rather than a
+       * control point, so there is no guessing how far short of its control
+       * point a curve falls. Getting that wrong is what used to hang the fins
+       * in the water beside the animal.
        */
-      const rim = body * 0.5;
+      const rim = len * kind.depth * 0.5;
       const angle = Math.atan2(f.vy, f.vx);
       const metres = depthAt(p, f.y, world);
 
@@ -1179,62 +1561,80 @@ const shoal = {
       g.save();
       g.translate(f.x, f.y);
       g.rotate(angle);
-
-      // The tail leads the body: a fish is pushed by its tail, so the beat has
-      // to be visibly *ahead* of where the body is going or it reads as a lure
-      // being pulled through the water.
-      const beat = Math.sin(f.beat);
-      const bend = beat * 0.35;
-
-      g.globalCompositeOperation = 'lighter';
+      /**
+       * Back up, whichever way it is swimming.
+       *
+       * Rotating a fish to its heading turns it upside down the moment it
+       * swims left, and a fish is counter-shaded — dark back, bright belly —
+       * precisely because the light comes from above. Upside down it is lit
+       * from below, which reads instantly as wrong even when nobody can say
+       * why. So a fish heading left is mirrored rather than rolled.
+       */
+      if (Math.cos(angle) < 0) g.scale(1, -1);
 
       /**
-       * Tail fin, hinged at the peduncle, forked as deeply as the body plan
+       * The tail, hinged at the peduncle and forked as deeply as the body plan
        * says. The fork is the aspect ratio: a deep one is a long thin foil
        * that sheds little energy sideways and drives a cruiser; a rounded
        * paddle is a low-aspect-ratio blade that is inefficient and can throw a
        * lot of water in one stroke, which is how a reef fish leaves.
-       */
-      g.fillStyle = rgba(back, 0.75);
-      g.beginPath();
-      g.moveTo(-half * 0.55, 0);
-      g.lineTo(-half * 1.15, -body * (0.75 - bend));
-      g.lineTo(-half * (0.95 - 0.28 * (1 - kind.fork)), 0);
-      g.lineTo(-half * 1.15, body * (0.75 + bend));
-      g.closePath();
-      g.fill();
-
-      // Body: nose to peduncle, curved along the beat.
-      const grad = g.createLinearGradient(0, -body, 0, body);
-      grad.addColorStop(0, rgba(back, 0.9));
-      grad.addColorStop(0.45, rgba(flank, 0.55 + shine * 0.35));
-      grad.addColorStop(1, rgba(back, 0.9));
-      g.fillStyle = grad;
-      /**
-       * The shoulder goes forward of the middle.
        *
-       * Both control points sat at x = 0, which puts the deepest part of the
-       * fish exactly half way along it and makes the head and the tail taper
-       * identically — a leaf, and it read as one. An actual fish carries its
-       * depth about a third back from the nose and then tapers a long way to
-       * the peduncle, so moving the controls forward buys a fuller head and a
-       * longer run to the tail from the same four path commands.
+       * Seen from the side a tail beats across the line of sight, so what the
+       * eye gets is not a fin swinging up and down but one turning edge-on
+       * and back: it narrows and flares with every stroke, which is the
+       * flicker that says a fish is swimming rather than gliding.
        */
-      const shoulder = half * 0.22;
+      const beat = Math.sin(f.beat);
+      const flare = 0.55 + 0.45 * Math.abs(Math.cos(f.beat));
+      const ped = rim * (0.16 + 0.12 * (1 - kind.fork));
+      const tailX = -half * 0.64;
+      const span = Math.max(rim * 0.95, len * 0.13);
+      const reach = half * (0.42 + 0.12 * kind.fork) * flare;
+      const notch = reach * (0.2 + 0.62 * kind.fork);
+      const lift = beat * span * 0.12;
+      g.fillStyle = rgba(mixHex(back, flank, 0.35), 0.7);
       g.beginPath();
-      g.moveTo(half, 0);
-      g.quadraticCurveTo(shoulder, -body * (1 + bend * 0.4), -half * 0.6, -body * 0.25);
-      g.lineTo(-half * 0.6, body * 0.25);
-      g.quadraticCurveTo(shoulder, body * (1 - bend * 0.4), half, 0);
+      g.moveTo(tailX + half * 0.04, -ped);
+      g.quadraticCurveTo(tailX - reach * 0.45, -span * 0.55 + lift, tailX - reach, -span + lift);
+      g.quadraticCurveTo(tailX - reach * 0.8, -span * 0.35 + lift, tailX - notch, lift * 0.5);
+      g.quadraticCurveTo(tailX - reach * 0.8, span * 0.35 + lift, tailX - reach, span + lift);
+      g.quadraticCurveTo(tailX - reach * 0.45, span * 0.55 + lift, tailX + half * 0.04, ped);
       g.closePath();
       g.fill();
 
-      // Dorsal, and a pectoral that sculls opposite the tail.
-      g.fillStyle = rgba(back, 0.55);
+      /**
+       * The body: fusiform, deepest a third of the way back, tapering a long
+       * way to a narrow peduncle, with a blunt rounded snout — and
+       * counter-shaded, which on a wall of light means a dim back and a bright
+       * belly. The gradient runs across the fish rather than along it, from the
+       * back's colour at a third of the brightness to the silver of the belly,
+       * because that is the one detail that turns a lozenge into a fish at the
+       * size these are seen from the pavement.
+       */
+      const shoulder = half * 0.2;
+      const belly = rim * 1.04;
+      const skin = g.createLinearGradient(0, -rim, 0, belly);
+      skin.addColorStop(0, rgba(back, 0.3));
+      skin.addColorStop(0.38, rgba(mixHex(back, flank, 0.45), 0.5));
+      skin.addColorStop(0.62, rgba(flank, 0.82));
+      skin.addColorStop(1, rgba(flank, 0.68));
+      g.fillStyle = skin;
       g.beginPath();
-      g.moveTo(half * 0.3, -rim * 0.85);
-      g.lineTo(-half * 0.15, -(rim + half * 0.22 * kind.dorsal));
-      g.lineTo(-half * 0.55, -rim * 0.7);
+      g.moveTo(half, rim * 0.08);
+      g.bezierCurveTo(half, -rim * 0.55, shoulder + half * 0.42, -rim, shoulder, -rim);
+      g.bezierCurveTo(shoulder - half * 0.4, -rim, tailX + half * 0.3, -ped * 1.3, tailX, -ped);
+      g.lineTo(tailX, ped);
+      g.bezierCurveTo(tailX + half * 0.3, ped * 1.3, shoulder - half * 0.4, belly, shoulder, belly);
+      g.bezierCurveTo(shoulder + half * 0.42, belly, half, rim * 0.6, half, rim * 0.08);
+      g.closePath();
+      g.fill();
+
+      // Dorsal, swept back, on the deepest part of the back.
+      g.fillStyle = rgba(back, 0.5);
+      g.beginPath();
+      g.moveTo(half * 0.32, -rim * 0.92);
+      g.quadraticCurveTo(half * 0.05, -(rim + half * 0.24 * kind.dorsal), -half * 0.18, -(rim + half * 0.2 * kind.dorsal));
+      g.quadraticCurveTo(-half * 0.25, -rim * 0.9, -half * 0.42, -rim * 0.72);
       g.closePath();
       g.fill();
       /**
@@ -1245,81 +1645,84 @@ const shoal = {
        * points on it, which is the thing anybody recognises as a reef fish.
        */
       if (kind.dorsal > 0.7) {
+        g.fillStyle = rgba(mixHex(back, flank, 0.5), 0.5);
         g.beginPath();
-        g.moveTo(half * 0.05, rim * 0.85);
-        g.lineTo(-half * 0.28, rim + half * 0.15 * kind.dorsal);
-        g.lineTo(-half * 0.55, rim * 0.7);
+        g.moveTo(-half * 0.02, rim * 0.95);
+        g.quadraticCurveTo(-half * 0.2, rim + half * 0.17 * kind.dorsal, -half * 0.4, rim + half * 0.12 * kind.dorsal);
+        g.quadraticCurveTo(-half * 0.42, rim * 0.85, -half * 0.5, rim * 0.6);
         g.closePath();
         g.fill();
       }
+
       /**
-       * The pectoral, which was in the water beside the fish rather than on it.
+       * The silver line along the flank, and the gill behind the head.
        *
-       * `rim`, not `body` — the exact mistake `rim` is defined three dozen
-       * lines above to prevent. `body` is the *control point* of the curve that
-       * makes the flank and the silhouette peaks at about half of it, so a fin
-       * hung at nine tenths of `body` starts outside the animal and reaches
-       * nearly a whole body-depth past it. On a deep-bodied fish that is a
-       * spike as long as the fish is tall, sticking out below it at an angle,
-       * and it is why a shoal at any size worth looking at read as a drift of
-       * leaves with thorns on rather than as fish.
+       * A sardine's flank is a mirror and the brightest thing on it is the
+       * stripe where the mirror is flattest; the gill cover is a second,
+       * curved one. Neither is visible from across the road on its own, but
+       * together they are what stops a slim fish reading as a leaf.
+       *
+       * Not on the deep-bodied ones, and there are no bars on them either,
+       * though a reef fish has them. Bars are *dark* bands, and on a wall of
+       * light the only way to draw something dark is to leave it out; drawn
+       * as light instead, bars and a stripe across a disc read as the ribs of
+       * an X-rayed fish. A reef fish here is its silhouette — the disc, the
+       * paired fins, the paddle tail — which is what anybody recognises it by.
        */
+      const slim = kind.depth < 0.4;
+      g.strokeStyle = rgba(mixHex(flank, '#ffffff', 0.5), slim ? 0.5 : 0.3);
+      g.lineWidth = Math.max(0.7, rim * (slim ? 0.14 : 0.08));
       g.beginPath();
-      g.moveTo(half * 0.05, rim * 0.5);
-      g.lineTo(-half * 0.3, rim * (1.15 - bend * 0.3));
-      g.lineTo(-half * 0.15, rim * 0.35);
+      if (slim) {
+        g.moveTo(half * 0.5, -rim * 0.12);
+        g.quadraticCurveTo(0, -rim * 0.2, tailX + half * 0.05, -ped * 0.2);
+      }
+      g.moveTo(half * 0.5, -rim * 0.55);
+      g.quadraticCurveTo(half * 0.4, 0, half * 0.5, rim * 0.6);
+      g.stroke();
+
+      // The pectoral, sculling against the tail.
+      g.fillStyle = rgba(flank, 0.45);
+      g.beginPath();
+      g.moveTo(half * 0.36, rim * 0.28);
+      g.quadraticCurveTo(half * 0.12, rim * (0.55 + beat * 0.12), half * 0.02, rim * (0.72 + beat * 0.15));
+      g.quadraticCurveTo(half * 0.2, rim * 0.4, half * 0.36, rim * 0.28);
       g.closePath();
       g.fill();
 
-      // The specular itself: a hard line down the flank, not a general
-      // brightening. A mirror gives you an image of the source, and the source
-      // here is a band of sky seen through a rough surface.
+      /**
+       * The flash, which is the whole flank rather than a line on it.
+       *
+       * A fish is a mirror with a fish-shaped outline, and when it rolls its
+       * flank up to the light the mirror throws the whole of the sky at you:
+       * for a moment the fish *is* a white fish. Drawn as the flank itself,
+       * filled white at the strength of the bank, and inside the outline, so a
+       * flashing fish is still a fish rather than a glowing capsule with fins
+       * stuck on it.
+       */
       if (shine > 0.02) {
-        g.strokeStyle = rgba('#ffffff', shine * 0.7);
-        // A line down the flank, not a bar through the fish. At three tenths of
-        // the body — and round-capped — the highlight was wider than the gap
-        // between the dorsal and the belly and longer than the animal, so a
-        // flashing fish was a glowing capsule with fins attached to it.
-        g.lineWidth = Math.max(0.8, body * 0.16);
-        g.lineCap = 'round';
+        g.globalCompositeOperation = 'lighter';
+        g.fillStyle = rgba(mixHex(flank, '#ffffff', 0.7), shine * 0.85);
         g.beginPath();
-        g.moveTo(half * 0.55, -body * 0.05);
-        g.lineTo(-half * 0.4, body * 0.05);
-        g.stroke();
+        g.moveTo(half * 0.62, -rim * 0.1);
+        g.quadraticCurveTo(0, -rim * 0.95, tailX + half * 0.08, -ped * 0.5);
+        g.quadraticCurveTo(0, rim * 0.85, half * 0.62, -rim * 0.1);
+        g.closePath();
+        g.fill();
+        g.globalCompositeOperation = 'source-over';
       }
 
       /**
-       * Bars, on the deep-bodied ones only.
-       *
-       * Vertical banding is disruptive camouflage and it is a reef pattern for
-       * a reason: it works against a background of vertical structure, and it
-       * breaks up a shape that is otherwise a large conspicuous disc. Open
-       * water has no vertical structure to hide against, which is why a
-       * sardine is a plain mirror instead.
+       * The eye: the one bright point on the head, which is what a fish eye
+       * is in reflected light — a silvered ring round a black pupil. On a
+       * wall of light the pupil is just where no light goes, so it is a small
+       * bright ring, and at the size of these mostly a catchlight.
        */
-      if (kind.bars > 0) {
-        g.fillStyle = rgba(back, kind.bars * 0.45);
-        const wide = half * 0.05;
-        for (let b = -1; b <= 1; b++) {
-          const at = half * (0.05 + b * 0.3);
-          // Kept inside the outline by the body's own profile, so a bar on a
-          // disc is a band across it rather than a stick through it.
-          const tall = rim * 0.92 * Math.min(1, (half - at) / (half * 0.6));
-          g.beginPath();
-          g.moveTo(at - wide, -tall);
-          g.lineTo(at + wide, -tall);
-          g.lineTo(at + wide - half * 0.05, tall);
-          g.lineTo(at - wide - half * 0.05, tall);
-          g.closePath();
-          g.fill();
-        }
-      }
-
-      // Eye. One dot, and the fish stops being a leaf.
-      g.fillStyle = eyeInk;
+      g.strokeStyle = rgba(mixHex(flank, '#ffffff', 0.6), 0.75);
+      g.lineWidth = Math.max(0.6, rim * 0.1);
       g.beginPath();
-      g.arc(half * 0.55, -body * 0.22, Math.max(0.6, body * 0.16), 0, TAU);
-      g.fill();
+      g.arc(half * 0.66, -rim * 0.22, Math.max(0.6, rim * 0.17), 0, TAU);
+      g.stroke();
 
       g.restore();
     }
@@ -1365,6 +1768,106 @@ function ventsFor(shape, count, rng, spread) {
     });
   }
   return vents;
+}
+
+/**
+ * A bubble, baked once per colour and size, and stamped.
+ *
+ * A bubble is a rim, not a disc. Under water it is a lens of air with almost
+ * nothing in the middle of it: light passing through the centre is barely
+ * bent and carries on, while light meeting the edge hits the interface at a
+ * grazing angle and is thrown back at you whole — total internal reflection,
+ * the same physics as the mirror under the waterline. So what you see is a
+ * bright ring that falls away steeply inside (a Fresnel rim rather than a
+ * stroke), a hard catchlight where the top of the bubble faces the surface,
+ * and a fainter crescent underneath from the light that went through and
+ * came back. Drawn as a filled circle it is a pearl; drawn as a plain stroked
+ * circle, as it was, it is a diagram of one.
+ *
+ * A ladder of three sizes, because a rim is a feature a pixel or two wide
+ * whatever the size of the bubble, and shrinking one big sprite down to a
+ * small bubble averages its rim into the dark middle and puts it out. Each
+ * rung has its rim drawn at its own scale, and a bubble is stamped from the
+ * smallest rung at least as big as it is. Baked rather than drawn because
+ * there are hundreds of them: one `drawImage` each, where the old rings were
+ * three paths and three fills.
+ */
+const BUBBLE_RUNGS = [16, 32, 64];
+
+/**
+ * The ladders for one layer: one per whole metre of depth the shape spans,
+ * each tinted for the water a bubble's light crosses at that depth, all baked
+ * the first time the layer draws and kept in its state. All at once because
+ * which depths a bubble has reached by a given frame depends on the frame
+ * rate, and a cache filled in that order is a different cache in every tab;
+ * keyed on `stable`, because a murkiness or a surface bound to an LFO must not
+ * bake a new set every frame.
+ */
+function bubbleLadders(state, stable, shape, world) {
+  const deepest = Math.min(40, Math.ceil(depthAt(stable, shape.bbox.y + shape.bbox.h, world)));
+  const key = `${stable.color}|${stable.turbidity}|${deepest}`;
+  if (state.ladderKey === key) return state.ladders;
+  const ladders = [];
+  for (let m = 0; m <= deepest; m++) {
+    // The light crosses about a third of the bubble's depth: it is lit from
+    // the surface and seen through the water in front of it.
+    const colour = waterAbsorb(stable.color, m * 0.35, stable.turbidity);
+    ladders.push(BUBBLE_RUNGS.map((size) => bakeBubble(colour, size)));
+  }
+  state.ladders = ladders;
+  state.ladderKey = key;
+  return ladders;
+}
+
+/** The rung of `ladder` to stamp a bubble `diameter` pixels across from. */
+function bubbleRung(ladder, diameter) {
+  for (let i = 0; i < BUBBLE_RUNGS.length - 1; i++) {
+    if (diameter <= BUBBLE_RUNGS[i]) return ladder[i];
+  }
+  return ladder[BUBBLE_RUNGS.length - 1];
+}
+
+function bakeBubble(colour, size) {
+  const sprite = offscreen(size, size);
+  const g = sprite.getContext('2d');
+  const m = size / 2;
+  const r = m - 0.5;
+  // The rim is never thinner than a pixel and a half of this rung.
+  const band = Math.max(1.5 / r, 0.12);
+  g.globalCompositeOperation = 'lighter';
+
+  const rim = g.createRadialGradient(m, m, 0, m, m, r);
+  rim.addColorStop(0, rgba(colour, 0.05));
+  rim.addColorStop(Math.max(0.3, 1 - band * 3), rgba(colour, 0.1));
+  rim.addColorStop(1 - band * 1.2, rgba(colour, 0.55));
+  rim.addColorStop(1 - band * 0.45, rgba(mixHex(colour, '#ffffff', 0.35), 1));
+  rim.addColorStop(1, rgba(colour, 0.15));
+  g.fillStyle = rim;
+  g.beginPath();
+  g.arc(m, m, r, 0, TAU);
+  g.fill();
+
+  // The catchlight, up and to one side, where the bubble faces the surface.
+  const hx = m - r * 0.36;
+  const hy = m - r * 0.4;
+  const hr = Math.max(1.2, r * 0.28);
+  const catchlight = g.createRadialGradient(hx, hy, 0, hx, hy, hr);
+  catchlight.addColorStop(0, rgba('#ffffff', 1));
+  catchlight.addColorStop(0.4, rgba('#ffffff', 0.6));
+  catchlight.addColorStop(1, rgba('#ffffff', 0));
+  g.fillStyle = catchlight;
+  g.beginPath();
+  g.arc(hx, hy, hr, 0, TAU);
+  g.fill();
+
+  // The crescent underneath: light that went through and came back.
+  g.strokeStyle = rgba(mixHex(colour, '#ffffff', 0.3), 0.45);
+  g.lineWidth = Math.max(1, r * 0.1);
+  g.lineCap = 'round';
+  g.beginPath();
+  g.arc(m, m, r * 0.7, Math.PI * 0.2, Math.PI * 0.7);
+  g.stroke();
+  return sprite;
 }
 
 const bubbles = {
@@ -1461,9 +1964,21 @@ const bubbles = {
       b.x += b.vx * dt;
       b.y += b.vy * dt;
 
-      // The house is in the way, and a bubble that meets a sill does not bounce
-      // off it — it presses against the underside and slides out sideways,
-      // which is what a restitution near zero plus a lateral wobble gives.
+      /**
+       * The house is in the way, and a bubble that meets a sill does not
+       * bounce off it — it presses against the underside and creeps along it
+       * to the nearer end, then carries on up past the edge.
+       *
+       * The creep has to be put in. A restitution near zero and the zigzag
+       * alone were supposed to slide it out, but the zigzag is symmetric, so
+       * under a level sill a bubble went nowhere: every one released below a
+       * window gathered at the same spot under it and, drawn additively,
+       * the pile burned into a white ball. Under a real sill the slightest
+       * tilt decides which way they go and they run out along it quickly;
+       * here the nearer end decides, at a pace that drag holds to most of
+       * the rise speed, so a sill holds a short string of them rather than
+       * a crowd.
+       */
       for (const o of obstacles) {
         const { bbox: ob } = o;
         if (
@@ -1472,7 +1987,13 @@ const bubbles = {
           || b.y < ob.y - b.r
           || b.y > ob.y + ob.h + b.r
         ) continue;
+        const wasX = b.x;
+        const wasY = b.y;
         deflect(o.points, b, b.r, 0.05, false);
+        if (b.x !== wasX || b.y !== wasY) {
+          const toward = b.x < ob.x + ob.w / 2 ? -1 : 1;
+          b.vx += toward * p.rise * 0.8 * drag * dt;
+        }
       }
 
       // Gone at the surface, or off the top of what we were given.
@@ -1484,8 +2005,9 @@ const bubbles = {
     // frame allocating an hour of bubbles it is about to throw away.
     if (state.bubbles.length > 900) state.bubbles.splice(0, state.bubbles.length - 900);
   },
-  draw({ g, p, shape, state, world }) {
+  draw({ g, p, stable, shape, state, world }) {
     if (!state.bubbles?.length || p.level <= 0) return;
+    const ladders = bubbleLadders(state, stable, shape, world);
 
     g.save();
     g.clip(shape.path);
@@ -1495,42 +2017,31 @@ const bubbles = {
 
     for (const b of state.bubbles) {
       const metres = depthAt(p, b.y, world);
-      const colour = waterAbsorb(p.color, metres * 0.35, p.turbidity);
+      const ladder = ladders[clamp(Math.round(metres), 0, ladders.length - 1)];
       // Fades in off the vent and out at the surface, so nothing appears or
       // vanishes on a frame boundary.
       const fade = clamp(b.life * 4, 0, 1)
         * clamp((b.y - top) / Math.max(1, world.h * 0.06), 0, 1);
-      const alpha = clamp(0.75 * fade * p.level, 0, 1);
+      const alpha = clamp(0.9 * fade * p.level, 0, 1);
       if (alpha <= 0.004 || b.r < 0.4) continue;
 
       /**
-       * A bubble is a rim, not a disc.
+       * Bigger bubbles are not round.
        *
-       * Under water a bubble is a lens of air with almost nothing in the middle
-       * of it: light passing through the centre is barely bent and carries on,
-       * while light meeting the edge hits the interface at a grazing angle and
-       * is thrown back at you whole. So what you see is a bright ring, a hard
-       * highlight where the surface faces the light, and a second smaller one
-       * underneath from the light that went through and came back. Drawn as a
-       * filled circle it is a pearl.
+       * Below a couple of millimetres surface tension holds a bubble to a
+       * sphere; above it the pressure of the water it is shouldering aside
+       * flattens it into an oblate spheroid, wider than tall, and it rocks
+       * and wobbles as it sheds the vortices that make it zigzag. So the
+       * aspect follows the size, and wobbles on the same phase as the zigzag.
        */
-      g.strokeStyle = rgba(colour, alpha);
-      g.lineWidth = Math.max(0.6, b.r * 0.22);
-      g.beginPath();
-      g.arc(b.x, b.y, Math.max(0.5, b.r - g.lineWidth * 0.5), 0, TAU);
-      g.stroke();
-
-      if (b.r > 2.2) {
-        g.fillStyle = rgba('#ffffff', alpha * 0.8);
-        g.beginPath();
-        g.arc(b.x - b.r * 0.32, b.y - b.r * 0.36, Math.max(0.4, b.r * 0.2), 0, TAU);
-        g.fill();
-        g.fillStyle = rgba(colour, alpha * 0.45);
-        g.beginPath();
-        g.arc(b.x + b.r * 0.3, b.y + b.r * 0.34, Math.max(0.3, b.r * 0.13), 0, TAU);
-        g.fill();
-      }
+      const big = clamp((b.r - 5) / 18, 0, 1);
+      const squash = 1 - big * (0.22 + 0.07 * Math.sin(b.phase + b.life * 9));
+      const w = b.r * 2 * (1 + big * 0.12);
+      const h = b.r * 2 * squash;
+      g.globalAlpha = alpha;
+      g.drawImage(bubbleRung(ladder, w), b.x - w / 2, b.y - h / 2, w, h);
     }
+    g.globalAlpha = 1;
 
     g.restore();
   },
@@ -1542,6 +2053,15 @@ const bubbles = {
 
 /** Nodes up a frond. Enough for a smooth curve, few enough to be free. */
 const KELP_NODES = 14;
+
+/** Points down each side of one blade, and the scratch its outline is gathered in. */
+const BLADE_STEPS = 6;
+const bladeX = new Float64Array(BLADE_STEPS * 2 + 2);
+const bladeY = new Float64Array(BLADE_STEPS * 2 + 2);
+/** Per node of the frond being drawn: which side its blade is on (0 for none), its size and ruffle. */
+const leafSide = new Int8Array(KELP_NODES + 1);
+const leafSize = new Float64Array(KELP_NODES + 1);
+const leafRipple = new Float64Array(KELP_NODES + 1);
 
 const kelp = {
   id: 'kelp',
@@ -1626,6 +2146,7 @@ const kelp = {
        */
       const drift = p.current * height * 0.3
         * Math.sin(t * 0.21 + jitter * 5.3 + rootMetresX * 0.05);
+      const swell = omega * t - k * rootMetresX + jitter * 2.4;
 
       for (let i = 0; i <= KELP_NODES; i++) {
         const u = i / KELP_NODES;
@@ -1635,8 +2156,7 @@ const kelp = {
         // Anchored at the holdfast: the exponential alone still leaves a base
         // that slides, and a plant that slides is a plant that is not rooted.
         const anchored = u * u * (3 - 2 * u);
-        const phase = omega * t - k * rootMetresX + jitter * 2.4;
-        const offset = swayPx * decay * anchored * (Math.sin(phase) + 0.35 * Math.sin(phase * 2.1 + 1.1));
+        const offset = swayPx * decay * anchored * (Math.sin(swell) + 0.35 * Math.sin(swell * 2.1 + 1.1));
         nx[i] = rootX + offset + (lean * height + drift) * anchored;
         ny[i] = y;
       }
@@ -1647,38 +2167,126 @@ const kelp = {
       grad.addColorStop(0, rgba(nearColour, clamp(0.75 * p.level, 0, 1)));
       grad.addColorStop(1, rgba(tipColour, clamp(0.95 * p.level, 0, 1)));
 
-      // Blades first, so the stipe is drawn over their roots.
-      if (p.blades > 0) {
-        g.fillStyle = grad;
+      /**
+       * Which way the water is moving past the frond, -1..1: the rate of
+       * change of the sway, which is the same sign all the way up a frond
+       * because the whole of it is in the same phase of the wave. Blades
+       * stream with it, so the frond is visibly being moved by something
+       * rather than waving on its own.
+       */
+      const stream = (Math.cos(swell) + 0.735 * Math.cos(swell * 2.1 + 1.1)) / 1.735 * Math.min(1, p.sway * 2);
+
+      /**
+       * The blades, first, so the stipe is drawn over their roots.
+       *
+       * A giant kelp frond is a cord with a blade hanging off it every hand's
+       * width or so, each on a small gas bladder that holds it up: long,
+       * narrow and ruffled along both edges, leaving the stipe at a shallow
+       * angle and curving back up along it, because it floats. Not every node
+       * has one and they do not strictly alternate — the old regular
+       * left-right leaves read as an ear of wheat, which is a picture of a
+       * plant that has never been in water. Each blade is its own length,
+       * swings out with the water passing it, and the ruffle along its edges
+       * moves, which is most of what makes weed look wet.
+       */
+      if (p.blades > 0 || p.bladders > 0) {
+        // Which nodes carry a blade, which side, how big — drawn from the
+        // frond's own generator so they are the same every frame.
+        let side = rng() < 0.5 ? 1 : -1;
         for (let i = 2; i < KELP_NODES; i++) {
-          const side = i % 2 === 0 ? 1 : -1;
-          const u = i / KELP_NODES;
-          const dx = nx[i + 1] - nx[i - 1];
-          const dy = ny[i + 1] - ny[i - 1];
-          const len = Math.hypot(dx, dy) || 1;
-          // Perpendicular to the stipe, so a blade lies along the flow instead
-          // of sticking out sideways from a plant that is bent double.
-          const px = (-dy / len) * side;
-          const py = (dx / len) * side;
-          const bladeLen = width * 3.4 * p.blades * (0.5 + u * 0.9);
-          const along = (height / KELP_NODES) * 1.5;
-          g.beginPath();
-          g.moveTo(nx[i], ny[i]);
-          g.quadraticCurveTo(
-            nx[i] + px * bladeLen * 0.7 + (dx / len) * along * 0.5,
-            ny[i] + py * bladeLen * 0.7 + (dy / len) * along * 0.5,
-            nx[i] + px * bladeLen * 0.35 + (dx / len) * along * 1.6,
-            ny[i] + py * bladeLen * 0.35 + (dy / len) * along * 1.6
-          );
-          g.quadraticCurveTo(
-            nx[i] + px * bladeLen * 0.12,
-            ny[i] + py * bladeLen * 0.12,
-            nx[i],
-            ny[i]
-          );
-          g.closePath();
-          g.fill();
+          const here = rng();
+          leafSize[i] = rng();
+          leafRipple[i] = rng() * TAU;
+          // Mostly alternating, sometimes not; and some nodes bare.
+          side = here < 0.2 ? side : -side;
+          leafSide[i] = here > 0.82 ? 0 : side;
         }
+
+        /**
+         * All of a frond's blades are one path and one fill, and so are all
+         * of its bladders. A fill costs about the same whatever is in it, and
+         * the blades of one frond overlapping is the same weed seen through
+         * itself, not two lights adding up — so one fill is both cheaper and
+         * more right. Every outline goes round the same way relative to its
+         * own blade, so where two overlap the non-zero rule fills them once
+         * rather than cutting a hole.
+         */
+        // Translucent: a blade is a sheet of tissue a few cells thick, and the
+        // light through a stand of them is the sum of several.
+        g.fillStyle = grad;
+        g.globalAlpha = 0.5;
+        g.beginPath();
+        for (let pass = 0; pass < 2; pass++) {
+          if (pass === 1) {
+            if (p.blades > 0) g.fill();
+            g.globalAlpha = 1;
+            g.fillStyle = rgba(tipColour, clamp(0.5 * p.level, 0, 1));
+            g.beginPath();
+          }
+          for (let i = 2; i < KELP_NODES; i++) {
+            const leaf = leafSide[i];
+            if (!leaf) continue;
+            const u = i / KELP_NODES;
+            const size = leafSize[i];
+            let tx = nx[i + 1] - nx[i - 1];
+            let ty = ny[i + 1] - ny[i - 1];
+            const tl = Math.hypot(tx, ty) || 1;
+            tx /= tl;
+            ty /= tl;
+            // The normal on this blade's side of the stipe.
+            const qx = -ty * leaf;
+            const qy = tx * leaf;
+            const swing = 0.5 + stream * leaf * 0.32;
+
+            if (pass === 0) {
+              if (!(p.blades > 0)) break;
+              /**
+               * Two and a half to five node spacings long, so neighbouring
+               * blades overlap into a mane instead of standing apart like the
+               * teeth of a comb; and a ribbon, seven or eight times as long as
+               * it is wide, which is the proportion that says kelp rather
+               * than corn. Down the midrib it turns back towards the stipe,
+               * because it floats.
+               */
+              const length = (height / KELP_NODES) * p.blades * (2.4 + 2.4 * size) * (0.7 + 0.45 * u);
+              const breadth = Math.max(width * 1.1, length * 0.135);
+              let mx = nx[i];
+              let my = ny[i];
+              bladeX[0] = mx;
+              bladeY[0] = my;
+              for (let j = 1; j <= BLADE_STEPS; j++) {
+                const sAt = j / BLADE_STEPS;
+                const turn = swing * (1 - 0.6 * sAt);
+                const dx = tx * Math.cos(turn) + qx * Math.sin(turn);
+                const dy = ty * Math.cos(turn) + qy * Math.sin(turn);
+                mx += (dx * length) / BLADE_STEPS;
+                my += (dy * length) / BLADE_STEPS;
+                // Lanceolate — widest a third of the way out — and ruffled.
+                const w = breadth * 0.5 * Math.sin(Math.PI * sAt ** 0.7)
+                  * (1 + 0.32 * Math.sin(sAt * 16 + leafRipple[i] + t * 1.7));
+                bladeX[j] = mx - dy * w;
+                bladeY[j] = my + dx * w;
+                bladeX[BLADE_STEPS * 2 + 1 - j] = mx + dy * w;
+                bladeY[BLADE_STEPS * 2 + 1 - j] = my - dx * w;
+              }
+              bladeX[BLADE_STEPS * 2 + 1] = nx[i];
+              bladeY[BLADE_STEPS * 2 + 1] = ny[i];
+              curveThrough(g, bladeX, bladeY, BLADE_STEPS * 2 + 2, { move: true });
+              g.closePath();
+            } else if (p.bladders > 0) {
+              // Its gas bladder, at the root of the blade: what holds a real
+              // frond up, and the one detail that makes weed look like weed
+              // rather than like rope.
+              const r = width * 0.42 * p.bladders * (0.75 + 0.5 * size) * (0.7 + 0.5 * u);
+              const along = Math.atan2(ty * Math.cos(swing) + qy * Math.sin(swing), tx * Math.cos(swing) + qx * Math.sin(swing));
+              const bx = nx[i] + Math.cos(along) * r;
+              const by = ny[i] + Math.sin(along) * r;
+              g.moveTo(bx + Math.cos(along) * r * 1.5, by + Math.sin(along) * r * 1.5);
+              g.ellipse(bx, by, r * 1.5, r, along, 0, TAU);
+            }
+          }
+        }
+        if (p.bladders > 0) g.fill();
       }
 
       g.strokeStyle = grad;
@@ -1691,18 +2299,6 @@ const kelp = {
       g.beginPath();
       curveThrough(g, nx, ny, KELP_NODES + 1, { move: true });
       g.stroke();
-
-      // Gas bladders, which is what holds a real frond up and is also the one
-      // detail that makes weed look like weed rather than like rope.
-      if (p.bladders > 0) {
-        g.fillStyle = rgba(tipColour, clamp(0.8 * p.level, 0, 1));
-        for (let i = 4; i < KELP_NODES; i += 3) {
-          const r = width * 0.7 * p.bladders * (0.6 + (i / KELP_NODES) * 0.8);
-          g.beginPath();
-          g.ellipse(nx[i], ny[i], r, r * 1.5, 0, 0, TAU);
-          g.fill();
-        }
-      }
     }
 
     g.restore();
@@ -1725,15 +2321,38 @@ const kelp = {
 const SQUEEZE = 0.28;
 
 /**
- * One strand's points, gathered before it is traced.
+ * Every strand's points, gathered before any of them is traced.
  *
  * Module-level and reused, because this is inside a loop over every strand of
- * every jellyfish on screen and a fresh pair of arrays per strand would be a
- * few hundred allocations a frame for nothing. Sized well past the twelve
- * segments a strand is drawn with.
+ * every jellyfish on screen and fresh arrays per strand would be a few
+ * hundred allocations a frame for nothing. All of one animal's strands are
+ * gathered at once, because each is traced twice — a glow and a core — and
+ * computing a strand's history twice is the expensive half. Sized for the
+ * thirty-two strands the slider allows at thirteen points each.
  */
-const strandX = new Float64Array(64);
-const strandY = new Float64Array(64);
+const strandX = new Float64Array(32 * 13);
+const strandY = new Float64Array(32 * 13);
+
+/**
+ * A strand and the edge of the bell are each stroked twice, a wide faint glow
+ * and a fine bright core: `[width as a fraction of the bell's radius, alpha]`.
+ */
+const STRAND_PASSES = [[0.12, 0.1], [0.035, 0.55]];
+const EDGE_PASSES = [[0.14, 0.18], [0.045, 0.7]];
+
+/**
+ * Trace the `count` gathered points from `start` as one smooth strand — the
+ * same curve `curveThrough` makes, read from an offset into the scratch so
+ * that no strand needs an array of its own.
+ */
+function traceStrand(g, start, count) {
+  g.moveTo(strandX[start], strandY[start]);
+  for (let i = 1; i < count - 1; i++) {
+    const a = start + i;
+    g.quadraticCurveTo(strandX[a], strandY[a], (strandX[a] + strandX[a + 1]) / 2, (strandY[a] + strandY[a + 1]) / 2);
+  }
+  if (count > 1) g.lineTo(strandX[start + count - 1], strandY[start + count - 1]);
+}
 
 /**
  * How far back in time strand `s` reaches, in seconds.
@@ -1866,7 +2485,24 @@ const jellyfish = {
 
     g.save();
     g.clip(shape.path);
+    /**
+     * Nothing above the surface. The jellyfish wrap round the frame, and when
+     * the surface is inside it — as in the starter, where it is the thing that
+     * makes the look land — the top of that wrap is air, and a medusa hanging
+     * its tentacles over the waterline is a medusa out of the water. So the
+     * water ends where the waterline is drawn, and each animal fades out as
+     * its bell comes up into the glare under the surface, rather than being
+     * cut off by it.
+     */
+    const ceiling = surfaceY(p, world);
+    if (ceiling > bbox.y) {
+      g.beginPath();
+      g.rect(bbox.x, ceiling, bbox.w, bbox.y + bbox.h - ceiling);
+      g.clip();
+    }
     g.globalCompositeOperation = 'lighter';
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
 
     for (let i = 0; i < count; i++) {
       const rng = makeRng(`jellyfish:${shape.id}:${i}`);
@@ -1909,7 +2545,20 @@ const jellyfish = {
       // Contracted: narrower and taller. Relaxed: a flatter dome.
       const bellW = R * (1.18 - 0.34 * now.c);
       const bellH = R * (0.62 + 0.36 * now.c);
-      const alpha = clamp(0.5 * p.level, 0, 1);
+      // Fading over the last three bell-heights below the surface.
+      const level = p.level * clamp((now.y - bellH - ceiling) / (R * 3), 0, 1);
+      if (level <= 0.002) continue;
+
+      /**
+       * The margin lights up on the recoil, not on the squeeze.
+       *
+       * Bioluminescence in a medusa is a startle response — it fires *after*
+       * something happens, and the flash outlasts the movement that set it off.
+       * Peaking it just past the end of the contraction is a small thing that
+       * makes the animal look alive rather than lit.
+       */
+      const flash = Math.max(0, 1 - Math.abs(now.phase - SQUEEZE * 1.4) * 4);
+      const glowing = p.glow * (0.55 + 0.45 * flash);
 
       /**
        * The tentacles, drawn out of the bell's own past.
@@ -1922,21 +2571,25 @@ const jellyfish = {
        * themselves, lag behind on the fast part of the stroke, and gather back
        * under the bell as it coasts. None of which is drawn; all of it falls
        * out of the delay.
+       *
+       * Every strand is gathered first and traced twice: a wide faint pass
+       * that the bloom turns into the haze of a living thread, and a fine
+       * bright one inside it. A thread a couple of pixels wide at a quarter
+       * of the brightness of the bell is what made the tentacles vanish at
+       * any distance — real ones are the length of a person and catch the
+       * light along all of it.
        */
       const strands = Math.round(p.tentacles);
       if (strands > 0) {
-        g.lineCap = 'round';
         const anchorY = now.y + bellH * 0.55;
+        let n = 0;
         for (let s = 0; s < strands; s++) {
           const across = strands > 1 ? (s / (strands - 1) - 0.5) * 2 : 0;
           const anchorX = across * bellW * 0.82;
           const isArm = s % 3 === 0;
           const span = strandLag(s, p.trail);
-          g.strokeStyle = rgba(isArm ? bell : rimColour, alpha * (isArm ? 0.75 : 0.4));
-          g.lineWidth = Math.max(0.6, R * (isArm ? 0.11 : 0.05));
           // Gathered first, then traced as a curve: a strand is a hanging
           // thing and a chain of chords looks like a chain. See `curveThrough`.
-          let n = 0;
           strandX[n] = now.x + anchorX;
           strandY[n++] = anchorY;
           for (let k = 1; k <= segments; k++) {
@@ -1969,60 +2622,165 @@ const jellyfish = {
             strandX[n] = now.x - (now.cx - past.cx) + splay;
             strandY[n++] = anchorY - (now.ty - past.ty) + drop + swing;
           }
-          g.beginPath();
-          curveThrough(g, strandX, strandY, n, { move: true });
-          g.stroke();
         }
+        /**
+         * Brightest where they leave the bell and gone by the tips, because a
+         * thread thins and the light along it is scattered away — one
+         * gradient down the whole fringe, shared by every strand of a kind.
+         */
+        const per = segments + 1;
+        const reach = anchorY + p.trail * hang * 1.2;
+        const fringe = g.createLinearGradient(0, anchorY, 0, reach);
+        fringe.addColorStop(0, rgba(rimColour, 1));
+        fringe.addColorStop(0.55, rgba(rimColour, 0.55));
+        fringe.addColorStop(1, rgba(rimColour, 0));
+        const lobes = g.createLinearGradient(0, anchorY, 0, anchorY + p.trail * hang * 0.6);
+        lobes.addColorStop(0, rgba(bell, 1));
+        lobes.addColorStop(1, rgba(bell, 0.1));
+        for (const [width, alpha] of STRAND_PASSES) {
+          for (let s = 0; s < strands; s++) {
+            const isArm = s % 3 === 0;
+            g.strokeStyle = isArm ? lobes : fringe;
+            g.globalAlpha = clamp(alpha * (isArm ? 1.1 : 1) * level, 0, 1);
+            g.lineWidth = Math.max(0.6, R * width * (isArm ? 1.6 : 1));
+            g.beginPath();
+            traceStrand(g, s * per, per);
+            g.stroke();
+          }
+        }
+        g.globalAlpha = 1;
       }
 
-      // The bell: a dome with the margin curled under, which is the silhouette
-      // everybody recognises and the thing a plain half-ellipse misses.
-      const dome = g.createRadialGradient(now.x, now.y - bellH * 0.3, 0, now.x, now.y, bellW);
-      dome.addColorStop(0, rgba('#ffffff', alpha * 0.55));
-      dome.addColorStop(0.45, rgba(bell, alpha * 0.8));
-      dome.addColorStop(1, rgba(bell, alpha * 0.12));
+      /**
+       * The oral arms: four frilled lobes hanging from the middle of the bell.
+       *
+       * They are the other half of the silhouette everybody knows — the
+       * tentacles are a fringe, the arms are a skirt — and what makes them
+       * read is the frill: a ruffled edge, not a smooth ribbon. Each is a
+       * short trail of the bell's past like a tentacle, but stiffer, each its
+       * own length, tapering to a point, with a ripple running down both
+       * edges out of step with each other.
+       */
+      for (let a = 0; a < 4; a++) {
+        const side = (a - 1.5) / 1.5;
+        const armLength = R * (1.15 + 0.5 * ((a * 0.618 + j.hue) % 1));
+        let m = 0;
+        for (let k = 0; k <= 8; k++) {
+          const u = k / 8;
+          const past = bellAt(t - p.trail * 0.35 * u, j, p, world, bbox);
+          const sway = Math.sin(t * 1.3 + a * 1.9 + u * 3) * R * 0.1 * u;
+          strandX[m] = now.x - (now.cx - past.cx) + side * bellW * (0.12 + 0.3 * u) + sway;
+          strandY[m++] = now.y + bellH * 0.3 + u * armLength
+            - clamp((now.ty - past.ty) * 0.5, -u * armLength * 0.4, u * armLength * 0.4);
+        }
+        // Both edges, rippled out of phase with each other: the frill.
+        const ribbon = R * (0.13 - 0.04 * Math.abs(side));
+        g.fillStyle = rgba(mixHex(bell, rimColour, 0.3), clamp(0.16 * level, 0, 1));
+        g.strokeStyle = rgba(mixHex(bell, rimColour, 0.45), clamp(0.32 * level, 0, 1));
+        g.lineWidth = Math.max(0.6, R * 0.022);
+        g.beginPath();
+        for (let k = 0; k <= 8; k++) {
+          const taper = 1 - k / 8;
+          const ruffle = 1 + 0.55 * Math.sin(k * 2.3 + t * 2.2 + a);
+          const x = strandX[k] - ribbon * ruffle * (0.25 + taper);
+          if (k === 0) g.moveTo(x, strandY[k]);
+          else g.lineTo(x, strandY[k]);
+        }
+        for (let k = 8; k >= 0; k--) {
+          const taper = 1 - k / 8;
+          const ruffle = 1 + 0.55 * Math.sin(k * 2.3 + t * 2.2 + a + 2.4);
+          g.lineTo(strandX[k] + ribbon * ruffle * (0.25 + taper), strandY[k]);
+        }
+        g.closePath();
+        g.fill();
+        g.stroke();
+      }
+
+      /**
+       * The bell: a dome with the margin curled under, which is the
+       * silhouette everybody recognises and the thing a plain half-ellipse
+       * misses.
+       *
+       * Lit the way jelly is lit. Most of the bell is clear, so the body is a
+       * faint wash brightest near the crown; but seen through its own edge the
+       * light crosses far more of it, so the outline glows — the rim lighting
+       * that lets you see a moon jelly in murky water at all — and it is that
+       * glowing edge, not the fill, that carries the shape.
+       */
+      const crown = now.y - bellH * 1.42;
+      const dome = g.createRadialGradient(now.x, now.y - bellH * 0.75, 0, now.x, now.y - bellH * 0.4, bellW * 1.05);
+      dome.addColorStop(0, rgba(mixHex(bell, '#ffffff', 0.4), clamp(0.42 * level, 0, 1)));
+      dome.addColorStop(0.55, rgba(bell, clamp(0.24 * level, 0, 1)));
+      dome.addColorStop(1, rgba(bell, clamp(0.1 * level, 0, 1)));
       g.fillStyle = dome;
       g.beginPath();
       g.moveTo(now.x - bellW, now.y);
-      g.bezierCurveTo(
-        now.x - bellW, now.y - bellH * 1.9,
-        now.x + bellW, now.y - bellH * 1.9,
-        now.x + bellW, now.y
-      );
+      g.bezierCurveTo(now.x - bellW, now.y - bellH * 1.9, now.x + bellW, now.y - bellH * 1.9, now.x + bellW, now.y);
       g.quadraticCurveTo(now.x + bellW * 0.45, now.y + bellH * 0.7, now.x, now.y + bellH * 0.42);
       g.quadraticCurveTo(now.x - bellW * 0.45, now.y + bellH * 0.7, now.x - bellW, now.y);
       g.closePath();
       g.fill();
 
-      // Radial canals.
-      g.strokeStyle = rgba(bell, alpha * 0.5);
-      g.lineWidth = Math.max(0.5, R * 0.035);
-      for (let c = -2; c <= 2; c++) {
-        const off = (c / 2.4) * bellW * 0.8;
+      // The edge, in two passes: a soft glow and a bright line.
+      for (const [width, alpha] of EDGE_PASSES) {
+        g.strokeStyle = rgba(mixHex(bell, '#ffffff', 0.25), clamp(alpha * level, 0, 1));
+        g.lineWidth = Math.max(0.8, R * width);
         g.beginPath();
-        g.moveTo(now.x + off * 0.25, now.y - bellH * 0.95);
-        g.quadraticCurveTo(now.x + off * 0.8, now.y - bellH * 0.2, now.x + off, now.y + bellH * 0.12);
+        g.moveTo(now.x - bellW, now.y);
+        g.bezierCurveTo(now.x - bellW, now.y - bellH * 1.9, now.x + bellW, now.y - bellH * 1.9, now.x + bellW, now.y);
         g.stroke();
       }
 
       /**
-       * The margin lights up on the recoil, not on the squeeze.
+       * Radial canals, running from the crown to the margin.
        *
-       * Bioluminescence in a medusa is a startle response — it fires *after*
-       * something happens, and the flash outlasts the movement that set it off.
-       * Peaking it just past the end of the contraction is a small thing that
-       * makes the animal look alive rather than lit.
+       * Eight of them round a real bell; seen side-on, the five on the near
+       * face. Fine and faint, but they are what make the dome a structure
+       * rather than a blob.
        */
+      g.strokeStyle = rgba(mixHex(bell, '#ffffff', 0.3), clamp(0.3 * level, 0, 1));
+      g.lineWidth = Math.max(0.6, R * 0.025);
+      g.beginPath();
+      for (let c = -2; c <= 2; c++) {
+        const off = (c / 2.4) * bellW * 0.85;
+        g.moveTo(now.x + off * 0.18, crown + bellH * 0.12);
+        g.quadraticCurveTo(now.x + off * 0.8, now.y - bellH * 0.55, now.x + off, now.y + bellH * 0.1);
+      }
+      g.stroke();
+
+      /**
+       * The gonads: four horseshoes in a cross round the middle of a moon
+       * jelly, which seen from the side and a little below merge into one
+       * soft, flattened blush of denser tissue in the middle of the bell —
+       * the first thing a light through it picks out. Drawn as that blush:
+       * outlined, the horseshoes are letters, and drawn as separate lobes the
+       * two at the sides are a pair of eyes looking back at you.
+       */
+      {
+        const gy = now.y - bellH * 0.58;
+        const blush = g.createRadialGradient(now.x, gy, 0, now.x, gy, bellW * 0.5);
+        const ink = mixHex(rimColour, '#ffffff', 0.2);
+        const strength = clamp(0.32 * level * (0.6 + 0.4 * p.glow), 0, 1);
+        blush.addColorStop(0, rgba(ink, strength));
+        blush.addColorStop(0.6, rgba(ink, strength * 0.55));
+        blush.addColorStop(1, rgba(ink, 0));
+        g.fillStyle = blush;
+        g.beginPath();
+        g.ellipse(now.x, gy, bellW * 0.5, bellH * 0.28, 0, 0, TAU);
+        g.fill();
+      }
+
       if (p.glow > 0) {
-        const flash = Math.max(0, 1 - Math.abs(now.phase - SQUEEZE * 1.4) * 4);
-        g.strokeStyle = rgba(rimColour, clamp((0.35 + flash * 0.6) * p.glow * p.level, 0, 1));
-        g.lineWidth = Math.max(0.8, R * 0.09);
+        // The margin itself, where the light organs are.
+        g.strokeStyle = rgba(rimColour, clamp((0.45 + flash * 0.5) * p.glow * level, 0, 1));
+        g.lineWidth = Math.max(0.8, R * 0.08);
         g.beginPath();
         g.moveTo(now.x - bellW, now.y);
-        g.quadraticCurveTo(now.x, now.y + bellH * 0.85, now.x + bellW, now.y);
+        g.quadraticCurveTo(now.x - bellW * 0.45, now.y + bellH * 0.7, now.x, now.y + bellH * 0.42);
+        g.quadraticCurveTo(now.x + bellW * 0.45, now.y + bellH * 0.7, now.x + bellW, now.y);
         g.stroke();
-        glow(g, now.x, now.y - bellH * 0.2, R * (1.6 + flash), rimColour,
-          clamp((0.12 + flash * 0.3) * p.glow * p.level, 0, 1));
+        glow(g, now.x, now.y - bellH * 0.35, R * (2 + flash), rimColour,
+          clamp((0.14 + flash * 0.25) * glowing * level, 0, 1));
       }
     }
 
@@ -2218,28 +2976,74 @@ const outlineX = new Float64Array(BODY_SEGMENTS * 2 + 2);
 const outlineY = new Float64Array(BODY_SEGMENTS * 2 + 2);
 
 /**
+ * A small generator for one splash, reseeded from numbers rather than built
+ * from a string key — so a splash is the same droplets in every tab and on
+ * every frame it is in the air, and drawing one allocates nothing.
+ */
+let splashState = 0;
+
+function seedSplash(a, b, c) {
+  splashState = (Math.imul(a + 1, 2654435761) ^ Math.imul(b + 7, 2246822519) ^ Math.imul(c + 13, 3266489917)) >>> 0;
+}
+
+function splashRand() {
+  splashState = (Math.imul(splashState ^ (splashState >>> 15), 2246822519) + 0x9e3779b9) >>> 0;
+  return splashState / 4294967296;
+}
+
+/**
  * Spray, thrown on real ballistics from a point on the surface.
  *
  * Droplets leave at the speed the animal arrived with, and then they are
  * simply projectiles: the same `g` the leap used, so the water that comes off
  * a big leap hangs in the air longer than the water off a small one without
  * anything being told to.
+ *
+ * Each droplet is drawn as the streak it makes in a thirtieth of a second
+ * rather than as a dot: a dot a pixel or two across is invisible on a house,
+ * and what an eye or a camera actually sees of flying water is streaks. They
+ * all go into one path, so a splash is one stroke. And under them, where the
+ * animal broke the surface, a patch of white water spreading out along it
+ * and fading — the part of a splash you can see from across a road.
  */
-function splash(g, x, y, age, life, spread, speed, gPx, colour, strength, key) {
+function splash(g, x, y, age, life, spread, speed, gPx, colour, strength, foam) {
   if (age < 0 || age >= life || strength <= 0) return;
-  const rng = makeRng(key);
   const fade = 1 - age / life;
-  g.fillStyle = rgba(colour, clamp(fade * fade * strength, 0, 1));
-  for (let i = 0; i < 18; i++) {
-    const a = -Math.PI / 2 + (rng() - 0.5) * spread;
-    const v = speed * (0.35 + rng() * 1.15);
-    const dx = Math.cos(a) * v * age;
-    const dy = Math.sin(a) * v * age + 0.5 * gPx * age * age;
-    const r = Math.max(0.5, speed * 0.012 * (0.4 + rng()));
+
+  if (foam > 0) {
+    const wide = speed * (0.22 + age * 0.9);
+    const white = g.createRadialGradient(x, y, 0, x, y, wide);
+    white.addColorStop(0, rgba('#ffffff', clamp(fade * fade * strength * foam, 0, 1)));
+    white.addColorStop(0.35, rgba(colour, clamp(fade * strength * foam * 0.45, 0, 1)));
+    white.addColorStop(1, rgba(colour, 0));
+    g.save();
+    g.translate(x, y);
+    g.scale(1, 0.24);
+    g.translate(-x, -y);
+    g.fillStyle = white;
     g.beginPath();
-    g.arc(x + dx, y + dy, r, 0, TAU);
+    g.arc(x, y, wide, 0, TAU);
     g.fill();
+    g.restore();
   }
+
+  g.strokeStyle = rgba(mixHex(colour, '#ffffff', 0.4), clamp(fade * strength * 1.4, 0, 1));
+  g.lineWidth = Math.max(1, speed * 0.012);
+  g.lineCap = 'round';
+  g.beginPath();
+  for (let i = 0; i < 18; i++) {
+    const a = -Math.PI / 2 + (splashRand() - 0.5) * spread;
+    const v = speed * (0.35 + splashRand() * 1.15);
+    const vx = Math.cos(a) * v;
+    const vy = Math.sin(a) * v + gPx * age;
+    const px = x + vx * age;
+    const py = y + Math.sin(a) * v * age + 0.5 * gPx * age * age;
+    // Below the surface it is water again.
+    if (py > y + 2) continue;
+    g.moveTo(px, py);
+    g.lineTo(px - vx * 0.035, py - vy * 0.035);
+  }
+  g.stroke();
 }
 
 const dolphins = {
@@ -2524,15 +3328,19 @@ const dolphins = {
         const outX = wrapped(unwrappedX - p.speed * launch, spanX, bbox.x - length * 1.25);
         const inX = wrapped(unwrappedX - p.speed * reentry, spanX, bbox.x - length * 1.25);
         const life = 0.6;
+        const who = hashString(shape.id);
+        seedSplash(who, i, leapIndex * 3);
         splash(g, outX, surfacePx, launch, life, 1.5,
           Math.max(L * 0.9, entrySpeed * 0.55), gPx, belly,
-          p.spray * p.level * 0.5, `dolphin-out:${shape.id}:${i}:${leapIndex}`);
-        splash(g, inX, surfacePx, reentry, life, 2.2,
+          p.spray * p.level * 0.5, 0.5);
+        seedSplash(who, i, leapIndex * 3 + 1);
+        splash(g, inX, surfacePx, reentry, life * 1.3, 2.2,
           Math.max(L * 1.1, entrySpeed * 0.7), gPx, belly,
-          p.spray * p.level * 0.6, `dolphin-in:${shape.id}:${i}:${leapIndex}`);
+          p.spray * p.level * 0.6, 0.8);
         // The blow: a narrow plume of exhaled breath, straight up, slow.
+        seedSplash(who, i, leapIndex * 3 + 2);
         splash(g, outX, surfacePx, launch, 0.75, 0.5, L * 0.35, gPx * 0.15,
-          '#ffffff', p.spray * p.level * 0.35, `dolphin-blow:${shape.id}:${i}:${leapIndex}`);
+          '#ffffff', p.spray * p.level * 0.35, 0);
       }
     }
 

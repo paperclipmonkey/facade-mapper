@@ -6,8 +6,8 @@
  * binds it to `fx`. Import declarations are hoisted, which is why appending it
  * doesn't shift the line numbers in your syntax errors.
  *
- * Everything here is also reachable through the draw context, so `fx` is a
- * convenience, not a requirement.
+ * Only some of it also arrives on the draw context — `rng`, `noise`, the
+ * shape's own sampler — so for a user effect `fx` is the way in to the rest.
  */
 
 // Re-exported below as part of `fx`; also imported into scope for the helpers

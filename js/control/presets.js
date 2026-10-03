@@ -45,10 +45,28 @@ const HALLOWEEN = () => [
     name: 'Night wash',
     params: { color: '#12061f', color2: '#000814', blend: 0.4, level: 0.35, vignette: 0.4 },
   }),
-  layer('fog', {
-    name: 'Ground fog',
-    softness: 6,
-    params: { color: '#7a8ba0', density: 0.22, scale: 2.4, speed: 0.04, swirl: 0.6, height: 0.45 },
+  /**
+   * Somebody is home, and they are watching.
+   *
+   * Candles on the sill of every window, and a figure in front of them. The
+   * figure is drawn at level 0, which means it brings no room of its own: it
+   * is cut out of whatever light is already in the glass, so the candles are
+   * what it stands against. That only works if it sits directly on top of the
+   * candles at full opacity, with no blend and no softness — any of those
+   * sends a layer through a buffer of its own, where there is nothing to cut.
+   *
+   * Under everything else, so the embers, the blood and the heartbeat round
+   * the frames all draw over the windows rather than under them.
+   */
+  layer('candle', {
+    name: 'Candles in the windows',
+    tags: ['window'],
+    params: { temperature: 1850, level: 0.85, jitter: 0.35, rate: 3.5, gust: 0.25, hotspot: 0.6, candles: 3 },
+  }),
+  layer('silhouette', {
+    name: 'Somebody at the window',
+    tags: ['window'],
+    params: { level: 0, figure: 'person', speed: 0.12, size: 0.85, direction: 'right', pause: 0.3 },
   }),
   // Embers, candles and lightning take a blackbody temperature rather than a
   // colour — see docs/effects.md. 2200 K is a bright ember, 1050 K a dying one.
@@ -77,17 +95,13 @@ const HALLOWEEN = () => [
     blend: 'lighter',
     params: { color: '#ff8a2b', mode: 'both', rate: 0.34, wave: 'sine', min: 0.12, max: 0.85, width: 16, grow: 0.012 },
   }),
-  layer('pulse', {
-    name: 'Window pulse',
-    tags: ['window'],
-    blend: 'lighter',
-    opacity: 0.5,
-    stagger: 0.35,
-    params: { color: '#8b00ff', mode: 'outline', rate: 0.5, wave: 'heartbeat', min: 0, max: 0.9, width: 8 },
-  }),
-  // Brick, then the thing behind the brick, then the rot growing over both.
-  // The order is the whole point: Breach has to draw after the wall it is
-  // taking apart, and the vine has to draw after the wall it is climbing.
+  // No heartbeat round the window frames any more. It was there to give the
+  // windows something to do once the old candles came out, and with somebody
+  // standing in the candlelight they have their one idea already: a purple
+  // outline on top of that is a second, and reads as decoration.
+  //
+  // Brick, then the thing behind the brick. The order is the whole point:
+  // Breach has to draw after the wall it is taking apart.
   //
   // On a rendered or painted house this bottom layer is doing more work than
   // anything else in the preset — it is what turns a flat pale wall into a
@@ -161,6 +175,23 @@ const HALLOWEEN = () => [
       leaves: 0.35, wind: 0.7, gust: 1.1, wilt: 0.85, fly: 1.4, seed: 13,
     },
   }),
+  /**
+   * The fog goes over the house, not under it.
+   *
+   * It used to be the second layer, which put the brick on top of it: the
+   * wall is opaque, so a bank of fog at the foot of it was painted out by the
+   * wall it was lying against, and the only fog left was in the strip of
+   * garden. It belongs in front of everything but the lightning, which lights
+   * it.
+   */
+  layer('fog', {
+    name: 'Ground fog',
+    softness: 6,
+    // Thinner than it was: density now means thickness, and at the old value
+    // the bank came up a third of the house as a milky sheet. At this one it
+    // lies along the foot of the wall and tears into veils above it.
+    params: { color: '#7a8ba0', density: 0.15, scale: 2.4, speed: 0.04, swirl: 0.6, height: 0.45 },
+  }),
   layer('lightning', {
     name: 'Storm',
     params: { temperature: 9000, rate: 5, flash: 0.5, bolt: true, thickness: 5, branches: 4, flickers: 3, duration: 0.5 },
@@ -181,16 +212,21 @@ const CHRISTMAS = () => [
   // gutter, and the bulbs need to read as sitting in front of them.
   layer('icicles', {
     name: 'Icicles',
-    tags: ['roof', 'trim'],
+    // The gutter, and only the gutter. `trim` also takes in the arch over the
+    // door, which is where MERRY CHRISTMAS is written, and ice hanging off a
+    // curve of lettering hangs straight through the letters.
+    tags: ['roof'],
     opacity: 0.8,
-    // Width 3, not 4: the slider stops at 3, `resolveParams` clamps to it, and
-    // 3 is therefore what this preset has always actually drawn. Storing 4 only
-    // meant a number nothing could produce and a slider pinned at its end.
-    params: { color: '#bfe9ff', tip: '#ffffff', count: 26, length: 0.1, variation: 0.65, width: 3, grow: 0, glint: 0.45 },
+    // More of them and thinner, now that they are drawn as ice: a few long
+    // ones among a lot of stubs is what a gutter grows, and at the old width
+    // each one was a fat white wedge.
+    params: { color: '#bfe9ff', tip: '#ffffff', count: 40, length: 0.12, variation: 0.7, width: 1.6, grow: 0, glint: 0.45 },
   }),
   layer('fairy-lights', {
     name: 'Roofline lights',
-    tags: ['roof', 'trim'],
+    // The gutter only, for the same reason as the icicles: a string of bulbs
+    // laid along the arch is laid along the lettering on it.
+    tags: ['roof'],
     // 'cycle' keeps every bulb lit and rotates the colours. A chase looks
     // livelier close up but leaves most of the roofline dark from the street.
     params: { pattern: 'cycle', palette: 'multi', spacing: 44, size: 11, glow: 2.6, speed: 0.35, level: 1, wire: 0.12 },
@@ -210,7 +246,10 @@ const CHRISTMAS = () => [
     name: 'Warm rooms',
     tags: ['window'],
     blend: 'lighter',
-    opacity: 0.45,
+    // Fuller than the other starters' rooms, because this one has frost and a
+    // string of lights over it: at the level they use, the glass behind the
+    // frost read as grey rather than as somebody's front room.
+    opacity: 0.65,
     stagger: 0.9,
     params: { color: '#ffcf8a', color2: '#5a2a00', gradient: 'radial', level: 0.8, softness: 0.4 },
     // A slow, gentle breath so the rooms feel occupied rather than lit by a lamp.
@@ -255,6 +294,13 @@ const CHRISTMAS = () => [
     params: {
       color: '#ffffff', count: 420, speed: 80, wind: 24, gust: 0.6, size: 5, depth: 0.75,
       blur: 0.7, flutter: 0.6, collide: true, buildUp: 2.2, maxDepth: 20, shed: 0.35,
+      // The things on a house snow actually lies on. Left to settle on every
+      // traced shape it drew a white line round the garden path and lay along
+      // the tops of the feature panel and the planter - rectangles nobody can
+      // see, so the snow on them floated on the wall. Not `trim` either: that
+      // takes in the arch over the door, and a drift along the top of the arch
+      // is a line struck through MERRY CHRISTMAS.
+      colliderTag: 'roof, wall, chimney, window, door',
     },
   }),
   /**
@@ -397,8 +443,13 @@ const BIRTHDAY = () => [
       // leaving the inspector's dropdown showing nothing at all. This is the
       // face it has always rendered in. A genuinely rounded one would mean
       // adding a stack to FONT_STACKS, which is a decision rather than a fix.
+      //
+      // A deeper yellow with a dark keyline and a small glow, not the pale
+      // yellow, pink edge and big halo it had: under the saturated grade the
+      // bright faces bloomed into each other and the name read as a white
+      // bar. The keyline is what holds the letters apart.
       content: 'HAPPY BIRTHDAY', mode: 'box', font: 'system', weight: '900', size: 0.62,
-      tracking: 0.04, color: '#ffd166', stroke: '#ff3b6b', strokeWidth: 4, glow: 20,
+      tracking: 0.04, color: '#ffc43d', stroke: '#7a0a26', strokeWidth: 6, glow: 8,
       align: 'centre', animation: 'wave', speed: 0.7, amount: 0.3,
     },
   }),
@@ -603,11 +654,17 @@ const BONFIRE_NIGHT = () => [
   layer('catherine-wheel', {
     name: 'Wheels on the windows',
     tags: ['window'],
-    stagger: 3.5,
+    // Three seconds apart and three seconds dark between burns: with four
+    // windows that is nearly always one winding up, one going full tilt and
+    // one dying, which is the picture. The stagger only started doing anything
+    // when the wheel learnt to take it off its own clock — before that every
+    // window lit at the same instant, and the twelve-second gap these values
+    // replaced was chosen against a stagger that was not there.
+    stagger: 3,
     params: {
       radius: 0.42, nozzles: 2, hotTemp: 3000, coolTemp: 1100, tint: '#ffe9b0',
       sparks: 150, speed: 520, life: 0.7, gravity: 520, spin: 3.2, spinUp: 1.4,
-      duration: 9, repeat: 12, size: 3.2,
+      duration: 9, repeat: 3, size: 3.2,
     },
   }),
   layer('sparkler', {
@@ -705,13 +762,18 @@ const CYBERPUNK = () => [
     name: 'Tube round the door',
     tags: ['door'],
     params: {
-      color: '#ff2a6d', core: '#fff0f6', width: 10, inset: 7, color2: '#05d9e8',
+      // Inset far enough that the second tube reads as a second tube: the
+      // effect will not put two tubes closer than glass can be bent, and at 7
+      // they merged into one white band.
+      color: '#ff2a6d', core: '#fff0f6', width: 10, inset: 14, color2: '#05d9e8',
       flicker: 0.45, buzz: 1.2, dead: 0, chase: 0, spill: 0.9, level: 1,
     },
   }),
   layer('neon', {
     name: 'Strip along the gutter',
-    tags: ['roof', 'trim'],
+    // The gutter only: `trim` also takes in the arch over the door, and the
+    // strip's chase ran straight through the sign hanging from it.
+    tags: ['roof'],
     params: {
       color: '#c400ff', core: '#f7e6ff', width: 6, inset: 0, color2: '#05d9e8',
       flicker: 0.15, buzz: 0.8, dead: 0, chase: 0.12, spill: 0.4, level: 0.9,
@@ -926,7 +988,7 @@ export const PRESETS = [
     id: 'halloween',
     name: 'Halloween starter',
     description:
-      'Candlelit windows with something looking out, blood down the door, rot creeping over the brickwork, ground fog and a storm overhead.',
+      'Candlelit windows with somebody looking out, something breaking out through the brickwork, blood down the door, ground fog and a storm overhead.',
     tagsUsed: ['window', 'door', 'planter'],
     grade: 'haunted',
     build: HALLOWEEN,
@@ -935,7 +997,7 @@ export const PRESETS = [
     id: 'christmas',
     name: 'Christmas starter',
     description:
-      'Chasing lights along the roofline, warm windows behind frosted glass, icicles, a candy-cane door, snow and a Santa fly-past.',
+      'Coloured lights and icicles along the gutter, warm windows behind frosted glass, a candy-cane door, snow settling on the ledges and a Santa fly-past.',
     tagsUsed: ['roof', 'window', 'door', 'planter'],
     grade: 'frost',
     build: CHRISTMAS,
@@ -1101,8 +1163,11 @@ export const DEMO_BURSTS = [
     tags: ['door'],
     hold: 3.2,
     params: {
+      // Each bat is cut out of its own patch of backlight, so it is the glow
+      // that makes it visible at all on a dark wall; bigger bats with a little
+      // less of it read as bats rather than as a cloud of violet.
       color: '#140a16', count: 46, duration: 2.8, speed: 950, spread: 0.62, aim: -90,
-      size: 44, flap: 9, rise: -240, wander: 0.55, glow: 0.6, glowColor: '#8b00ff',
+      size: 56, flap: 9, rise: -240, wander: 0.55, glow: 0.5, glowColor: '#8b00ff',
     },
   },
   {
@@ -1227,7 +1292,7 @@ const PRESET_BURSTS = {
       hold: 2.4,
       params: {
         color: '#05d9e8', color2: '#ff2a6d', rings: 4, duration: 2,
-        reach: 2000, width: 22, flash: 1.6, gap: 0.09,
+        reach: 1300, width: 22, flash: 1.6, gap: 0.09,
       },
     },
     {
@@ -1290,8 +1355,10 @@ const PRESET_BURSTS = {
       tags: ['roof'],
       hold: 4,
       params: {
+        // Reach is how far the rings get in their lifetime. At 2600 they left
+        // the house in half a second and spent the rest of it off the frame.
         color: '#a8f0ff', color2: '#0b4a72', rings: 3, duration: 3.4,
-        reach: 2600, width: 60, flash: 0.5, gap: 0.22,
+        reach: 1300, width: 60, flash: 0.5, gap: 0.22,
       },
     },
   ],

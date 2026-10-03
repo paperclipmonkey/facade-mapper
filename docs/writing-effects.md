@@ -44,7 +44,9 @@ export default {
 | `world` | `{ w, h }` of the virtual frame. |
 | `shapes(tag, excludeId)` | Every other shape in the project, for collisions. Filter by tag, and pass `shape.id` so you don't collide with yourself. |
 | `depth` | The building's real surface, from an imported depth scan, or `null`. See below. |
-| `fx` | The helper namespace, below. |
+
+And `fx`, the helper namespace below — not on the context, but in scope in every
+module the Code panel compiles, as if you had imported it yourself.
 
 Parameter types: `range`, `number`, `color`, `bool`, `select` (with `options`),
 `text`, `media`, and `camera` — a picker over the attached cameras, which
@@ -102,8 +104,9 @@ on the effect object. The layer list will then say so instead of leaving somebod
 to work out why nothing is on the wall.
 ## The `fx` namespace
 
-Everything here is also reachable through the draw context; `fx` is a
-convenience. Source: [`js/effects/lib.js`](../js/effects/lib.js).
+In scope in any effect you write in the Code panel: the app binds it when it
+compiles the module, which is why the starter template can call `fx.glow` with
+no import. Source: [`js/effects/lib.js`](../js/effects/lib.js).
 
 **Maths and colour** — `clamp`, `lerp`, `smoothstep`, `frac`, `TAU`, `hexToRgb`,
 `rgba`, `mixHex`, `makeRng`, `hashString`, `boundingBox`, `polygonCentroid`,

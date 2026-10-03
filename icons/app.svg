@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- The house from the logo, reduced until it still reads at sixteen pixels:
+       a hipped roof, a wall, and the light on it. -->
+  <defs>
+    <linearGradient id="lit" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd59a" />
+      <stop offset="1" stop-color="#ff6a1a" />
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="#14171f" />
+  <path d="M4 15.5 L10 8 L22 8 L28 15.5 Z" fill="#8b96ad" />
+  <rect x="6.5" y="15.5" width="19" height="11" fill="#2b3142" />
+  <rect x="9" y="18" width="5" height="3.5" fill="url(#lit)" />
+  <rect x="18" y="18" width="5" height="3.5" fill="url(#lit)" />
+  <rect x="14.25" y="21" width="3.5" height="5.5" fill="#ff8a2b" />
+</svg>

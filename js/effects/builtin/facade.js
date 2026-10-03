@@ -17,7 +17,7 @@
  * own effects through `fx`.
  */
 
-import { rgba, clamp, lerp, TAU, mixHex } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, mixHex, hexToRgb } from '../../core/math.js';
 import { blackbodyBytes } from '../color.js';
 import {
   collectObstacles,
@@ -26,7 +26,7 @@ import {
   findFreeSpot,
   nearestSurface,
 } from '../obstacles.js';
-import { glow, offscreen } from '../lib.js';
+import { glow, offscreen, curveThrough } from '../lib.js';
 
 /** Where the obstacle list is spelled out. Shared so the wording stays consistent. */
 const OBSTACLE_PARAM = {
@@ -78,7 +78,7 @@ const bounce = {
     { key: 'color', type: 'color', label: 'Colour', default: '#ff9d3c' },
     { key: 'color2', type: 'color', label: 'Second colour', default: '#4cc2ff' },
     { key: 'count', type: 'range', label: 'Balls', default: 12, min: 1, max: 60, step: 1 },
-    { key: 'size', type: 'range', label: 'Radius', default: 14, min: 2, max: 90, step: 0.5 },
+    { key: 'size', type: 'range', label: 'Radius', default: 17, min: 2, max: 90, step: 0.5 },
     { key: 'speed', type: 'range', label: 'Speed', default: 260, min: 20, max: 1400, step: 10 },
     { key: 'gravity', type: 'range', label: 'Gravity', default: 0, min: 0, max: 2500, step: 10 },
     { key: 'restitution', type: 'range', label: 'Bounciness', default: 0.96, min: 0.3, max: 1, step: 0.01 },
@@ -88,11 +88,12 @@ const bounce = {
     { key: 'glow', type: 'range', label: 'Glow', default: 1.6, min: 0, max: 4, step: 0.05 },
   ],
   init() {
-    return { balls: [] };
+    return { balls: [], hits: [] };
   },
-  step({ p, shape, dt, rng, state, shapes }) {
+  step({ p, shape, t, dt, rng, state, shapes }) {
     const container = shape;
     if (container.bbox.w <= 2 || container.bbox.h <= 2) return;
+    if (!state.hits) state.hits = [];
 
     const obstacles = collectObstacles(shapes, p.obstacles, container.id);
     const radius = Math.max(1, p.size);
@@ -141,7 +142,9 @@ const bounce = {
         b.x += b.vx * h;
         b.y += b.vy * h;
 
-        deflect(container.points, b, radius, p.restitution, true);
+        const vx0 = b.vx;
+        const vy0 = b.vy;
+        let hit = deflect(container.points, b, radius, p.restitution, true);
         for (const o of obstacles) {
           const { bbox } = o;
           // Cheap rejection first: most balls are nowhere near most windows.
@@ -151,7 +154,30 @@ const bounce = {
             || b.y < bbox.y - radius
             || b.y > bbox.y + bbox.h + radius
           ) continue;
-          deflect(o.points, b, radius, p.restitution, false);
+          hit = deflect(o.points, b, radius, p.restitution, false) || hit;
+        }
+        /**
+         * Where it struck, and how hard.
+         *
+         * The surface normal is the direction the velocity was pushed in, so
+         * the contact is a radius back along it from the ball. Recorded here,
+         * in the simulation, so every tab flashes the same impacts; and only
+         * for a real blow, not for a ball resting on a sill with gravity
+         * pressing it down on every substep.
+         */
+        if (hit) {
+          const dvx = b.vx - vx0;
+          const dvy = b.vy - vy0;
+          const blow = Math.hypot(dvx, dvy);
+          if (blow > Math.max(40, p.speed * 0.25)) {
+            const nx = dvx / blow;
+            const ny = dvy / blow;
+            b.hitAt = t;
+            b.hitNx = nx;
+            b.hitNy = ny;
+            state.hits.push({ x: b.x - nx * radius, y: b.y - ny * radius, nx, ny, t, tint: b.tint, blow });
+            if (state.hits.length > 48) state.hits.shift();
+          }
         }
       }
 
@@ -175,52 +201,158 @@ const bounce = {
       b.trail.push(b.x, b.y);
       if (b.trail.length > trailLength * 2) b.trail.splice(0, b.trail.length - trailLength * 2);
     }
+    // A flash outlives its own drawing by a little, and no more.
+    while (state.hits.length && t - state.hits[0].t > 1) state.hits.shift();
   },
-  draw({ g, p, shape, state }) {
+  /**
+   * Balls of light, and what they do when they hit something.
+   *
+   * Each ball is an emitter: a bright sphere with a near-white highlight and,
+   * round it, a halo falling off as an inverse square — both baked once per
+   * tint and stamped, rather than two gradients built for every ball every
+   * frame. Behind it, its path as a tapering streak of the same light, which
+   * is what a bright thing moving fast looks like on a photograph and what a
+   * line of constant width did not.
+   *
+   * And every ricochet shows. The simulation records where and how hard each
+   * ball struck, and here that becomes a burst of light at the contact with a
+   * half-ring thrown off the surface, and the ball squashed against it for a
+   * moment. Without it a ball turning round beside a window frame looks like a
+   * ball that changed its mind; with it, it bounced *off the window*, which is
+   * the whole idea of the effect.
+   */
+  draw({ g, p, shape, t, state, stable }) {
     const container = shape;
     if (container.bbox.w <= 2 || container.bbox.h <= 2) return;
     const radius = Math.max(1, p.size);
+    const sprites = ballSprites(state, stable);
+    const alpha = g.globalAlpha;
+    const tintOf = (v) => sprites[Math.round(clamp(v, 0, 1) * (BALL_TINTS - 1))];
 
     g.save();
     g.clip(container.path);
     g.globalCompositeOperation = 'lighter';
 
-    for (const b of state.balls) {
-      const colour = mixHex(p.color, p.color2, b.tint);
-
-      if (p.trail > 0 && b.trail.length >= 4) {
-        g.strokeStyle = rgba(colour, 0.22 * p.trail);
-        g.lineWidth = radius * 0.9;
-        g.lineCap = 'round';
-        g.lineJoin = 'round';
-        g.beginPath();
-        g.moveTo(b.trail[0], b.trail[1]);
-        for (let i = 2; i < b.trail.length; i += 2) g.lineTo(b.trail[i], b.trail[i + 1]);
-        g.stroke();
-      }
-
-      if (p.glow > 0) glow(g, b.x, b.y, radius * (1.8 + p.glow * 2.2), colour, 0.55);
-
-      const core = g.createRadialGradient(
-        b.x - radius * 0.3,
-        b.y - radius * 0.3,
-        0,
-        b.x,
-        b.y,
-        radius
-      );
-      core.addColorStop(0, '#ffffff');
-      core.addColorStop(0.35, colour);
-      core.addColorStop(1, rgba(colour, 0.15));
-      g.fillStyle = core;
+    for (const hit of state.hits || []) {
+      const age = t - hit.t;
+      if (age < 0 || age > 0.4) continue;
+      const k = age / 0.4;
+      const strength = clamp(hit.blow / (Math.max(20, p.speed) * 1.4), 0.35, 1);
+      const sp = tintOf(hit.tint);
+      const fade = (1 - k) * (1 - k) * strength;
+      const cx = hit.x + hit.nx * radius * 0.4;
+      const cy = hit.y + hit.ny * radius * 0.4;
+      const burst = radius * (1.6 + 2.4 * k);
+      g.globalAlpha = alpha * fade;
+      g.drawImage(sp.halo, cx - burst, cy - burst, burst * 2, burst * 2);
+      const facing = Math.atan2(hit.ny, hit.nx);
+      g.strokeStyle = sp.ring;
+      g.lineWidth = Math.max(1.5, radius * 0.2 * (1 - k));
       g.beginPath();
-      g.arc(b.x, b.y, radius, 0, TAU);
-      g.fill();
+      g.arc(hit.x, hit.y, radius * (0.8 + 3.2 * k), facing - 1.25, facing + 1.25);
+      g.stroke();
     }
 
+    for (const b of state.balls) {
+      const sp = tintOf(b.tint);
+
+      // Every other point of the path: a stamp is wider than the gap between
+      // two, so the streak is still continuous, at half the fill.
+      if (p.trail > 0 && b.trail.length >= 4) {
+        const n = b.trail.length / 2;
+        for (let i = (n - 2) % 2; i < n - 1; i += 2) {
+          const k = (i + 1) / n;
+          const s = radius * (0.5 + 1.1 * k);
+          g.globalAlpha = alpha * clamp(p.trail * 0.85 * k ** 1.5, 0, 1);
+          g.drawImage(sp.halo, b.trail[i * 2] - s, b.trail[i * 2 + 1] - s, s * 2, s * 2);
+        }
+      }
+
+      // The halo is an inverse square, all but gone six tenths of the way out
+      // across its sprite, so it is stamped only as wide as the light it
+      // carries: any wider and the rest of the square pays for nothing.
+      if (p.glow > 0) {
+        const s = radius * (1.2 + p.glow * 1.5);
+        g.globalAlpha = alpha * Math.min(1, 0.55 + 0.12 * p.glow);
+        g.drawImage(sp.halo, b.x - s, b.y - s, s * 2, s * 2);
+      }
+
+      // Over its own light rather than added to it: added, the peak of the
+      // halo underneath took every ball to white, whatever its colour.
+      g.globalCompositeOperation = 'source-over';
+      g.globalAlpha = alpha;
+      const since = b.hitAt === undefined ? 1 : t - b.hitAt;
+      const squash = since >= 0 && since < 0.14 ? 0.3 * (1 - since / 0.14) : 0;
+      const r = radius * 1.08;
+      if (squash > 0) {
+        g.save();
+        g.translate(b.x, b.y);
+        g.rotate(Math.atan2(b.hitNy, b.hitNx));
+        g.scale(1 - squash, 1 + squash * 0.6);
+        g.drawImage(sp.ball, -r, -r, r * 2, r * 2);
+        g.restore();
+      } else {
+        g.drawImage(sp.ball, b.x - r, b.y - r, r * 2, r * 2);
+      }
+      g.globalCompositeOperation = 'lighter';
+    }
+
+    g.globalAlpha = alpha;
     g.restore();
   },
 };
+
+/** Tints baked along the two ball colours: enough that nobody sees the steps. */
+const BALL_TINTS = 8;
+
+/**
+ * Each tint's ball and halo, baked once per pair of colours.
+ *
+ * The halo is the inverse-square falloff every light in the library uses, so
+ * a ball, its streak and its flashes all come from one sprite. The ball is a
+ * lit sphere of light — a near-white highlight up and to the left, its own
+ * colour across the middle, a little deeper at the rim — so it is a ball and
+ * not a dot.
+ */
+function ballSprites(state, stable) {
+  const key = `${stable.color}|${stable.color2}`;
+  if (state.spriteKey === key && state.sprites) return state.sprites;
+  state.spriteKey = key;
+  const sprites = [];
+  for (let k = 0; k < BALL_TINTS; k++) {
+    const colour = mixHex(stable.color, stable.color2, k / (BALL_TINTS - 1));
+    const { r, g: gr, b } = hexToRgb(colour);
+
+    const halo = offscreen(128, 128);
+    {
+      const c = halo.getContext('2d');
+      const light = c.createRadialGradient(64, 64, 0, 64, 64, 64);
+      for (const [at, fall] of [[0, 1], [0.08, 0.807], [0.18, 0.446], [0.35, 0.163], [0.6, 0.046], [1, 0]]) {
+        light.addColorStop(at, `rgba(${r},${gr},${b},${fall})`);
+      }
+      c.fillStyle = light;
+      c.fillRect(0, 0, 128, 128);
+    }
+
+    const ball = offscreen(64, 64);
+    {
+      const c = ball.getContext('2d');
+      const body = c.createRadialGradient(22, 21, 0, 32, 32, 31);
+      body.addColorStop(0, '#ffffff');
+      body.addColorStop(0.22, mixHex(colour, '#ffffff', 0.6));
+      body.addColorStop(0.65, colour);
+      body.addColorStop(1, mixHex(colour, '#000000', 0.3));
+      c.fillStyle = body;
+      c.beginPath();
+      c.arc(32, 32, 31, 0, TAU);
+      c.fill();
+    }
+
+    sprites.push({ halo, ball, ring: rgba(mixHex(colour, '#ffffff', 0.35), 0.7) });
+  }
+  state.sprites = sprites;
+  return sprites;
+}
 
 /* ------------------------------------------------------------------ *
  * Serpent
@@ -244,6 +376,64 @@ function rayClearance(container, obstacles, x, y, angle, look, steps = 5) {
   return 1;
 }
 
+/**
+ * One snake's body this frame: points along it from the snout, their normals,
+ * widths and distances. Module scratch rather than state — it is rebuilt from
+ * nothing every frame and remembers nothing — grown when a longer snake needs
+ * it.
+ */
+const SNAKE = { cap: 0 };
+function snakeScratch(n) {
+  if (SNAKE.cap < n) {
+    const cap = Math.max(128, n * 2);
+    SNAKE.cap = cap;
+    for (const k of ['bx', 'by', 'nx', 'ny', 'w', 's', 'xs', 'ys']) SNAKE[k] = new Float64Array(cap);
+  }
+  return SNAKE;
+}
+
+/**
+ * How wide a snake is, `s` along it from the snout, in pixels.
+ *
+ * A head, a neck and a body. The head is its own bulge — round at the snout,
+ * widest a little behind the eyes and wider than the neck behind it — because
+ * a snake whose front end is the same width as the rest of it is a hose with
+ * one end cut off. The body holds its girth for nearly half its length and
+ * then thins over the rest to a fine tail. Proportioned off the body's own
+ * length as well as its thickness, so a short fat snake still has a head
+ * rather than being all head.
+ */
+function snakeWidth(s, L, half) {
+  const hh = Math.min(half, L / 7);
+  const head = s < hh * 2.8 ? 1.28 * hh * Math.sin(Math.PI * (s / (hh * 2.8))) ** 0.62 : 0;
+  const u = s / Math.max(1, L);
+  const tail = u < 0.45 ? 1 : Math.max(0.04, (1 - (u - 0.45) / 0.55) ** 1.15);
+  const body = half * clamp((s - hh * 1.4) / (hh * 3), 0, 1) ** 0.5 * tail;
+  return Math.max(head, body);
+}
+
+/**
+ * The outline between two points on the body, at a fraction of its width:
+ * down one flank and back up the other, as curves through the points rather
+ * than straight segments between them, so at two metres across a wall it is a
+ * body and not a polygon.
+ */
+function traceSnake(g, S, i0, i1, f, ox = 0, oy = 0) {
+  let k = 0;
+  for (let i = i0; i <= i1; i++, k++) {
+    S.xs[k] = S.bx[i] + S.nx[i] * S.w[i] * f + ox;
+    S.ys[k] = S.by[i] + S.ny[i] * S.w[i] * f + oy;
+  }
+  curveThrough(g, S.xs, S.ys, k, { move: true });
+  k = 0;
+  for (let i = i1; i >= i0; i--, k++) {
+    S.xs[k] = S.bx[i] - S.nx[i] * S.w[i] * f + ox;
+    S.ys[k] = S.by[i] - S.ny[i] * S.w[i] * f + oy;
+  }
+  curveThrough(g, S.xs, S.ys, k);
+  g.closePath();
+}
+
 const serpent = {
   id: 'serpent',
   name: 'Serpent',
@@ -252,8 +442,8 @@ const serpent = {
   description:
     'A snake that explores the wall, steering around the windows and doors rather than crossing them. Long and slow reads as a python; short and quick as something scuttling.',
   params: [
-    { key: 'color', type: 'color', label: 'Head', default: '#7bf58a' },
-    { key: 'color2', type: 'color', label: 'Tail', default: '#0b3a1c' },
+    { key: 'color', type: 'color', label: 'Head', default: '#a9c95b' },
+    { key: 'color2', type: 'color', label: 'Tail', default: '#4b5a26' },
     { key: 'count', type: 'range', label: 'Snakes', default: 2, min: 1, max: 8, step: 1 },
     { key: 'length', type: 'range', label: 'Length', default: 380, min: 60, max: 1600, step: 10 },
     { key: 'thickness', type: 'range', label: 'Thickness', default: 22, min: 2, max: 90, step: 0.5 },
@@ -346,96 +536,463 @@ const serpent = {
       }
     }
   },
+  /**
+   * A snake, seen from above on the wall.
+   *
+   * The body is laid out afresh each frame at fixed distances back from the
+   * *live* head, along the path the head has taken. Drawing the recorded path
+   * itself moved the whole snake forward in jumps of one sample every time a
+   * sample was recorded; laid out from the head, every point of it slides
+   * along continuously — and a mark a fixed distance behind the snout is the
+   * same scale of the same snake from one frame to the next, so the markings
+   * travel with the body instead of sliding along it.
+   *
+   * Then it is drawn the way the tentacles are, as fills of one outline at
+   * fractions of its width: a shadow on the wall, a dark edge, the body in its
+   * colours from head to tail, dark saddles across the back, a paler ridge down
+   * the spine and a sheen on the side towards the light. Then the head: eyes
+   * with a glint in them, and a forked tongue that flicks out every few
+   * seconds, which is the one gesture nothing but a snake makes. The glow, if
+   * any, is a soft halo in the head colour — enough to lift it off a dark wall,
+   * not so much that it reads as a lit tube.
+   */
   draw({ g, p, shape, t, state }) {
     const container = shape;
     if (container.bbox.w <= 2 || container.bbox.h <= 2) return;
     const half = Math.max(1, p.thickness) / 2;
+    const want = Math.max(10, p.length);
+    // Points a fraction of the width apart: close enough that the curves
+    // through them are smooth at any thickness, and no more.
+    const gap = Math.max(2.5, half * 0.5);
 
     g.save();
     g.clip(container.path);
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    const alpha = g.globalAlpha;
 
     for (const s of state.snakes) {
-      const body = s.hist;
-      if (body.length < 3) continue;
-      const n = body.length;
+      const hist = s.hist;
+      if (!hist.length) continue;
+      const S = snakeScratch(Math.ceil(want / gap) + 2);
 
-      const outline = [];
-      const back = [];
-      for (let i = 0; i < n; i++) {
-        const a = body[Math.max(0, i - 1)];
-        const b = body[Math.min(n - 1, i + 1)];
-        const tx = b.x - a.x;
-        const ty = b.y - a.y;
-        const len = Math.hypot(tx, ty) || 1;
-        const nx = -ty / len;
-        const ny = tx / len;
-        const u = i / (n - 1);
-        // Elliptical taper: full at the head, to a point at the tail.
-        const w = half * Math.sqrt(Math.max(0, 1 - u * u));
-        outline.push({ x: body[i].x + nx * w, y: body[i].y + ny * w });
-        back.push({ x: body[i].x - nx * w, y: body[i].y - ny * w });
+      // Walk back along the path from the live head, a point every `gap`.
+      let n = 0;
+      let px = s.x;
+      let py = s.y;
+      let carried = 0;
+      S.bx[0] = px;
+      S.by[0] = py;
+      S.s[0] = 0;
+      n = 1;
+      for (let i = 0; i < hist.length && n < S.cap; i++) {
+        const qx = hist[i].x;
+        const qy = hist[i].y;
+        let seg = Math.hypot(qx - px, qy - py);
+        while (seg > 0 && carried + seg >= gap && n < S.cap) {
+          const f = (gap - carried) / seg;
+          px += (qx - px) * f;
+          py += (qy - py) * f;
+          seg -= gap - carried;
+          carried = 0;
+          S.bx[n] = px;
+          S.by[n] = py;
+          S.s[n] = S.s[n - 1] + gap;
+          n++;
+          if (S.s[n - 1] >= want) break;
+        }
+        if (S.s[n - 1] >= want) break;
+        carried += seg;
+        px = qx;
+        py = qy;
       }
+      if (n < 4) continue;
+      const L = S.s[n - 1];
+      for (let i = 0; i < n; i++) {
+        const a = Math.max(0, i - 1);
+        const b = Math.min(n - 1, i + 1);
+        const tx = S.bx[b] - S.bx[a];
+        const ty = S.by[b] - S.by[a];
+        const len = Math.hypot(tx, ty) || 1;
+        S.nx[i] = -ty / len;
+        S.ny[i] = tx / len;
+        S.w[i] = snakeWidth(S.s[i], L, half);
+      }
+      const hx = S.bx[0];
+      const hy = S.by[0];
+      const tx = S.bx[n - 1];
+      const ty = S.by[n - 1];
 
-      const path = new Path2D();
-      path.moveTo(outline[0].x, outline[0].y);
-      for (let i = 1; i < outline.length; i++) path.lineTo(outline[i].x, outline[i].y);
-      for (let i = back.length - 1; i >= 0; i--) path.lineTo(back[i].x, back[i].y);
-      path.closePath();
-
-      const tail = body[n - 1];
-      const skin = g.createLinearGradient(body[0].x, body[0].y, tail.x, tail.y);
-      skin.addColorStop(0, p.color);
-      skin.addColorStop(1, p.color2);
+      // Its shadow on the wall, down and to the right of the light.
+      g.fillStyle = 'rgba(0,0,0,0.32)';
+      g.beginPath();
+      traceSnake(g, S, 0, n - 1, 1, half * 0.3, half * 0.5);
+      g.fill();
 
       if (p.glow > 0) {
-        g.save();
         g.globalCompositeOperation = 'lighter';
-        g.strokeStyle = rgba(p.color, 0.1 * p.glow);
-        g.lineWidth = half * 2 + p.thickness * p.glow * 0.5;
-        g.lineJoin = 'round';
-        g.lineCap = 'round';
+        g.strokeStyle = rgba(p.color, Math.min(1, 0.07 * p.glow));
+        g.lineWidth = half * 2 + half * p.glow * 0.8;
         g.beginPath();
-        g.moveTo(body[0].x, body[0].y);
-        for (let i = 1; i < n; i++) g.lineTo(body[i].x, body[i].y);
+        g.moveTo(hx, hy);
+        for (let i = 1; i < n; i++) g.lineTo(S.bx[i], S.by[i]);
         g.stroke();
-        g.restore();
+        g.globalCompositeOperation = 'source-over';
       }
 
+      g.fillStyle = mixHex(mixHex(p.color, p.color2, 0.5), '#000000', 0.72);
+      g.beginPath();
+      traceSnake(g, S, 0, n - 1, 1);
+      g.fill();
+
+      const skin = g.createLinearGradient(hx, hy, tx, ty);
+      skin.addColorStop(0, mixHex(p.color, '#000000', 0.12));
+      skin.addColorStop(0.4, mixHex(p.color, p.color2, 0.35));
+      skin.addColorStop(1, p.color2);
       g.fillStyle = skin;
-      g.fill(path);
+      g.beginPath();
+      traceSnake(g, S, 0, n - 1, 0.84);
+      g.fill();
+
+      /**
+       * Saddles across the back, a little over a body-width apart and each
+       * its own length, from just behind the head to most of the way down
+       * the tail. Placed by distance from the snout, so each one stays on its
+       * own stretch of the snake as it slides along its path.
+       */
+      {
+        const hh = Math.min(half, L / 7);
+        g.beginPath();
+        let at = hh * 3.6;
+        let k = 0;
+        while (at < L * 0.92) {
+          const long = half * (0.85 + 0.5 * marking(k, s.seed));
+          const mid = at + long / 2;
+          // A saddle rather than a band: longest down the spine and shorter
+          // towards the flanks, as two overlapping stretches of the outline.
+          // Square-ended bands right across made a barber's pole.
+          for (const [reach, f] of [[0.66, 0.3], [0.5, 0.58], [0.3, 0.82]]) {
+            const i0 = Math.max(1, Math.round((mid - long * reach) / gap));
+            const i1 = Math.min(n - 2, Math.round((mid + long * reach) / gap));
+            if (i1 > i0) traceSnake(g, S, i0, i1, f);
+          }
+          at += long + half * (1.1 + 0.6 * marking(k + 11, s.seed));
+          k++;
+        }
+        g.fillStyle = rgba(mixHex(p.color2, '#000000', 0.5), 0.72);
+        g.fill();
+      }
+
+      const ridge = g.createLinearGradient(hx, hy, tx, ty);
+      ridge.addColorStop(0, rgba(mixHex(p.color, '#fffbe6', 0.35), 0.4));
+      ridge.addColorStop(1, rgba(mixHex(p.color2, '#fffbe6', 0.2), 0.2));
+      g.fillStyle = ridge;
+      g.beginPath();
+      traceSnake(g, S, 0, n - 1, 0.3);
+      g.fill();
+
+      // A sheen, on whichever flank faces the light more squarely.
+      g.beginPath();
+      const stop = Math.floor(n * 0.82);
+      for (let i = 2; i < stop; i++) {
+        const off = S.w[i] * 0.42 * (S.nx[i] * -0.53 + S.ny[i] * -0.85);
+        const x = S.bx[i] + S.nx[i] * off;
+        const y = S.by[i] + S.ny[i] * off;
+        if (i === 2) g.moveTo(x, y);
+        else g.lineTo(x, y);
+      }
+      g.strokeStyle = rgba('#fbfff0', 0.3);
+      g.lineWidth = Math.max(1.2, half * 0.16);
+      g.stroke();
+
+      // The head: forwards is from the second point to the snout.
+      const fx0 = hx - S.bx[1];
+      const fy0 = hy - S.by[1];
+      const flen = Math.hypot(fx0, fy0) || 1;
+      const fx = fx0 / flen;
+      const fy = fy0 / flen;
+      const hh = Math.min(half, L / 7);
+
+      /**
+       * The tongue: out for a third of a second every two or three, as a pure
+       * function of the clock so every tab flicks it together, forked at the
+       * end. Thin, but not under the projector floor.
+       */
+      const period = 2.2 + 1.3 * marking(3, s.seed);
+      const phase = (t + s.seed * 0.37) % period;
+      if (phase < 0.34) {
+        const out = Math.sin((phase / 0.34) * Math.PI);
+        const len = hh * 1.9 * out;
+        const ex = hx + fx * len;
+        const ey = hy + fy * len;
+        const flick = Math.sin(t * 40 + s.seed) * 0.25;
+        g.strokeStyle = '#c8203c';
+        g.lineWidth = Math.max(1.6, hh * 0.12);
+        g.beginPath();
+        g.moveTo(hx, hy);
+        g.lineTo(ex, ey);
+        for (const side of [1, -1]) {
+          const a = Math.atan2(fy, fx) + side * 0.45 + flick;
+          g.moveTo(ex, ey);
+          g.lineTo(ex + Math.cos(a) * hh * 0.45 * out, ey + Math.sin(a) * hh * 0.45 * out);
+        }
+        g.stroke();
+      }
 
       if (p.eyes) {
-        const a = body[0];
-        const b = body[Math.min(n - 1, 2)];
-        const len = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-        const fx = (a.x - b.x) / len;
-        const fy = (a.y - b.y) / len;
-        const ex = -fy;
-        const ey = fx;
-        g.fillStyle = '#0b0006';
-        for (const sideSign of [1, -1]) {
-          g.beginPath();
-          g.arc(
-            a.x + fx * half * 0.15 + ex * half * 0.42 * sideSign,
-            a.y + fy * half * 0.15 + ey * half * 0.42 * sideSign,
-            Math.max(0.8, half * 0.17),
-            0,
-            TAU
-          );
-          g.fill();
+        const at = Math.min(n - 1, Math.max(1, Math.round((hh * 0.85) / gap)));
+        const r = Math.max(1.6, hh * 0.21);
+        const glint = Math.max(0.6, r * 0.32);
+        const ox = S.nx[at] * S.w[at] * 0.55;
+        const oy = S.ny[at] * S.w[at] * 0.55;
+        g.fillStyle = '#0b0a06';
+        g.beginPath();
+        g.moveTo(S.bx[at] + ox + r, S.by[at] + oy);
+        g.arc(S.bx[at] + ox, S.by[at] + oy, r, 0, TAU);
+        g.moveTo(S.bx[at] - ox + r, S.by[at] - oy);
+        g.arc(S.bx[at] - ox, S.by[at] - oy, r, 0, TAU);
+        g.fill();
+        g.fillStyle = rgba('#fffbe0', 0.85);
+        g.beginPath();
+        for (const side of [1, -1]) {
+          const gx = S.bx[at] + ox * side - r * 0.3;
+          const gy = S.by[at] + oy * side - r * 0.35;
+          g.moveTo(gx + glint, gy);
+          g.arc(gx, gy, glint, 0, TAU);
         }
+        g.fill();
       }
+      g.globalAlpha = alpha;
     }
 
     g.restore();
   },
 };
 
+/** A draw in [0, 1] for the k-th marking on the snake seeded `seed`. */
+function marking(k, seed) {
+  const v = Math.sin(k * 12.9898 + seed * 78.233) * 43758.5453;
+  return v - Math.floor(v);
+}
+
 /* ------------------------------------------------------------------ *
  * Creeping vine
  * ------------------------------------------------------------------ */
 
 const VINE_STEPS_PER_FRAME = 26;
+
+/* ------------------------------------------------------------------ *
+ * Ivy, baked
+ * ------------------------------------------------------------------ */
+
+/** Sprite size, and the leaf's length inside it, in sprite pixels. */
+const LEAF_PX = 80;
+const LEAF_L = 60;
+/** Where the stalk meets the stem, in the sprite: the stamp's origin. */
+const LEAF_ORIGIN_X = 6;
+
+/**
+ * Ages at which a stretch of stem is gone over again, wider and woodier.
+ *
+ * Ivy's runners go out as green shoots the width of a pencil lead and are
+ * wrist-thick grey wood by the time anybody notices the plant, and the
+ * thickening is most of what says *old* about it. In seconds, because a show
+ * is an evening: a stem a minute old has had its whole life.
+ */
+const STEM_AGES = [5, 16, 40];
+const STEM_WIDEN = [1.5, 2.1, 2.7];
+const STEM_WOOD = [0.45, 0.65, 0.85];
+/** Stretches of stem remembered for that, and how long one is before it is logged. */
+const STEM_LOG = 8192;
+const STEM_LOG_PX = 10;
+
+/** Log a stretch of new stem, for `step` to thicken as it ages. */
+function logStem(state, x0, y0, x1, y1, width, t) {
+  const i = state.logHead;
+  const o = i * 6;
+  state.log[o] = x0;
+  state.log[o + 1] = y0;
+  state.log[o + 2] = x1;
+  state.log[o + 3] = y1;
+  state.log[o + 4] = width;
+  state.log[o + 5] = t;
+  state.logStage[i] = 0;
+  state.logHead = (i + 1) % STEM_LOG;
+  if (state.logCount < STEM_LOG) state.logCount++;
+}
+
+/**
+ * One leaf into the plant's bitmap: its shadow a fixed way down and to the
+ * right, then the leaf, both turned to `angle` about the point the stalk meets
+ * the stem.
+ */
+function stampLeaf(c, ivy, x, y, angle, len, kind, tone) {
+  const s = len / LEAF_L;
+  const size = LEAF_PX * s;
+  const ox = LEAF_ORIGIN_X * s;
+  const drop = len * 0.13;
+  c.save();
+  c.translate(x + drop * 0.55, y + drop * 0.85);
+  c.rotate(angle);
+  c.drawImage(ivy.shadows[kind], -ox, -size / 2, size, size);
+  c.restore();
+  c.save();
+  c.translate(x, y);
+  c.rotate(angle);
+  c.drawImage(ivy.leaves[kind * 3 + tone].canvas, -ox, -size / 2, size, size);
+  c.restore();
+}
+
+/**
+ * An ivy leaf's outline into the current path: stalk at the origin, blade
+ * pointing along +x, `len` from stalk to tip.
+ *
+ * Polar about the point where the veins meet, as a sum of lobes — which is
+ * what a palmate leaf is — sampled into straight segments fine enough at
+ * sprite scale not to show. Three kinds: the five-lobed juvenile leaf
+ * everybody draws, a three-lobed one, and the unlobed heart of the adult
+ * plant. A wall of only the first reads as a pattern.
+ */
+function ivyOutline(c, kind, len) {
+  const cx = len * 0.36;
+  const R = len - cx;
+  // Broad lobes and shallow sinuses. Narrow ones with deep cuts between them
+  // make every leaf on the wall a star.
+  const lobes = kind === 0
+    ? [[0, 1, 0.55], [1.2, 0.84, 0.5], [-1.2, 0.84, 0.5], [2.25, 0.58, 0.5], [-2.25, 0.58, 0.5]]
+    : kind === 1
+      ? [[0, 1, 0.62], [1.3, 0.78, 0.58], [-1.3, 0.78, 0.58]]
+      : null;
+  const N = 64;
+  for (let k = 0; k <= N; k++) {
+    const th = -Math.PI + (k / N) * TAU;
+    let f;
+    if (lobes) {
+      f = kind === 0 ? 0.42 : 0.46;
+      for (const [at, amp, wide] of lobes) {
+        let d = th - at;
+        if (d > Math.PI) d -= TAU;
+        if (d < -Math.PI) d += TAU;
+        // A broad triangle with a blunt tip, which is what an ivy lobe is. A
+        // bell made every lobe a spike, and a leaf of five spikes is a star;
+        // a round cap made them clubs, and the wall turned to clover.
+        const u = Math.abs(d / (wide * 1.5));
+        if (u < 1) f = Math.max(f, amp * (1 - u ** 1.5));
+      }
+      // Pulled in towards the stalk, where the two basal lobes meet it.
+      const back = Math.PI - Math.abs(th);
+      f *= 1 - 0.5 * Math.exp(-((back / 0.3) ** 2));
+    } else {
+      // The adult leaf: no lobes, a long point, and a notch where the stalk
+      // goes in.
+      const back = Math.PI - Math.abs(th);
+      f = (0.2 + 0.8 * ((1 + Math.cos(th)) / 2) ** 2) * (1 - 0.5 * Math.exp(-((back / 0.32) ** 2)));
+      f = Math.max(f, 0.52 * Math.exp(-(((Math.abs(th) - 1.85) / 0.85) ** 2)));
+    }
+    const x = cx + Math.cos(th) * R * f;
+    const y = Math.sin(th) * R * f * 0.92;
+    if (k === 0) c.moveTo(x, y);
+    else c.lineTo(x, y);
+  }
+  c.closePath();
+}
+
+/**
+ * The leaves the plant is grown from: three shapes in three ages, and a soft
+ * shadow for each shape.
+ *
+ * Every leaf is shaded rather than flat — a lit half and a darker half, as if
+ * folded slightly along the midrib, a gloss, pale veins and a darker edge —
+ * because a mat of flat green shapes is a camouflage print, and a mat of
+ * leaves each with its own light and dark is a plant. Lighter for younger:
+ * ivy comes out a bright fresh green and darkens to nearly black as it ages.
+ *
+ * The shadow is a sprite of its own rather than part of the leaf, so it can
+ * be stamped a fixed distance down and to the right whichever way the leaf is
+ * turned. Baked into the leaf, it would turn with it, and a plant whose every
+ * leaf casts its shadow a different way reads as noise.
+ */
+function bakeIvy(color, tip) {
+  const tones = [mixHex(color, '#000000', 0.3), mixHex(color, '#000000', 0.08), mixHex(color, tip, 0.45)];
+  const leaves = [];
+  const shadows = [];
+  for (let kind = 0; kind < 3; kind++) {
+    const shadow = offscreen(LEAF_PX, LEAF_PX);
+    {
+      const c = shadow.getContext('2d');
+      c.translate(LEAF_ORIGIN_X, LEAF_PX / 2);
+      // Four nested copies, each a little bigger and fainter: a soft edge
+      // without a filter.
+      for (const [grow, a] of [[1.12, 0.12], [1.06, 0.16], [1, 0.22], [0.92, 0.26]]) {
+        c.save();
+        c.translate(LEAF_L * 0.36, 0);
+        c.scale(grow, grow);
+        c.translate(-LEAF_L * 0.36, 0);
+        c.beginPath();
+        ivyOutline(c, kind, LEAF_L);
+        c.fillStyle = `rgba(0,0,0,${a})`;
+        c.fill();
+        c.restore();
+      }
+    }
+    shadows.push(shadow);
+
+    for (const tone of tones) {
+      const canvas = offscreen(LEAF_PX, LEAF_PX);
+      const c = canvas.getContext('2d');
+      c.translate(LEAF_ORIGIN_X, LEAF_PX / 2);
+      const R = LEAF_L * 0.64;
+      const cx = LEAF_L * 0.36;
+
+      // The stalk, from the stem into the blade.
+      c.strokeStyle = mixHex(tone, '#3d3324', 0.35);
+      c.lineWidth = 2.2;
+      c.lineCap = 'round';
+      c.beginPath();
+      c.moveTo(-LEAF_ORIGIN_X + 1, 0);
+      c.lineTo(cx, 0);
+      c.stroke();
+
+      c.beginPath();
+      ivyOutline(c, kind, LEAF_L);
+      c.fillStyle = tone;
+      c.fill();
+
+      const fold = c.createLinearGradient(0, -R, 0, R);
+      fold.addColorStop(0, 'rgba(255,255,226,0.2)');
+      fold.addColorStop(0.48, 'rgba(255,255,226,0.04)');
+      fold.addColorStop(0.52, 'rgba(0,0,0,0.06)');
+      fold.addColorStop(1, 'rgba(0,0,0,0.3)');
+      c.fillStyle = fold;
+      c.fill();
+
+      const gloss = c.createRadialGradient(cx + R * 0.25, -R * 0.28, 0, cx + R * 0.25, -R * 0.28, R * 0.6);
+      gloss.addColorStop(0, 'rgba(255,255,240,0.24)');
+      gloss.addColorStop(1, 'rgba(255,255,240,0)');
+      c.fillStyle = gloss;
+      c.fill();
+
+      c.strokeStyle = rgba(mixHex(tone, '#000000', 0.5), 0.8);
+      c.lineWidth = 1.6;
+      c.lineJoin = 'round';
+      c.stroke();
+
+      // Veins, from where the stalk meets the blade out towards each lobe.
+      c.strokeStyle = rgba(mixHex(tone, '#e9f2cf', 0.5), 0.75);
+      c.lineWidth = 1.3;
+      c.beginPath();
+      const veins = kind === 0 ? [0, 1.15, -1.15, 2.2, -2.2] : kind === 1 ? [0, 1.25, -1.25] : [0, 0.8, -0.8, 1.7, -1.7];
+      for (const a of veins) {
+        const reach = a === 0 ? 0.9 : kind === 2 ? 0.55 : 0.72;
+        c.moveTo(cx, 0);
+        c.lineTo(cx + Math.cos(a) * R * reach, Math.sin(a) * R * reach * 0.92);
+      }
+      c.stroke();
+      leaves.push({ canvas, kind });
+    }
+  }
+  return { leaves, shadows };
+}
 
 /**
  * Growth that spreads across a wall and goes *round* the openings.
@@ -461,6 +1018,20 @@ const VINE_STEPS_PER_FRAME = 26;
  * centimetres added this frame are ever stroked. A wall covered in ivy costs
  * one drawImage, which is the only reason this can run alongside everything
  * else in a show.
+ *
+ * What it accumulates is a plant, not a line drawing of one. A thin green
+ * stroke with the odd green oval beside it is, at house scale, scribble:
+ * nothing about it says leaf, and nothing about it changes with age. So the
+ * leaves are baked once — ivy's three shapes in three ages of green,
+ * each shaded, veined and edged — and stamped in alternating clusters along
+ * every runner with a soft shadow under each, so where runners cross and
+ * recross, the leaves pile into a mat with depth in it. And the stems age: a
+ * runner goes out as a thin green-brown shoot and is gone over again, wider
+ * and woodier, at a few ages, from *behind* everything already drawn, so the
+ * oldest runners — the ones that came up from the ground first — end up as the
+ * thick bare trunks the rest of the plant hangs off. Every bit of that is a
+ * stroke or a stamp into the same bitmap, so a frame still costs one
+ * drawImage plus the few centimetres it adds.
  */
 const vine = {
   id: 'vine',
@@ -487,7 +1058,7 @@ const vine = {
     // lives at, with new shoots replacing the oldest growth for ever.
     { key: 'wither', type: 'range', label: 'Wither', default: 0.25, min: 0, max: 1, step: 0.01 },
     { key: 'regrow', type: 'range', label: 'Start again after (s)', default: 0, min: 0, max: 600, step: 5 },
-    { key: 'leaves', type: 'range', label: 'Leaves', default: 0.4, min: 0, max: 1, step: 0.01 },
+    { key: 'leaves', type: 'range', label: 'Leaves', default: 0.65, min: 0, max: 1, step: 0.01 },
     OBSTACLE_PARAM,
     { key: 'shootGlow', type: 'range', label: 'Shoot glow', default: 1, min: 0, max: 4, step: 0.05 },
   ],
@@ -547,6 +1118,19 @@ const vine = {
       /** Openings something has already reached, so the pull towards them stops. */
       state.wrapped = new Set();
       state.plantedAt = t;
+
+      state.ivy = bakeIvy(stable.color, stable.tip);
+      /**
+       * Every stretch of stem laid, and when — so it can be gone over again,
+       * wider and woodier, as it ages. A ring: on a plant that has covered the
+       * wall the oldest stretches drop off the end, by which time they have
+       * had every thickening they are going to get.
+       */
+      state.log = new Float32Array(STEM_LOG * 6);
+      state.logStage = new Uint8Array(STEM_LOG);
+      state.logCount = 0;
+      state.logHead = 0;
+      state.logScan = 0;
     }
 
     const c = state.ctx;
@@ -573,6 +1157,9 @@ const vine = {
       state.carry = 0;
       state.wrapped.clear();
       state.plantedAt = t;
+      state.logCount = 0;
+      state.logHead = 0;
+      state.logScan = 0;
     };
 
     // A hard cycle, for a show that wants the wall to be taken over, cleared,
@@ -651,6 +1238,12 @@ const vine = {
       width,
       life: (bbox.w + bbox.h) * (0.15 + rng() * 0.35),
       sinceLeaf: 0,
+      /** Which side the next leaf comes off: they alternate, as ivy's do. */
+      leafSide: rng() < 0.5 ? 1 : -1,
+      /** Where the stretch of stem being logged began, and how long it is. */
+      segX: x,
+      segY: y,
+      segLen: 0,
       tint: rng(),
       /** How brightly this shoot is lit, eased so it never pops on or off. */
       glow: 0,
@@ -806,6 +1399,8 @@ const vine = {
       state.carry -= steps * stepPx;
     }
 
+    /** Which openings a leaf this step was stamped close enough to hang over, as bits. */
+    let overhang = 0;
     while (steps > 0 && state.grown < budget && state.tips.length) {
       steps -= 1;
       for (let i = state.tips.length - 1; i >= 0; i--) {
@@ -910,28 +1505,55 @@ const vine = {
           continue;
         }
 
-        c.strokeStyle = mixHex(p.color, '#000000', tip.tint * 0.35);
-        c.lineWidth = Math.max(0.4, p.thickness * tip.width);
+        // A new shoot, only as wide as this runner is, and already halfway to
+        // bark: the wood thickens out from behind it later — see below the
+        // loop — and a bright green line down the middle of a brown stem
+        // reads as a tube rather than a branch.
+        const width = Math.max(0.4, p.thickness * tip.width);
+        c.strokeStyle = mixHex(mixHex(p.color, '#5d4b3a', 0.35), '#000000', tip.tint * 0.25);
+        c.lineWidth = width;
         c.beginPath();
         c.moveTo(tip.x, tip.y);
         c.lineTo(nx, ny);
         c.stroke();
+        tip.segLen += stepPx;
+        if (tip.segLen >= STEM_LOG_PX) {
+          logStem(state, tip.segX, tip.segY, nx, ny, width, t);
+          tip.segX = nx;
+          tip.segY = ny;
+          tip.segLen = 0;
+        }
 
+        /**
+         * Leaves, a few at a node, alternating sides.
+         *
+         * Stamped from the baked set, each with its shadow first — so a leaf
+         * laid over an older one darkens it, and the mat builds up in depth
+         * rather than in flat green — and each turned out from the stem and
+         * then let droop a little, because a leaf on a wall hangs.
+         */
         tip.sinceLeaf += stepPx;
-        const leafGap = lerp(200, 26, p.leaves);
+        const leafGap = lerp(64, 9, p.leaves) * Math.sqrt(Math.max(0.5, p.thickness) / 3.5);
         if (p.leaves > 0 && tip.sinceLeaf > leafGap) {
-          tip.sinceLeaf = 0;
-          const side = rng() < 0.5 ? 1 : -1;
-          const a = tip.angle + side * (0.7 + rng() * 0.5);
-          const r = p.thickness * (1.6 + rng() * 1.4);
-          c.save();
-          c.translate(nx, ny);
-          c.rotate(a);
-          c.fillStyle = mixHex(p.color, p.tip, 0.25 + rng() * 0.3);
-          c.beginPath();
-          c.ellipse(r * 0.9, 0, r, r * 0.55, 0, 0, TAU);
-          c.fill();
-          c.restore();
+          tip.sinceLeaf = rng() * leafGap * 0.4;
+          const count = 1 + (rng() < 0.4 ? 1 : 0) + (rng() < 0.12 ? 1 : 0);
+          for (let k = 0; k < count; k++) {
+            tip.leafSide = -tip.leafSide;
+            let a = tip.angle + tip.leafSide * (0.8 + rng() * 0.8);
+            a += angleDelta(a, Math.PI / 2) * 0.3;
+            const len = p.thickness * (6 + rng() * 4) * (k ? 0.72 : 1);
+            const pick = rng();
+            const kind = pick < 0.5 ? 0 : pick < 0.8 ? 1 : 2;
+            const age = rng();
+            const tone = age < 0.55 ? 0 : age < 0.86 ? 1 : 2;
+            stampLeaf(c, state.ivy, nx, ny, a, len, kind, tone);
+            for (let o = 0; o < obstacles.length && o < 31; o++) {
+              const b = obstacles[o].bbox;
+              if (nx > b.x - len && nx < b.x + b.w + len && ny > b.y - len && ny < b.y + b.h + len) {
+                overhang |= 1 << o;
+              }
+            }
+          }
         }
 
         tip.x = nx;
@@ -969,6 +1591,70 @@ const vine = {
       }
     }
 
+    /**
+     * Age the wood.
+     *
+     * A few stretches of logged stem a step, round-robin, and any that have
+     * reached their next age are drawn again — wider, browner — *behind*
+     * everything already on the bitmap, with `destination-over`. So the stem
+     * thickens out from under its own leaves rather than being painted across
+     * them, and the oldest runners, the ones that came up from the ground
+     * first, end up as the thick grey trunks the rest of the plant hangs off.
+     *
+     * Drawn at the strength the withering would have left that stretch at by
+     * now, so wood laid behind old, faded growth does not come back brighter
+     * than the growth it belongs to.
+     */
+    if (state.logCount) {
+      const checks = Math.min(state.logCount, 160);
+      c.save();
+      c.globalCompositeOperation = 'destination-over';
+      c.lineCap = 'round';
+      for (let k = 0; k < checks; k++) {
+        const i = state.logScan;
+        state.logScan = (state.logScan + 1) % state.logCount;
+        const stage = state.logStage[i];
+        if (stage >= STEM_AGES.length) continue;
+        const o = i * 6;
+        const age = t - state.log[o + 5];
+        if (age < STEM_AGES[stage]) continue;
+        state.logStage[i] = stage + 1;
+        const left = p.wither > 0 ? Math.exp(-0.06 * p.wither * age) : 1;
+        c.strokeStyle = rgba(mixHex(p.color, '#5d4b3a', STEM_WOOD[stage]), left);
+        c.lineWidth = state.log[o + 4] * STEM_WIDEN[stage];
+        c.beginPath();
+        c.moveTo(state.log[o], state.log[o + 1]);
+        c.lineTo(state.log[o + 2], state.log[o + 3]);
+        c.stroke();
+      }
+      c.restore();
+    }
+
+    /**
+     * And cut the openings back out, when a leaf may have reached one.
+     *
+     * The runners keep off the glass by construction; a leaf hangs a leaf's
+     * length off its runner, so one laid beside a frame lies across it. Erasing
+     * the opening from the bitmap leaves the leaf cut cleanly at the frame,
+     * which reads as ivy growing up to a window rather than over it — and
+     * costs one fill of the openings actually reached, on the steps that
+     * reach one, rather than a clip every frame.
+     */
+    if (overhang) {
+      c.save();
+      c.globalCompositeOperation = 'destination-out';
+      c.fillStyle = '#000000';
+      c.beginPath();
+      for (let o = 0; o < obstacles.length && o < 31; o++) {
+        const pts = obstacles[o].points;
+        if (!(overhang & (1 << o)) || pts.length < 3) continue;
+        c.moveTo(pts[0].x, pts[0].y);
+        for (let k = 1; k < pts.length; k++) c.lineTo(pts[k].x, pts[k].y);
+        c.closePath();
+      }
+      c.fill();
+      c.restore();
+    }
   },
   /**
    * The plant is grown into an offscreen bitmap by `step` and blitted here.

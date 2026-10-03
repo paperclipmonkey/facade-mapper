@@ -31,7 +31,7 @@
 
 import { rgba, clamp, TAU, mixHex, makeRng, smoothstep } from '../../core/math.js';
 import { collectObstacles } from '../obstacles.js';
-import { offscreen } from '../lib.js';
+import { offscreen, curveThrough } from '../lib.js';
 
 /** Shared with the facade family so the wording stays consistent. */
 const OBSTACLE_PARAM = {
@@ -74,6 +74,12 @@ function petalGeometry(radius, petals) {
  */
 function tracePetal(c, dist, petal, angle, squash = 1) {
   c.beginPath();
+  petalPath(c, dist, petal, angle, squash);
+  c.fill();
+}
+
+/** The same petal, into the current path only, for a caller that fills and strokes it. */
+function petalPath(c, dist, petal, angle, squash = 1) {
   c.ellipse(
     Math.cos(angle) * dist,
     Math.sin(angle) * dist,
@@ -83,7 +89,6 @@ function tracePetal(c, dist, petal, angle, squash = 1) {
     0,
     TAU
   );
-  c.fill();
 }
 
 /**
@@ -435,21 +440,38 @@ const flowers = {
     }
     g.globalAlpha = alpha;
 
-    // Every stem, then every head: a head must never be behind the stem of the
-    // flower in front of it.
+    /**
+     * Every stem, then every head: a head must never be behind the stem of the
+     * flower in front of it.
+     *
+     * A stem is two strokes — a darker one, and a lighter one inside it nudged
+     * towards the light — which is a round stalk rather than a line, and is
+     * curved through its joints rather than bent at them. It thins as the
+     * plant dries, and a dead one flops: see `bendOf`.
+     */
+    const dead = smoothstep(0.35, 0.95, wilt);
+    const stemDark = mixHex(green, '#000000', 0.38);
+    const stemLit = mixHex(green, '#fffbe8', 0.2);
     for (const f of bunch) {
       const len = Math.max(6, p.height * bbox.h * f.lenVar);
       traceStem(f, len, leanOf(f, p), bendOf(f, p, wilt, breeze, t));
 
-      g.strokeStyle = green;
-      g.lineWidth = Math.max(2.5, headR * f.sizeVar * 0.13);
+      const stemW = Math.max(3.4, headR * f.sizeVar * 0.2) * (1 - 0.15 * dead);
+      g.strokeStyle = stemDark;
+      g.lineWidth = stemW;
       g.beginPath();
-      g.moveTo(f.jx[0], f.jy[0]);
-      for (let k = 1; k <= STEM_JOINTS; k++) g.lineTo(f.jx[k], f.jy[k]);
+      curveThrough(g, f.jx, f.jy, STEM_JOINTS + 1, { move: true });
       g.stroke();
+      g.save();
+      g.translate(-stemW * 0.16, -stemW * 0.08);
+      g.strokeStyle = stemLit;
+      g.lineWidth = stemW * 0.42;
+      g.beginPath();
+      curveThrough(g, f.jx, f.jy, STEM_JOINTS + 1, { move: true });
+      g.stroke();
+      g.restore();
 
       if (p.leaves > 0) {
-        g.fillStyle = green;
         // Two leaves, on opposite sides, a third and two thirds of the way up.
         for (const [at, side] of [[3, 1], [6, -1]]) {
           const along = Math.atan2(f.jy[at] - f.jy[at - 1], f.jx[at] - f.jx[at - 1]);
@@ -461,11 +483,13 @@ const flowers = {
           // what "wilted" looks like at a distance.
           const held = along + side * 1.0;
           const hangs = Math.PI / 2 + side * 0.25;
+          // And it dries narrow and curled, rather than staying a fresh leaf
+          // shape in a dead colour.
+          const wide = leafLen * 0.34 * (1 - 0.55 * dead);
           g.save();
           g.translate(f.jx[at], f.jy[at]);
           g.rotate(held + (hangs - held) * wilt * 0.85);
-          leafPath(g, leafLen, leafLen * 0.34);
-          g.fill();
+          drawLeaf(g, leafLen, wide, green, dead);
           g.restore();
         }
       }
@@ -481,8 +505,23 @@ const flowers = {
       // points — and nods further forward the more it wilts.
       g.translate(f.jx[STEM_JOINTS], f.jy[STEM_JOINTS]);
       g.rotate(f.tipAngle + Math.PI / 2 + wilt * 0.8);
-      g.fillStyle = colour;
 
+      /**
+       * Petals, shaded from the middle out.
+       *
+       * Flat-filled, a head of petals is a disc with a scalloped edge, and in
+       * a bright colour the bloom downstream turns it into a glowing blob. So
+       * each petal is dark where it joins the flower, its own colour across the
+       * middle and lighter at the rim — one gradient for the whole head, in the
+       * head's own frame — and has a darker edge, which is what lets the eye
+       * count them. Still exactly one ellipse a petal.
+       */
+      const shade = g.createRadialGradient(0, 0, r * 0.1, 0, 0, r * 1.02);
+      shade.addColorStop(0, mixHex(colour, '#000000', 0.5));
+      shade.addColorStop(0.45, colour);
+      shade.addColorStop(1, mixHex(colour, '#fff6ea', 0.1));
+      const rim = rgba(mixHex(colour, '#000000', 0.55), 0.6);
+      g.lineWidth = Math.max(1, r * 0.05);
       for (let k = 0; k < petals; k++) {
         if (wilt >= f.drop[k]) continue;
         // The last of the travel before a petal lets go is spent curling: it
@@ -490,19 +529,110 @@ const flowers = {
         // than blinking out of it.
         const curl = smoothstep(f.drop[k] - 0.16, f.drop[k], wilt);
         const squash = f.petalVar[k] * (1 - curl * 0.55);
-        tracePetal(g, dist, petal, f.spin + (k / petals) * TAU, squash);
+        g.beginPath();
+        petalPath(g, dist, petal, f.spin + (k / petals) * TAU, squash);
+        g.fillStyle = shade;
+        g.fill();
+        g.strokeStyle = rim;
+        g.stroke();
       }
 
-      g.fillStyle = mixHex(p.centre, p.dry, wilt * 0.8);
-      g.beginPath();
-      g.arc(0, 0, Math.max(1, r * 0.3), 0, TAU);
-      g.fill();
+      drawHeart(g, f, r, p, wilt, dead, petals, dist, petal);
       g.restore();
     }
 
     g.restore();
   },
 };
+
+/**
+ * A leaf on a stem: the blade, its shaded half, its midrib, and — as it dies —
+ * a dry brown edge.
+ *
+ * Laid along +x from the origin, like `leafPath`, which it is built on.
+ */
+function drawLeaf(g, len, wide, green, dead) {
+  leafPath(g, len, wide);
+  g.fillStyle = green;
+  g.fill();
+  if (dead > 0.05) {
+    g.strokeStyle = rgba(mixHex(green, '#3a2a18', 0.6), 0.5 + 0.4 * dead);
+    g.lineWidth = Math.max(1, wide * 0.18);
+    g.stroke();
+  }
+  // The half turned away from the light.
+  g.beginPath();
+  g.moveTo(0, 0);
+  g.quadraticCurveTo(len * 0.45, wide, len, 0);
+  g.closePath();
+  g.fillStyle = 'rgba(0,0,0,0.24)';
+  g.fill();
+  g.beginPath();
+  g.moveTo(len * 0.04, 0);
+  g.lineTo(len * 0.9, 0);
+  g.strokeStyle = rgba(mixHex(green, '#fffbe0', 0.4), 0.7);
+  g.lineWidth = Math.max(1, wide * 0.14);
+  g.stroke();
+}
+
+/**
+ * The middle of a flower: a domed disc with its stamens round it, which, as
+ * the flower dies, darkens and swells into a seed head — with, where each
+ * petal has fallen, the shrivelled stub of it still curled at the rim.
+ *
+ * That is what a dead flower is from across a road — not a stalk with nothing
+ * on the end, which reads as a scratch on the wall, but a dark, ragged head on
+ * a bent stem. Arcs and paths, never an
+ * ellipse: ellipses are petals, and a petal is what has to be countable.
+ */
+function drawHeart(g, f, r, p, wilt, dead, petals, dist, petal) {
+  const cr = Math.max(1.5, r * (0.27 + 0.18 * dead));
+  const disc = mixHex(mixHex(p.centre, p.dry, wilt * 0.8), '#000000', 0.5 * dead);
+  if (dead > 0.05) {
+    g.beginPath();
+    for (let k = 0; k < petals; k++) {
+      if (wilt < f.drop[k]) continue;
+      // A stub: the base of the petal, gone papery and curled back on itself.
+      const a = f.spin + (k / petals) * TAU;
+      const reach = (cr + (dist + petal - cr) * 0.72 * f.petalVar[k]) * (0.6 + 0.4 * dead);
+      const curl = 0.55 * (k & 1 ? 1 : -1);
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      const half = petal * 0.5;
+      g.moveTo(ca * cr * 0.85 - sa * half, sa * cr * 0.85 + ca * half);
+      g.quadraticCurveTo(
+        Math.cos(a + curl * 0.6) * reach * 1.1, Math.sin(a + curl * 0.6) * reach * 1.1,
+        Math.cos(a + curl) * reach, Math.sin(a + curl) * reach
+      );
+      g.quadraticCurveTo(ca * reach * 0.7, sa * reach * 0.7, ca * cr * 0.85 + sa * half, sa * cr * 0.85 - ca * half);
+      g.closePath();
+    }
+    g.fillStyle = mixHex(p.dry, '#000000', 0.3);
+    g.fill();
+    g.strokeStyle = rgba(mixHex(p.dry, '#000000', 0.6), 0.8);
+    g.lineWidth = Math.max(1, r * 0.05);
+    g.stroke();
+  }
+  const dome = g.createRadialGradient(-cr * 0.3, -cr * 0.35, 0, 0, 0, cr);
+  dome.addColorStop(0, mixHex(disc, '#fffbe8', 0.3 - 0.22 * dead));
+  dome.addColorStop(1, mixHex(disc, '#000000', 0.38));
+  g.fillStyle = dome;
+  g.beginPath();
+  g.arc(0, 0, cr, 0, TAU);
+  g.fill();
+  // Stamens, or seeds.
+  g.beginPath();
+  for (let k = 0; k < 8; k++) {
+    const a = f.phase + (k / 8) * TAU;
+    const x = Math.cos(a) * cr * 0.62;
+    const y = Math.sin(a) * cr * 0.62;
+    const dot = Math.max(0.6, cr * 0.14);
+    g.moveTo(x + dot, y);
+    g.arc(x, y, dot, 0, TAU);
+  }
+  g.fillStyle = rgba(mixHex(disc, '#000000', 0.55), 0.75);
+  g.fill();
+}
 
 /* ------------------------------------------------------------------ *
  * Prints
@@ -1298,9 +1428,10 @@ function motifPx(px, scale) {
  * printed ditsy flower's centre is the ground showing through, not a white
  * disc — so a hole is both what the pattern is and what behaves correctly when
  * somebody turns the ground off to project onto bare brick, where a painted
- * centre would be a cream spot in mid-air and a hole is the wall.
+ * centre would be a cream spot in mid-air and a hole is the wall. The eye
+ * printed in it is small enough to leave a ring of ground round it either way.
  */
-function flowerSprite(px, colour, petals) {
+function flowerSprite(px, colour, petals, eye) {
   const canvas = offscreen(px, px);
   const c = canvas.getContext('2d');
   const half = px / 2;
@@ -1308,14 +1439,44 @@ function flowerSprite(px, colour, petals) {
   c.translate(half, half);
   c.fillStyle = colour;
   for (let k = 0; k < petals; k++) tracePetal(c, dist, petal, (k / petals) * TAU);
+
+  /**
+   * A second colour, as a print has: a deeper tone of the flower printed
+   * over the petals round the middle, and a fine line round each petal in it.
+   * One flat colour per flower is a sticker; two is a screen print, and it is
+   * what lets the petals be counted from the road.
+   */
+  const deep = mixHex(colour, '#000000', 0.35);
+  c.globalCompositeOperation = 'source-atop';
+  const base = c.createRadialGradient(0, 0, half * 0.2, 0, 0, half * 0.7);
+  base.addColorStop(0, deep);
+  base.addColorStop(1, rgba(deep, 0));
+  c.fillStyle = base;
+  c.fillRect(-half, -half, px, px);
+  c.globalCompositeOperation = 'source-over';
+  c.strokeStyle = rgba(deep, 0.85);
+  c.lineWidth = Math.max(1, px * 0.025);
+  for (let k = 0; k < petals; k++) {
+    c.beginPath();
+    petalPath(c, dist, petal, (k / petals) * TAU);
+    c.stroke();
+  }
+
   c.globalCompositeOperation = 'destination-out';
   c.beginPath();
   c.arc(0, 0, half * 0.3, 0, TAU);
   c.fill();
+  // And an eye in the hole, in another of the print's colours. Small enough
+  // to leave the ground showing round it, which is still the centre.
+  c.globalCompositeOperation = 'source-over';
+  c.fillStyle = eye;
+  c.beginPath();
+  c.arc(0, 0, half * 0.15, 0, TAU);
+  c.fill();
   return { canvas, spots: ROUND_FOOTPRINT };
 }
 
-/** One leaf, lying along the sprite's width. */
+/** One leaf, lying along the sprite's width, with its midrib. */
 function leafSprite(px, colour) {
   const canvas = offscreen(px, px);
   const c = canvas.getContext('2d');
@@ -1323,6 +1484,13 @@ function leafSprite(px, colour) {
   c.fillStyle = colour;
   leafPath(c, px * 0.88, px * 0.3);
   c.fill();
+  c.strokeStyle = mixHex(colour, '#000000', 0.35);
+  c.lineWidth = Math.max(1, px * 0.035);
+  c.lineCap = 'round';
+  c.beginPath();
+  c.moveTo(px * 0.06, 0);
+  c.lineTo(px * 0.78, 0);
+  c.stroke();
   return { canvas, spots: [[-0.24, 0, 0.16], [0.02, 0, 0.2], [0.28, 0, 0.14]] };
 }
 
@@ -1332,11 +1500,13 @@ function bakeDitsy(stable) {
   // Three colours, and each of them big, middling and small — a real ditsy is
   // not one flower at one size, and the eye picks a single repeated size out of
   // a wall immediately.
-  for (const colour of [stable.color, stable.color2, stable.color3]) {
+  // Each flower's eye in the next colour round.
+  const colours = [stable.color, stable.color2, stable.color3];
+  colours.forEach((colour, i) => {
     for (const scale of [1.02, 0.74, 0.46]) {
-      list.push({ ...flowerSprite(motifPx(px, scale), colour, scale > 0.85 ? 5 : 6), scale });
+      list.push({ ...flowerSprite(motifPx(px, scale), colour, scale > 0.85 ? 5 : 6, colours[(i + 1) % 3]), scale });
     }
-  }
+  });
   for (const scale of [0.78, 0.5]) {
     list.push({ ...leafSprite(motifPx(px, scale), stable.leaf), scale });
   }
@@ -1363,11 +1533,21 @@ const ditsy = {
   description:
     'A small-scale floral print over a whole wall, scattered and rotated the way a real one is, cut around the windows rather than hung over them and packed so that no two flowers overlap. The breeze runs across the building as one wave, so the wall breathes.',
   params: [
-    { key: 'color', type: 'color', label: 'Flower', default: '#b0553c' },
-    { key: 'color2', type: 'color', label: 'Second flower', default: '#dda56b' },
-    { key: 'color3', type: 'color', label: 'Third flower', default: '#e0c0b7' },
-    { key: 'leaf', type: 'color', label: 'Leaves', default: '#93a37c' },
-    { key: 'ground', type: 'color', label: 'Ground', default: '#f7f0e6' },
+    { key: 'color', type: 'color', label: 'Flower', default: '#e2725b' },
+    { key: 'color2', type: 'color', label: 'Second flower', default: '#f0be4e' },
+    { key: 'color3', type: 'color', label: 'Third flower', default: '#f2d8d0' },
+    { key: 'leaf', type: 'color', label: 'Leaves', default: '#86ad7c' },
+    /**
+     * A dark ground, and that is the most important default in the effect.
+     *
+     * A pale ground, the obvious one for a ditsy print, is a white sheet
+     * thrown over the house with some flowers on it: a projector cannot print
+     * a pale fabric onto a wall at night, only light the whole wall pale. A
+     * deep ground throws little light, so the wall reads as dyed cloth and the
+     * flowers as what is printed on it — the way a dark ditsy print reads on a
+     * dress.
+     */
+    { key: 'ground', type: 'color', label: 'Ground', default: '#163838' },
     /** Nought leaves the wall as it is and prints on it; one paints it out. */
     { key: 'groundLevel', type: 'range', label: 'Ground', default: 0.85, min: 0, max: 1, step: 0.01 },
     { key: 'size', type: 'range', label: 'Motif size', default: 120, min: 20, max: 600, step: 2 },
@@ -1381,7 +1561,7 @@ const ditsy = {
      * The fine ground between the bold motifs. Bind it to the level and the
      * pattern fills in as the music does.
      */
-    { key: 'density', type: 'range', label: 'Density', default: 0.25, min: 0, max: 1, step: 0.01 },
+    { key: 'density', type: 'range', label: 'Density', default: 0.5, min: 0, max: 1, step: 0.01 },
     { key: 'scatter', type: 'range', label: 'Scatter', default: 0.55, min: 0, max: 1, step: 0.01 },
     { key: 'sway', type: 'range', label: 'Sway', default: 0.35, min: 0, max: 1, step: 0.01 },
     { key: 'swell', type: 'range', label: 'Swell', default: 0.12, min: 0, max: 1, step: 0.01 },
@@ -1551,10 +1731,16 @@ function botehSprite(px, { ink, light, filled, curl = 2.3, girth = 0.27 }) {
   const detail = filled ? ink : light;
 
   traceBoteh(c, jx, jy, jw);
-  if (filled) {
-    c.fillStyle = light;
-    c.fill();
-  }
+  /**
+   * The open variant is washed with the highlight rather than left empty.
+   *
+   * Empty, it is an outline with a row of beads inside it, and with light
+   * linework on a dark ground — which is what a projector needs — an outline
+   * with beads down it is a tentacle with suckers. A thin wash keeps it the
+   * lighter of the two variants and makes it a shape first.
+   */
+  c.fillStyle = filled ? light : rgba(light, 0.38);
+  c.fill();
   c.strokeStyle = ink;
   c.lineWidth = hair * 1.5;
   c.lineJoin = 'round';
@@ -1571,17 +1757,29 @@ function botehSprite(px, { ink, light, filled, curl = 2.3, girth = 0.27 }) {
    * narrows, which is what makes the row look drawn rather than stamped.
    */
   const out = [0, 0];
+  const next = [0, 0];
   c.fillStyle = ink;
   for (const side of [1, -1]) {
     let lastX = null;
     let lastY = null;
-    for (let i = 1; i < BOTEH_JOINTS - 2; i++) {
+    // Walked in quarter-joint steps: small seeds a joint apart would be a
+    // sparse dotted line rather than a beaded border.
+    for (let q = 4; q < (BOTEH_JOINTS - 2) * 4; q++) {
+      const i = q >> 2;
+      const u = (q & 3) / 4;
       botehNormal(jx, jy, i, out);
-      const r = jw[i] * 0.2;
+      botehNormal(jx, jy, i + 1, next);
+      const nx = out[0] + (next[0] - out[0]) * u;
+      const ny = out[1] + (next[1] - out[1]) * u;
+      const wide = jw[i] + (jw[i + 1] - jw[i]) * u;
+      const cx = jx[i] + (jx[i + 1] - jx[i]) * u;
+      const cy = jy[i] + (jy[i + 1] - jy[i]) * u;
+      // Small and close, a beaded border. Fat ones read as suckers.
+      const r = wide * 0.14;
       if (r < hair * 0.3) continue;
-      const inset = jw[i] - r * 1.5 - hair * 0.6;
-      const x = jx[i] + out[0] * inset * side;
-      const y = jy[i] + out[1] * inset * side;
+      const inset = wide - r * 1.6 - hair * 0.6;
+      const x = cx + nx * inset * side;
+      const y = cy + ny * inset * side;
       /**
        * Spaced by how far apart they land, not by how many joints apart they
        * are.
@@ -1596,7 +1794,7 @@ function botehSprite(px, { ink, light, filled, curl = 2.3, girth = 0.27 }) {
       lastX = x;
       lastY = y;
       c.beginPath();
-      c.ellipse(x, y, r * 1.25, r, Math.atan2(out[1], out[0]) + Math.PI / 2, 0, TAU);
+      c.ellipse(x, y, r * 1.25, r, Math.atan2(ny, nx) + Math.PI / 2, 0, TAU);
       c.fill();
     }
   }
@@ -1701,9 +1899,9 @@ function rosetteSprite(px, ink, light) {
    * Fat, round petals rather than thin pointed ones.
    *
    * A petal narrow enough to be a spike is mostly its own outline, so a rosette
-   * drawn that way is a black cog with some cream showing through it — which is
-   * what this was. The bulge has to be wide enough that the fill is the thing
-   * you see and the ink is a line round it.
+   * drawn that way is a cog of ink with a little of the fill showing through
+   * it. The bulge has to be wide enough that the fill is the thing you see and
+   * the ink is a line round it.
    */
   const petals = 8;
   for (let k = 0; k < petals; k++) {
@@ -1853,11 +2051,20 @@ const paisley = {
   description:
     'Botehs in a half-drop repeat, with rosettes, fronds, tendrils and dots packed into the ground between them. Nothing overlaps: the motifs are sized by the space around them, so what fills a wall is a layout rather than a scatter. Turn the size right up and one teardrop covers the front of the house.',
   params: [
-    { key: 'ink', type: 'color', label: 'Ink', default: '#171310' },
-    { key: 'light', type: 'color', label: 'Highlight', default: '#faf3e7' },
-    { key: 'ground', type: 'color', label: 'Ground', default: '#d9c8a7' },
+    /**
+     * Cream linework and madder fills on indigo: the bandana, the Kashmir
+     * shawl. Black ink on a pale paper ground is, on a wall at night, a lit
+     * beige sheet with dark marks — there is no such thing as projecting
+     * black. On a dark ground the linework is the light,
+     * which is how a print survives being thrown onto a house.
+     */
+    { key: 'ink', type: 'color', label: 'Ink', default: '#f1e2c4' },
+    { key: 'light', type: 'color', label: 'Highlight', default: '#c4513b' },
+    { key: 'ground', type: 'color', label: 'Ground', default: '#1a2244' },
     { key: 'groundLevel', type: 'range', label: 'Ground', default: 0.9, min: 0, max: 1, step: 0.01 },
-    { key: 'size', type: 'range', label: 'Motif size', default: 300, min: 40, max: 900, step: 5 },
+    // A repeat a little under a window wide: a print on the wall rather than a
+    // few teardrops the size of the door. Turn it up for the poster.
+    { key: 'size', type: 'range', label: 'Motif size', default: 180, min: 40, max: 900, step: 5 },
     /**
      * How much of its packed space a motif takes. One is a tessellation —
      * every motif exactly touching its neighbours — and anything less opens the

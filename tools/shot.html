@@ -20,10 +20,18 @@
       warp, which is replaced by an identity mesh — there is no wall here to be
       off-axis to.
 
-      The light is composited onto the house with 'lighter', because that is
-      what a projector does: it adds light to a surface, it cannot subtract any.
-      A screenshot taken with the effects drawn *over* the facade would show
-      black where a real projection shows brickwork.
+      The light is *added* to the house, because that is what a projector
+      does: it adds light to a surface, it cannot subtract any. A screenshot
+      taken with the effects drawn *over* the facade would show black where a
+      real projection shows brickwork. And it is added in linear light, not
+      with canvas's 'lighter' — see tools/composite.js for why that difference
+      was washing every still out towards pastel.
+
+      The project is built with the id generator pinned. Shape and layer ids
+      are random, effects seed themselves from them, and so without this two
+      runs of the same commit gave two different pictures — which made the
+      one thing a generated still is for, noticing that an effect changed,
+      impossible.
 
         tools/screenshots.mjs drives this. Query string:
           ?preset=birthday&t=8&w=1600&h=900
@@ -36,6 +44,7 @@
       import { applyPreset } from '../js/control/presets.js';
       import { createWorldRenderer } from '../js/render/worldRenderer.js';
       import { createWarpRenderer } from '../js/render/warp.js';
+      import { addLight } from './composite.js';
 
       const q = new URLSearchParams(location.search);
       const preset = q.get('preset') || 'halloween';
@@ -56,10 +65,22 @@
       out.height = H;
       const g = out.getContext('2d');
 
+      const realRandom = Math.random;
+      const realNow = Date.now;
+      let seed = 0x9e3779b9;
+      Math.random = () => {
+        seed = (seed + 0x6d2b79f5) | 0;
+        let x = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+        return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+      };
+      Date.now = () => 1767225600000;
       const project = createProject('shot');
       project.worldAspect = DEMO_ASPECT;
       project.shapes = demoShapes();
       applyPreset(project, preset);
+      Math.random = realRandom;
+      Date.now = realNow;
 
       const facade = renderDemoFacade(W, H);
 
@@ -79,7 +100,13 @@
       warp.buildMesh({ H: null, region: { x: 0, y: 0, w: 1, h: 1 }, mesh: null });
 
       const dt = 1 / FPS;
-      for (let t = 0; t <= seconds + 1e-6; t += dt) {
+      // The frames step at 1/FPS, and the last one lands on `seconds` exactly
+      // — a strike of lightning lasts a few hundredths of a second, and "the
+      // nearest twelfth" misses it.
+      const times = [];
+      for (let k = 0; k * dt < seconds - 1e-6; k++) times.push(k * dt);
+      times.push(seconds);
+      for (const t of times) {
         renderer.render(worldCtx, {
           project,
           time: { t, dt, beat: t * 2, beatPhase: (t * 2) % 1, bpm: 120 },
@@ -100,10 +127,7 @@
         grade: project.settings?.grade,
       });
 
-      g.drawImage(facade, 0, 0, W, H);
-      g.globalCompositeOperation = 'lighter';
-      g.drawImage(lit, 0, 0, W, H);
-      g.globalCompositeOperation = 'source-over';
+      addLight(g, facade, lit);
 
       window.__shot = {
         preset,

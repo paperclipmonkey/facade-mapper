@@ -51,18 +51,25 @@ const outDir = path.join(root, 'docs', 'assets', 'demos');
  * effect and a poor first impression.
  *
  * Later into the show than the thumbnail of the same preset, so the two are not
- * the same picture: by half a minute the snow has built up along the sills and
- * the icicles have grown.
+ * the same picture: the snow has built up along the sills, the icicles have
+ * grown — and Santa is going over. He crosses for eleven seconds in every
+ * ninety, and the first crossing is over before the snow has settled, so the
+ * hero is taken on the second: 94.3 seconds in, with the whole team arriving
+ * over this half of the house and the glitter streaming off behind the sleigh.
+ * A few seconds later the reindeer are over next door's roof, which is the one
+ * place this app spends its whole first page telling you not to light.
  */
 const HERO = {
   preset: 'christmas',
-  t: 30,
+  t: 94.3,
   file: 'demo-house.jpg',
   dir: path.join(root, 'docs', 'assets'),
 };
 
 const SHOTS = [
-  { preset: 'halloween', t: 14 },
+  // A storm is mostly the dark between strikes, so the moment is chosen to
+  // land in one: the Halloween storm's second stroke comes at 14.6 seconds.
+  { preset: 'halloween', t: 14.8 },
   { preset: 'christmas', t: 16 },
   { preset: 'birthday', t: 11 },
   { preset: 'perseids', t: 9 },
@@ -100,12 +107,22 @@ async function main() {
   // without this the bloom pass silently does nothing and every still comes out
   // flat. Slow, and it does not matter — this renders one frame of each show.
   //
+  // The 2D canvases are kept off it, though. With nothing said, Chromium
+  // accelerates canvas 2D too, which on SwiftShader means every one of the
+  // hundreds of frames the simulation draws to catch up to `t` is rasterised
+  // by a GPU emulated on the CPU — about seven times slower than Skia's own
+  // CPU path, for a picture that differs by under one level in 255 on average.
+  // Only the bloom and grade need WebGL.
+  //
   // Inside the try, so that the documented failure — Chromium not installed —
   // does not leave the helper server running after the process gives up.
   let browser = null;
   try {
     browser = await chromium.launch({
-      args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+      args: [
+        '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
+        '--disable-accelerated-2d-canvas',
+      ],
     });
 
     for (const shot of shots) {
@@ -131,8 +148,9 @@ async function main() {
       // `t` synchronously before it paints, so the wait scales with how far
       // into the show the still is taken. Three minutes was enough for the
       // thumbnails and not for a shot at half a minute of a twelve-layer show,
-      // which failed with nothing to show for the seven minutes before it.
-      await page.waitForFunction(() => window.__shot, null, { timeout: 600000 });
+      // which failed with nothing to show for the seven minutes before it. The
+      // hero is a minute and a half in, about five minutes of simulation here.
+      await page.waitForFunction(() => window.__shot, null, { timeout: 1200000 });
       const result = await page.evaluate(() => window.__shot);
 
       const file = path.join(shot.dir || outDir, shot.file || `${shot.preset}.jpg`);

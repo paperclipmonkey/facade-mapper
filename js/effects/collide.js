@@ -19,7 +19,7 @@
  * comparisons below are written out longhand for that reason.
  */
 
-import { clamp } from '../core/math.js';
+import { clamp, lerp, frac } from '../core/math.js';
 
 /* ------------------------------------------------------------------ *
  * The heightfield
@@ -343,86 +343,214 @@ export function advanceSlabs(drift, field, dt, gravity, fadeFrom = 0.72) {
  * ------------------------------------------------------------------ */
 
 /**
- * Fill the settled drift as one shape per contiguous loaded run.
+ * Settled snow, as it should be painted.
  *
- * The top edge is drawn through the midpoints of adjacent columns with
- * quadratic segments, which rounds the profile the way a real drift is rounded
- * without needing a finer field. The underside follows the surface exactly, so
- * the snow sits *on* the sill rather than floating above it.
+ * The simulation keeps a depth per column, and every landing goes into the
+ * one column the particle hit. With a few hundred flakes that is a sparse,
+ * spiky record, and drawn as it stands — each loaded run of columns its own
+ * little shape — it comes out as dashed white bars along every sill.
+ *
+ * Snow does not lie like that. On anything flat it settles evenly, rounds off
+ * at the ends where it overhangs, and its surface undulates gently. So it is
+ * painted from a *display* profile rather than from the raw columns: short
+ * gaps between loaded columns — the statistics of a few hundred flakes — are
+ * bridged, so a ledge that is receiving snow carries one continuous drift;
+ * long bare stretches, where something above shelters the ledge, stay bare.
+ * Then it is blurred along the ledge (never across a step to a different
+ * ledge) and tapered into a rounded nose at each end.
  */
-export function drawDrift(g, drift, field, style) {
+/** Columns either side the display profile is blurred over. */
+const DRIFT_REACH = 4;
+/** The widest gap, in columns, that is the luck of the flakes rather than shelter. */
+const DRIFT_BRIDGE = 7;
+/** Shallower than this, in pixels, and there is no snow to draw. */
+export const DRIFT_MIN = 0.45;
+
+/**
+ * The drift as it should be painted, into `out`, one depth per column.
+ *
+ * `filled` is scratch of the same length. Both are the caller's, so a draw
+ * allocates nothing; the simulation's own `depth` is only read.
+ */
+export function driftProfile(drift, field, out, filled) {
   const { depth } = drift;
   const { surface, cols, colW } = field;
-  const { fill, crest, minDepth = 0.15 } = style;
-
+  const cliff = colW * 2.5;
   let c = 0;
   while (c < cols) {
-    if (depth[c] < minDepth || !Number.isFinite(surface[c])) {
+    if (!Number.isFinite(surface[c])) {
+      out[c] = 0;
       c++;
       continue;
     }
     let end = c;
-    while (end + 1 < cols && depth[end + 1] >= minDepth && Number.isFinite(surface[end + 1])) end++;
+    while (end + 1 < cols && Number.isFinite(surface[end + 1])
+      && Math.abs(surface[end + 1] - surface[end]) < cliff) end++;
 
-    const topAt = (i) => surface[i] - depth[i];
-    const xAt = (i) => (i + 0.5) * colW;
+    // Bridge short gaps: a bare column with loaded ones close on both sides
+    // takes the interpolation between them.
+    let last = -1;
+    for (let i = c; i <= end; i++) {
+      filled[i] = depth[i];
+      if (depth[i] > 0.2) {
+        if (last >= 0 && i - last > 1 && i - last <= DRIFT_BRIDGE + 1) {
+          for (let j = last + 1; j < i; j++) {
+            filled[j] = lerp(depth[last], depth[i], (j - last) / (i - last));
+          }
+        }
+        last = i;
+      }
+    }
+
+    for (let i = c; i <= end; i++) {
+      let s = 0;
+      let w = 0;
+      for (let k = -DRIFT_REACH; k <= DRIFT_REACH; k++) {
+        const j = i + k;
+        if (j < c || j > end) continue;
+        const wt = DRIFT_REACH + 1 - Math.abs(k);
+        s += filled[j] * wt;
+        w += wt;
+      }
+      // Rounded at the ends of the ledge: a square root of a ramp is a
+      // bullnose, not a wedge.
+      const fromEnd = Math.min(i - c, end - i) + 0.5;
+      out[i] = (s / w) * Math.sqrt(Math.min(1, fromEnd / 2.4));
+    }
+    c = end + 1;
+  }
+}
+
+/** The top of a run of drift, left to right, into the current path. */
+export function traceDriftTop(g, surface, prof, colW, c, end, start) {
+  const xAt = (i) => (i + 0.5) * colW;
+  const topAt = (i) => surface[i] - prof[i];
+  const x0 = xAt(c) - colW * 0.5;
+  if (start) g.moveTo(x0, surface[c]);
+  else g.lineTo(x0, surface[c]);
+  // Up over a rounded nose at the left end...
+  g.quadraticCurveTo(x0, topAt(c), xAt(c), topAt(c));
+  // ...along the top through the midpoints, which rounds the profile...
+  for (let i = c; i < end; i++) {
+    g.quadraticCurveTo(xAt(i), topAt(i), (xAt(i) + xAt(i + 1)) / 2, (topAt(i) + topAt(i + 1)) / 2);
+  }
+  // ...and down over the nose at the right.
+  const x1 = xAt(end) + colW * 0.5;
+  g.quadraticCurveTo(xAt(end), topAt(end), x1, topAt(end));
+  g.quadraticCurveTo(x1 + colW * 0.15, (topAt(end) + surface[end]) / 2, x1, surface[end]);
+}
+
+
+/** Scratch for `drawDrift`, grown when a wider field turns up and otherwise reused. */
+let driftScratch = new Float32Array(0);
+
+/**
+ * Fill the settled drift: a body sitting on the surface, and a crest.
+ *
+ * Drawn from the display profile above. The top edge passes through the
+ * midpoints of adjacent columns with quadratic segments, which rounds it the
+ * way a real drift is rounded without needing a finer field; the underside
+ * follows the surface exactly, so the snow sits *on* the sill rather than
+ * floating above it. A thin run — a dusting — is drawn fainter than a deep
+ * one, because a film of snow is a grey veil and not a bright line.
+ *
+ * `style.minDepth` is the shallowest snow worth drawing, in pixels.
+ */
+export function drawDrift(g, drift, field, style) {
+  const { surface, cols, colW } = field;
+  const { fill, crest, minDepth = DRIFT_MIN } = style;
+  if (driftScratch.length < cols * 2) driftScratch = new Float32Array(cols * 2);
+  const prof = driftScratch.subarray(0, cols);
+  driftProfile(drift, field, prof, driftScratch.subarray(cols, cols * 2));
+
+  const alpha = g.globalAlpha;
+  let c = 0;
+  while (c < cols) {
+    if (!(prof[c] >= minDepth) || !Number.isFinite(surface[c])) {
+      c++;
+      continue;
+    }
+    let end = c;
+    let deepest = prof[c];
+    while (end + 1 < cols && prof[end + 1] >= minDepth && Number.isFinite(surface[end + 1])
+      && Math.abs(surface[end + 1] - surface[end]) < colW * 2.5) {
+      end++;
+      deepest = Math.max(deepest, prof[end]);
+    }
+    g.globalAlpha = alpha * clamp(0.3 + deepest / 4.5, 0.3, 1);
 
     g.beginPath();
-    // Down to the surface at the left edge of the run, so it meets the sill.
-    g.moveTo(xAt(c) - colW * 0.5, surface[c]);
-    g.lineTo(xAt(c) - colW * 0.5, topAt(c));
-    for (let i = c; i < end; i++) {
-      const mx = (xAt(i) + xAt(i + 1)) / 2;
-      const my = (topAt(i) + topAt(i + 1)) / 2;
-      g.quadraticCurveTo(xAt(i), topAt(i), mx, my);
-    }
-    g.lineTo(xAt(end) + colW * 0.5, topAt(end));
-    g.lineTo(xAt(end) + colW * 0.5, surface[end]);
-    for (let i = end; i >= c; i--) g.lineTo(xAt(i), surface[i]);
+    traceDriftTop(g, surface, prof, colW, c, end, true);
+    for (let i = end; i >= c; i--) g.lineTo((i + 0.5) * colW, surface[i]);
     g.closePath();
     g.fillStyle = fill;
     g.fill();
 
     if (crest) {
       // Snow catches the light along its top edge and nowhere else, which is
-      // most of what makes a white shape read as a rounded volume.
+      // most of what makes a white shape read as a rounded volume. Clipped to
+      // the body, so the light falls off downwards rather than spilling over.
+      g.save();
+      g.clip();
       g.beginPath();
-      g.moveTo(xAt(c) - colW * 0.5, topAt(c));
-      for (let i = c; i < end; i++) {
-        const mx = (xAt(i) + xAt(i + 1)) / 2;
-        const my = (topAt(i) + topAt(i + 1)) / 2;
-        g.quadraticCurveTo(xAt(i), topAt(i), mx, my);
-      }
-      g.lineTo(xAt(end) + colW * 0.5, topAt(end));
+      traceDriftTop(g, surface, prof, colW, c, end, true);
       g.strokeStyle = crest;
-      g.lineWidth = Math.max(0.75, colW * 0.35);
+      g.lineWidth = Math.max(1, Math.min(4, deepest * 0.45));
       g.lineCap = 'round';
+      g.lineJoin = 'round';
       g.stroke();
+      g.restore();
     }
-
     c = end + 1;
   }
+  g.globalAlpha = alpha;
 }
 
-/** Draw the falling slabs. Rounded, stretched by speed, fading out low down. */
+/**
+ * Draw the falling slabs.
+ *
+ * A slab is a run of drift that let go together, and it does not stay a slab:
+ * it comes apart as it falls. Drawn as the one wide flat shape it starts as,
+ * it is a white dash sliding down the wall — so each is a few rounded lumps
+ * spread unevenly across its width, opening out as it ages, stretched by its
+ * speed and fading out low down. Where each lump sits is a function of the
+ * slab's own numbers, so this needs no memory of its own. Snow, which has
+ * baked sprites to hand, paints its slabs softer still; see christmas.js.
+ */
 export function drawSlabs(g, drift, style) {
   const { fill, crest } = style;
+  const alpha = g.globalAlpha;
   for (const slab of drift.slabs) {
-    g.save();
-    g.globalAlpha *= slab.alpha ?? 1;
-    g.translate(slab.x, slab.y);
-    g.rotate(slab.angle);
-    g.beginPath();
-    g.ellipse(0, 0, slab.w * 0.5, Math.max(1.5, slab.h * 0.6 * (slab.stretch ?? 1)), 0, 0, Math.PI * 2);
-    g.fillStyle = fill;
-    g.fill();
-    if (crest) {
+    const fade = slab.alpha ?? 1;
+    if (fade <= 0.01) continue;
+    const stretch = slab.stretch ?? 1;
+    const age = slab.age || 0;
+    const h = Math.max(1.5, slab.h);
+    const lumps = clamp(Math.round(slab.w / (h * 1.6)), 2, 6);
+    // Opening out more gently than Snow's soft sprites do: these are hard-edged
+    // lumps, and spread as far they read as a scatter of beads.
+    const spread = 1 + age * 0.28;
+    g.globalAlpha = alpha * fade;
+    for (let k = 0; k < lumps; k++) {
+      const j1 = frac(Math.sin(slab.w * 12.9898 + k * 78.233) * 43758.5453);
+      const j2 = frac(Math.sin(slab.h * 39.3468 + k * 11.135) * 24634.6345);
+      const j3 = frac(Math.sin(slab.w * 7.233 + slab.h * 3.17 + k * 51.71) * 15731.743);
+      const slot = (k + (j1 - 0.5) * 0.8) / (lumps - 1) - 0.5;
+      const x = slab.x + slot * slab.w * 0.8 * spread;
+      const y = slab.y + (j2 - 0.5) * h * 1.4 + (j3 - 0.4) * age * age * 70;
+      const r = h * (0.55 + 0.95 * j3 * j3);
       g.beginPath();
-      g.ellipse(0, -slab.h * 0.18, slab.w * 0.34, Math.max(1, slab.h * 0.24), 0, Math.PI, Math.PI * 2);
-      g.strokeStyle = crest;
-      g.lineWidth = Math.max(0.6, slab.h * 0.16);
-      g.stroke();
+      g.ellipse(x, y, r, Math.max(1, r * 0.8 * stretch), slab.angle || 0, 0, Math.PI * 2);
+      g.fillStyle = fill;
+      g.fill();
+      if (crest) {
+        g.beginPath();
+        g.ellipse(x, y - r * 0.25, r * 0.6, Math.max(0.6, r * 0.32), 0, Math.PI, Math.PI * 2);
+        g.strokeStyle = crest;
+        g.lineWidth = Math.max(0.6, r * 0.18);
+        g.stroke();
+      }
     }
-    g.restore();
   }
+  g.globalAlpha = alpha;
 }

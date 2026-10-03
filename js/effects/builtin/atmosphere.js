@@ -10,9 +10,27 @@
  * weather and depth that flat colour never will.
  */
 
-import { rgba, clamp, TAU, frac } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, frac, mixHex, hexToRgb, hashString, smoothstep } from '../../core/math.js';
+import { offscreen, glow } from '../lib.js';
 import { blackbodyCss, mixLinear } from '../color.js';
 import { ensureField } from '../field.js';
+
+/**
+ * How many depths the shower is drawn at.
+ *
+ * Every drop at one depth is the same width and brightness, so a depth is one
+ * path holding every streak at it, stroked twice — a soft wide pass and a
+ * bright core. Four depths is enough that the eye reads a continuous range
+ * from the far curtain to the near streaks, and it is eight strokes a frame
+ * instead of seven hundred.
+ */
+const RAIN_DEPTHS = 4;
+
+/** How long a splash lives, in seconds. */
+const SPLASH_LIFE = 0.42;
+
+/** A streak is stroked twice: `[width multiple, alpha]` — a soft glow, then the core. */
+const STREAK_PASSES = [[3.2, 0.16], [1, 1]];
 
 const rain = {
   id: 'rain',
@@ -20,7 +38,7 @@ const rain = {
   category: 'atmosphere',
   scope: 'shape',
   description:
-    'Falling rain with depth, wind and optional splashes where it lands. Leave targets empty to cover the house.',
+    'Falling rain catching the light, from a fine far curtain to bright near streaks, blown by the wind and splashing where it lands. Leave targets empty to cover the house.',
   params: [
     { key: 'color', type: 'color', label: 'Colour', default: '#bcd6ff' },
     { key: 'count', type: 'range', label: 'Drops', default: 450, min: 20, max: 3000, step: 10 },
@@ -50,6 +68,8 @@ const rain = {
       drop.x = bbox.x + (rng() * 1.6 - 0.3) * bbox.w;
       drop.y = atTop ? bbox.y - rng() * bbox.h * 0.2 : bbox.y + rng() * bbox.h;
       drop.z = 1 - p.depth * rng();
+      // Its own length and catch of the light, so no two streaks are clones.
+      drop.v = rng();
       return drop;
     };
 
@@ -64,9 +84,18 @@ const rain = {
       drop.x += (dirX * fall) + gust * 120 * z * dt;
       drop.y += dirY * fall;
 
-      if (drop.y > bbox.y + bbox.h) {
+      /**
+       * Where this drop meets the ground, which depends on how far away it is.
+       *
+       * The ground is a plane running away from you, so in the picture the
+       * near rain lands at the bottom of the frame and the far rain lands
+       * higher up, against the foot of the wall. Landing them all on the
+       * bottom edge put every splash half out of shot.
+       */
+      const ground = bbox.y + bbox.h - (bbox.h * 0.12 * (1 - z)) / Math.max(1e-3, p.depth);
+      if (drop.y > ground) {
         if (p.splash > 0 && rng() < p.splash * 0.5) {
-          state.splashes.push({ x: drop.x, y: bbox.y + bbox.h, age: 0, z });
+          state.splashes.push({ x: drop.x, y: ground, age: 0, z, seed: rng() });
         }
         spawn(drop, true);
       } else if (drop.x < bbox.x - bbox.w * 0.35 || drop.x > bbox.x + bbox.w * 1.35) {
@@ -84,7 +113,7 @@ const rain = {
       for (let i = state.splashes.length - 1; i >= 0; i--) {
         const s = state.splashes[i];
         s.age += dt;
-        if (s.age > 0.35) state.splashes.splice(i, 1);
+        if (s.age > SPLASH_LIFE) state.splashes.splice(i, 1);
       }
       // Runaway guard if the splash rate ever outpaces the lifetime.
       if (state.splashes.length > 400) state.splashes.length = 400;
@@ -92,63 +121,109 @@ const rain = {
   },
   draw({ g, p, shape, state }) {
     const { bbox } = shape;
-    if (bbox.w <= 0 || bbox.h <= 0) return;
+    if (bbox.w <= 0 || bbox.h <= 0 || !state.drops?.length) return;
 
     const angle = (p.angle * Math.PI) / 180;
     const dirX = Math.sin(angle);
     const dirY = Math.cos(angle);
+    const near = mixHex(p.color, '#ffffff', 0.45);
 
     g.save();
     g.clip(shape.path);
+    g.globalCompositeOperation = 'lighter';
     g.lineCap = 'round';
 
     /**
-     * One gradient for the whole shower, not one per drop.
+     * Rain is only visible where it catches light, and what a camera — or an
+     * eye — sees of a falling drop is the streak it draws in the time it is
+     * looked at: a line of even brightness with soft ends, not a dot with a
+     * comet's tail. So every streak is a plain round-capped line along the
+     * fall.
      *
-     * Every streak is the same fade along the same direction — only its
-     * position, length and brightness differ — so the gradient can be built
-     * once at the origin and each drop drawn through a translate and a scale.
-     * Depth then rides on the transform (length and thickness) and on
-     * `globalAlpha` (brightness), which is what it meant anyway.
-     *
-     * At the default four hundred and fifty drops the old version allocated
-     * four hundred and fifty `CanvasGradient` objects sixty times a second —
-     * twenty-seven thousand a second, thrown away immediately. Rain was the
-     * most expensive effect in the library and this was most of the reason.
+     * Depth is three things moving together, which is the whole illusion: a
+     * near drop is longer (it crosses more of the view in the same time),
+     * wider and brighter, and slightly whiter, because it is catching the
+     * light rather than being lit by the haze; a far one is a short faint
+     * thread in the colour of the night. The old version had the covariance
+     * right and drew every drop as a single faint pixel line through its own
+     * transform and its own gradient, which at the Night City preset's
+     * settings was rain nobody could see.
      */
-    const unit = p.length;
-    const streak = g.createLinearGradient(0, 0, -dirX * unit, -dirY * unit);
-    streak.addColorStop(0, rgba(p.color, 1));
-    streak.addColorStop(1, rgba(p.color, 0));
-
-    for (const drop of state.drops) {
-      const z = drop.z;
-      // Nearer drops are longer, thicker and brighter — the whole illusion of
-      // depth in a rain effect comes from covarying those three.
-      g.save();
-      g.translate(drop.x, drop.y);
-      g.scale(z, z);
-      g.globalAlpha = p.opacity * z;
-      g.strokeStyle = streak;
-      g.lineWidth = Math.max(0.3 / z, p.width);
-      g.beginPath();
-      g.moveTo(0, 0);
-      g.lineTo(-dirX * unit, -dirY * unit);
-      g.stroke();
-      g.restore();
-    }
-    g.globalAlpha = 1;
-
-    if (p.splash > 0 && state.splashes.length) {
-      g.globalCompositeOperation = 'lighter';
-      for (const s of state.splashes) {
-        const f = s.age / 0.35;
-        const r = p.length * 0.35 * s.z * (0.3 + f);
-        g.globalAlpha = (1 - f) * p.opacity * p.splash;
-        g.strokeStyle = p.color;
-        g.lineWidth = Math.max(0.3, p.width * s.z * 0.7);
+    for (let d = 0; d < RAIN_DEPTHS; d++) {
+      const lo = d / RAIN_DEPTHS;
+      const hi = (d + 1) / RAIN_DEPTHS;
+      const z = 1 - p.depth * (1 - (lo + hi) / 2);
+      const colour = mixHex(p.color, near, (lo + hi) / 2);
+      const bright = p.opacity * (0.45 + 1.1 * ((lo + hi) / 2) ** 1.5);
+      for (const [wide, alpha] of STREAK_PASSES) {
+        g.strokeStyle = rgba(colour, clamp(bright * alpha, 0, 1));
+        g.lineWidth = Math.max(0.5, p.width * (0.45 + 0.75 * z) * wide);
         g.beginPath();
-        g.ellipse(s.x, s.y, r, r * 0.35, 0, Math.PI, TAU);
+        for (const drop of state.drops) {
+          // Which depth bucket: drop.z runs from 1 − depth to 1.
+          const at = p.depth > 0 ? (drop.z - (1 - p.depth)) / p.depth : 1;
+          if (at < lo || at >= hi + (d === RAIN_DEPTHS - 1 ? 1e-9 : 0)) continue;
+          const len = p.length * drop.z * (0.7 + 0.6 * (drop.v ?? 0.5));
+          g.moveTo(drop.x, drop.y);
+          g.lineTo(drop.x - dirX * len, drop.y - dirY * len);
+        }
+        g.stroke();
+      }
+    }
+
+    /**
+     * Splashes, where the rain meets the ground.
+     *
+     * A drop hitting a hard surface throws a crown — a ring of droplets flung
+     * up and out, which rise, slow and fall back on real ballistics — and
+     * leaves a ring of water spreading flat around where it struck. The
+     * droplets catch the light as short bright streaks along their flight;
+     * the ring is a fading ellipse, flat because it is lying on the ground
+     * and we are looking along it. Both in one path each, for every splash at
+     * once.
+     */
+    if (p.splash > 0 && state.splashes.length) {
+      const reach = p.length * 0.6;
+      // Three ages, so a splash fades as it goes: a stroke has one alpha.
+      for (let band = 0; band < 3; band++) {
+        const from = band / 3;
+        const to = (band + 1) / 3;
+        const fade = (1 - (from + to) / 2) ** 2;
+        g.strokeStyle = rgba(near, clamp(p.opacity * p.splash * 2.2 * fade, 0, 1));
+        g.lineWidth = Math.max(0.6, p.width * 1.1);
+        g.beginPath();
+        for (const s of state.splashes) {
+          const f = s.age / SPLASH_LIFE;
+          if (f < from || f >= to) continue;
+          const seed = s.seed ?? 0.5;
+          const size = reach * s.z;
+          // Four droplets: out at a spread of angles, up and back down under
+          // gravity scaled to the splash, each drawn along its own velocity.
+          for (let k = 0; k < 4; k++) {
+            const side = (k < 2 ? -1 : 1) * (0.45 + 0.55 * frac(seed * (7 + k * 3)));
+            const up = 0.75 + 0.5 * frac(seed * (13 + k * 5));
+            const x = s.x + side * size * f * 1.6;
+            const y = s.y - size * up * 4 * f * (1 - f);
+            const vx = side * size * 1.6;
+            const vy = -size * up * 4 * (1 - 2 * f);
+            const speed = Math.hypot(vx, vy) || 1;
+            const tail = Math.max(0.6, size * 0.14);
+            g.moveTo(x, y);
+            g.lineTo(x - (vx / speed) * tail, y - (vy / speed) * tail);
+          }
+        }
+        g.stroke();
+
+        g.strokeStyle = rgba(p.color, clamp(p.opacity * p.splash * 1.2 * fade, 0, 1));
+        g.lineWidth = Math.max(0.5, p.width * 0.8);
+        g.beginPath();
+        for (const s of state.splashes) {
+          const f = s.age / SPLASH_LIFE;
+          if (f < from || f >= to) continue;
+          const r = reach * s.z * (0.25 + f * 1.1);
+          g.moveTo(s.x + r, s.y);
+          g.ellipse(s.x, s.y, r, r * 0.22, 0, 0, TAU);
+        }
         g.stroke();
       }
     }
@@ -156,13 +231,112 @@ const rain = {
   },
 };
 
+/* ------------------------------------------------------------------ *
+ * Searchlight
+ * ------------------------------------------------------------------ */
+
+/**
+ * The cone, baked once per beam width and stamped.
+ *
+ * What makes a beam visible is light scattered out of it by the air, so its
+ * brightness is a Gaussian across the beam — a profile in *angle* about the
+ * lamp — times a falloff along it: near the lamp the light is squeezed into a
+ * narrow beam and the haze in it is brightest, further out the same light is
+ * spread across a wider one. That product has no edge anywhere, which is the
+ * whole difference between a beam and a wedge of paint, and Canvas cannot fill
+ * it directly: a gradient varies in one direction and this varies in two.
+ *
+ * So it is computed per texel into a sprite, apex at the left and the beam
+ * running right, in the layer's colour, the first time a layer draws; and each
+ * frame a beam is one `drawImage`, rotated to where it points and scaled to
+ * how far it reaches. Two of them — one that stops dead where the beam meets
+ * the wall, one that runs out of the shape into the sky — because which a
+ * beam is changes as it sweeps.
+ */
+const CONE_W = 256;
+
+function bakeCone(colour, half, lands) {
+  // Out to where the Gaussian is a hundredth of its peak, and not past a
+  // right angle either side, which is a floodlight rather than a beam.
+  const span = Math.min(1.25, half * 1.9);
+  const tall = clamp(Math.round(2 * CONE_W * Math.tan(Math.min(span, 1.2)) + 4), 8, CONE_W * 2);
+  const sprite = offscreen(CONE_W, tall);
+  const g = sprite.getContext('2d');
+  const image = g.createImageData(CONE_W, tall);
+  const data = image.data;
+  const { r, g: gr, b } = hexToRgb(colour);
+  if (data.length >= CONE_W * tall * 4) {
+    const m = tall / 2;
+    for (let y = 0; y < tall; y++) {
+      for (let x = 0; x < CONE_W; x++) {
+        const dx = x + 0.5;
+        const dy = y + 0.5 - m;
+        const d = Math.hypot(dx, dy) / CONE_W;
+        if (d > 1) continue;
+        // The angle off the axis, in half-beam-widths.
+        const a = Math.atan2(dy, dx) / half;
+        const across = Math.exp(-1.25 * a * a);
+        // Rising out of the lamp, then thinning as the beam spreads; at the
+        // far end either dissolving into the spot it makes on the wall — the
+        // last tenth of it is under the spot, and an edge there would show as
+        // a cut across the beam — or carrying on into the dark.
+        const along = smoothstep(0, 0.03, d)
+          * (lands ? 0.4 + 0.6 * (1 - d) ** 1.5 : 0.3 + 0.7 * (1 - d) ** 2)
+          * (lands ? smoothstep(1, 0.84, d) : smoothstep(1, 0.75, d));
+        const o = (y * CONE_W + x) * 4;
+        data[o] = r;
+        data[o + 1] = gr;
+        data[o + 2] = b;
+        data[o + 3] = clamp(across * along, 0, 1) * 255;
+      }
+    }
+  }
+  g.putImageData(image, 0, 0);
+  return sprite;
+}
+
+/** The pair of cone sprites for this layer, kept in its state, keyed on `stable`. */
+function coneSprites(state, colour, half) {
+  const key = `${colour}|${half.toFixed(4)}`;
+  if (state.coneKey === key) return state.cones;
+  state.cones = { lands: bakeCone(colour, half, true), open: bakeCone(colour, half, false) };
+  state.coneKey = key;
+  return state.cones;
+}
+
+/**
+ * How far a ray from (ox, oy) heading (dx, dy) runs before it leaves `bbox`,
+ * or 0 if it never enters it.
+ */
+function rayExit(ox, oy, dx, dy, bbox) {
+  let near = 0;
+  let far = Infinity;
+  if (Math.abs(dx) < 1e-9) {
+    if (ox < bbox.x || ox > bbox.x + bbox.w) return 0;
+  } else {
+    const a = (bbox.x - ox) / dx;
+    const b = (bbox.x + bbox.w - ox) / dx;
+    near = Math.max(near, Math.min(a, b));
+    far = Math.min(far, Math.max(a, b));
+  }
+  if (Math.abs(dy) < 1e-9) {
+    if (oy < bbox.y || oy > bbox.y + bbox.h) return 0;
+  } else {
+    const a = (bbox.y - oy) / dy;
+    const b = (bbox.y + bbox.h - oy) / dy;
+    near = Math.max(near, Math.min(a, b));
+    far = Math.min(far, Math.max(a, b));
+  }
+  return far > near ? far : 0;
+}
+
 const searchlight = {
   id: 'searchlight',
   name: 'Searchlight',
   category: 'atmosphere',
   scope: 'shape',
   description:
-    'A sweeping beam with a visible cone. Reads as a real light source raking across the front of the house.',
+    'A sweeping beam with a soft visible cone through the haze and a hot spot where it lands. Reads as a real light source raking across the front of the house.',
   params: [
     { key: 'color', type: 'color', label: 'Colour', default: '#dbe9ff' },
     { key: 'beams', type: 'range', label: 'Beams', default: 1, min: 1, max: 6, step: 1 },
@@ -172,72 +346,443 @@ const searchlight = {
     { key: 'originX', type: 'range', label: 'Origin X', default: 0.5, min: -0.5, max: 1.5, step: 0.005 },
     { key: 'originY', type: 'range', label: 'Origin Y', default: 1.15, min: -0.5, max: 2, step: 0.005 },
     { key: 'aim', type: 'range', label: 'Aim', default: -90, min: -180, max: 180, step: 1 },
+    /**
+     * Where the beam meets the wall, as a fraction of the way across the
+     * shape along the beam.
+     *
+     * A searchlight on the ground in front of a house throws its cone up
+     * through the air and stops dead on the brickwork, and in the picture the
+     * cone runs from the lamp to a bright footprint and no further. Where that
+     * footprint falls is a composition decision with no right answer — the
+     * middle of the wall, the roofline, past the top into the sky, which is
+     * the premiere-night look and has no spot at all — so it is a slider.
+     */
+    { key: 'throw', type: 'range', label: 'Lands at', default: 0.62, min: 0.1, max: 1.3, step: 0.01 },
     { key: 'intensity', type: 'range', label: 'Intensity', default: 0.55, min: 0, max: 2, step: 0.01 },
     { key: 'haze', type: 'range', label: 'Haze', default: 0.4, min: 0, max: 1, step: 0.01 },
     { key: 'flicker', type: 'range', label: 'Flicker', default: 0.08, min: 0, max: 1, step: 0.01 },
   ],
-  draw({ g, p, shape, t, noise }) {
+  draw({ g, p, stable, shape, t, noise, state }) {
     const { bbox } = shape;
+    if (bbox.w <= 2 || bbox.h <= 2 || p.intensity <= 0) return;
     const ox = bbox.x + p.originX * bbox.w;
     const oy = bbox.y + p.originY * bbox.h;
-    const reach = Math.hypot(bbox.w, bbox.h) * 1.6;
-    const spread = (p.spread * Math.PI) / 180;
+    const half = Math.max(0.004, (p.spread * Math.PI) / 360);
     const arc = (p.arc * Math.PI) / 180;
     const aim = (p.aim * Math.PI) / 180;
+    const beams = Math.round(p.beams);
+    // From `stable`: the cone is a cache, and Beam width bound to the
+    // microphone must not bake a new one every frame. A modulated width
+    // stretches the baked cone across the beam instead.
+    const bakedHalf = Math.max(0.004, (stable.spread * Math.PI) / 360);
+    const cones = coneSprites(state, stable.color, bakedHalf);
+    const hot = mixHex(p.color, '#ffffff', 0.65);
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
 
-    for (let b = 0; b < Math.round(p.beams); b++) {
-      const phase = t * p.speed + b / Math.max(1, p.beams);
-      // Triangle wave sweep: a beam that snaps back to the start looks broken.
-      const sweep = (Math.abs(frac(phase) * 2 - 1) - 0.5) * arc;
-      const centre = aim + sweep;
+    for (let b = 0; b < beams; b++) {
+      /**
+       * The sweep, eased at the ends.
+       *
+       * A triangle wave reverses instantly, which no motor-driven lamp on a
+       * pedestal does; it slows into the end of its travel and comes away
+       * again. A sine has the same period and the same arc and does that.
+       */
+      const phase = t * p.speed + b / Math.max(1, beams);
+      const centre = aim + Math.sin(phase * TAU) * arc * 0.5;
       const wobble = p.flicker > 0 ? 1 - p.flicker * Math.abs(noise.noise2(t * 6 + b * 10, 0)) : 1;
       const level = clamp(p.intensity * wobble, 0, 3);
       if (level <= 0.002) continue;
 
-      const tipX = ox + Math.cos(centre) * reach;
-      const tipY = oy + Math.sin(centre) * reach;
+      const dx = Math.cos(centre);
+      const dy = Math.sin(centre);
+      // Where it lands: along the beam, the given fraction of the way to
+      // where the beam would leave the shape.
+      const exit = rayExit(ox, oy, dx, dy, bbox);
+      const reach = exit > 0 ? exit * p.throw : Math.hypot(bbox.w, bbox.h) * p.throw;
+      const lands = p.throw <= 1 && exit > 0;
+      if (reach <= 1) continue;
 
-      // The cone body: bright at the source, fading along its length.
-      const grad = g.createLinearGradient(ox, oy, tipX, tipY);
-      grad.addColorStop(0, rgba(p.color, 0.55 * level));
-      grad.addColorStop(0.35, rgba(p.color, 0.28 * level * (0.4 + p.haze)));
-      grad.addColorStop(1, rgba(p.color, 0));
-      g.fillStyle = grad;
+      // The cone, as bright as the haze in it, stood on the beam's axis.
+      if (p.haze > 0) {
+        const cone = lands ? cones.lands : cones.open;
+        const scale = reach / CONE_W;
+        g.save();
+        g.translate(ox, oy);
+        g.rotate(centre);
+        g.scale(scale, scale * (half / bakedHalf));
+        for (let a = level * (0.6 + 1.2 * p.haze); a > 0.002; a -= 1) {
+          g.globalAlpha = Math.min(1, a);
+          g.drawImage(cone, 0, -cone.height / 2);
+        }
+        g.restore();
+        g.globalAlpha = 1;
+      }
 
-      g.beginPath();
-      g.moveTo(ox, oy);
-      g.arc(ox, oy, reach, centre - spread / 2, centre + spread / 2);
-      g.closePath();
-      g.fill();
-
-      // A tighter, brighter core inside the cone.
-      const coreGrad = g.createLinearGradient(ox, oy, tipX, tipY);
-      coreGrad.addColorStop(0, rgba(p.color, 0.7 * level));
-      coreGrad.addColorStop(1, rgba(p.color, 0));
-      g.fillStyle = coreGrad;
-      g.beginPath();
-      g.moveTo(ox, oy);
-      g.arc(ox, oy, reach, centre - spread / 6, centre + spread / 6);
-      g.closePath();
-      g.fill();
+      /**
+       * The footprint, where the beam meets the brickwork.
+       *
+       * The brightest thing a searchlight makes: the same light the haze only
+       * scatters a little of, all of it, on a surface facing it. The beam
+       * arrives slanting, so its circle is drawn out into an ellipse along the
+       * direction it came from, with a hot white middle and a soft edge that
+       * is the beam's own Gaussian, not a rim.
+       */
+      if (lands) {
+        const across = Math.max(4, reach * Math.tan(half) * 1.3);
+        const along = across * 1.45;
+        const sx = ox + dx * reach;
+        const sy = oy + dy * reach;
+        // The same light over a bigger footprint is dimmer: a wide beam lands
+        // as a broad glow, a narrow one as a hot spot.
+        const focus = clamp((0.12 / Math.max(0.02, Math.tan(half))) ** 0.6, 0.35, 1.2);
+        const spot = g.createRadialGradient(0, 0, 0, 0, 0, across);
+        spot.addColorStop(0, rgba(hot, clamp(level * 1.1 * focus, 0, 1)));
+        spot.addColorStop(0.18, rgba(hot, clamp(level * 0.85 * focus, 0, 1)));
+        spot.addColorStop(0.5, rgba(p.color, clamp(level * 0.36 * focus, 0, 1)));
+        spot.addColorStop(0.8, rgba(p.color, clamp(level * 0.08 * focus, 0, 1)));
+        spot.addColorStop(1, rgba(p.color, 0));
+        g.save();
+        g.translate(sx, sy);
+        g.rotate(centre);
+        g.scale(along / across, 1);
+        g.fillStyle = spot;
+        g.beginPath();
+        g.arc(0, 0, across, 0, TAU);
+        g.fill();
+        g.restore();
+      }
 
       // The lamp itself, if it happens to be inside the shape.
-      const lampR = Math.min(bbox.w, bbox.h) * 0.05;
-      const lamp = g.createRadialGradient(ox, oy, 0, ox, oy, lampR * 4);
-      lamp.addColorStop(0, rgba(p.color, level));
-      lamp.addColorStop(1, rgba(p.color, 0));
-      g.fillStyle = lamp;
-      g.beginPath();
-      g.arc(ox, oy, lampR * 4, 0, TAU);
-      g.fill();
+      glow(g, ox, oy, Math.min(bbox.w, bbox.h) * 0.12, hot, clamp(level, 0, 1));
     }
+
     g.restore();
   },
 };
+
+/* ------------------------------------------------------------------ *
+ * Water caustics
+ * ------------------------------------------------------------------ */
+
+/**
+ * What a caustic actually is, and how this one is made.
+ *
+ * Sunlight through a wavy surface is refracted by every bump in it, and each
+ * convex patch of water is a weak lens. Where those lenses bring the light to
+ * a focus on the floor — or on a wall — there is a *fold*: a curve along which
+ * the light piles up, very bright on the line and dark immediately beside it.
+ * Neighbouring lenses make neighbouring folds, so what lands on the wall is a
+ * web of bright filaments round dim, rounded cells. The filaments are wavy,
+ * never straight; they are thin and faint where the focus is poor and thick
+ * and hot where two of them converge, with a near-white knot where three
+ * meet; and some cells hold a soft pool of light of their own, where a broad
+ * lens has gathered the light without quite focusing it. The whole web crawls
+ * and re-forms as the surface moves. That is the thing everybody recognises
+ * from the bottom of a swimming pool.
+ *
+ * The old version evaluated ridged noise on a sixty-four-cell grid and
+ * stretched it over the wall: soft cyan noodles that never closed into cells,
+ * blurred by a twenty-fold magnification into something nearer smoke than
+ * light. The shape was wrong, and the resolution threw away the one property
+ * — sharpness — that makes a caustic a caustic.
+ *
+ * Now the web is a cellular field, computed per texel into a small tile that
+ * wraps at its edges: the distance to the nearest of a lattice of wandering
+ * points minus the distance to the second nearest (F2 − F1) is zero exactly on
+ * the boundaries between their territories, so a sharp falloff on it draws a
+ * web of filaments, and F3 − F1 is zero where three territories meet, which is
+ * where the knots go. Two things make it light through water rather than
+ * cracked mud. The domain is warped by smooth waves before the lookup, which
+ * bends every boundary into a curve and rounds every cell; and the falloff's
+ * width and brightness each wander on a noise of their own, so a filament
+ * thins to a thread in one place and swells and burns in another.
+ *
+ * The tile is drawn at a couple of dozen moments round a loop, each the first
+ * time it is needed and never again. Each frame cross-fades the two nearest
+ * moments as it stamps them over the shape: two layers of it, at different
+ * scales and drifting apart, because the light under real water is two webs —
+ * the swell makes the big cells and the chop on it a finer, fainter mesh —
+ * and because two tiles that repeat at sizes which never line up hide each
+ * other's repetition.
+ */
+
+/** Cells across one tile, and moments round the loop. */
+const TILE_CELLS = 4;
+const CAUSTIC_FRAMES = 24;
+const SITES = TILE_CELLS * TILE_CELLS;
+
+/** A stable 0..1 for lattice site `s`, so a point keeps its character all the way round the loop. */
+function siteHash(s, salt) {
+  let h = Math.imul(s + 1, 374761393) ^ Math.imul(salt, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
+/**
+ * The smooth waves the tile is built from, as `[a, b, q, c]`: `a` and `b`
+ * whole cycles across the tile in each direction, `q` whole turns round the
+ * loop, `c` a phase. Whole numbers are what make the tile wrap and the loop
+ * close. The first three bend the domain sideways, the next three up and
+ * down, then two that set how wide the filaments are and two how bright.
+ */
+const CAUSTIC_WAVES = [
+  [1, 2, 1, 0.3], [3, -1, -1, 1.7], [2, 3, 2, 4.1],
+  [2, -1, -1, 2.2], [-1, 3, 1, 0.9], [3, 2, -2, 5.3],
+  [2, 1, 1, 0.5], [-1, 3, -1, 2.6],
+  [1, -2, -1, 1.1], [3, 1, 1, 3.7],
+];
+const WAVE_COUNT = CAUSTIC_WAVES.length;
+
+/** `exp(−x)` for `x` in 0..16, from a table: the bake asks for three of them per texel. */
+const FALLOFF_STEPS = 64;
+const FALLOFF = new Float32Array(FALLOFF_STEPS * 16 + 2);
+for (let i = 0; i < FALLOFF.length; i++) FALLOFF[i] = Math.exp(-i / FALLOFF_STEPS);
+const falloff = (x) => (x >= 16 ? 0 : FALLOFF[(x * FALLOFF_STEPS) | 0]);
+
+/** Scratch for one bake: the points, the candidates per cell and the wave tables. */
+const siteX = new Float64Array(SITES);
+const siteY = new Float64Array(SITES);
+const sitePool = new Float64Array(SITES);
+const NEAR = TILE_CELLS + 2;
+const nearX = new Float64Array(NEAR * NEAR * 9);
+const nearY = new Float64Array(NEAR * NEAR * 9);
+const nearSite = new Int32Array(NEAR * NEAR * 9);
+let waveSize = 0;
+let colSin = null;
+let colCos = null;
+let rowSin = null;
+let rowCos = null;
+
+/**
+ * Bake the web at `phase` (0..1 round the loop) into `out`, an RGBA tile
+ * `size` texels square that wraps at its edges.
+ *
+ * The lattice is periodic — the site in cell (i, j) is the site in cell
+ * (i mod 4, j mod 4), moved by a whole tile — and every point goes once round
+ * its own small loop as the phase goes from 0 to 1, which is what closes the
+ * animation. Each wave term is split into a part that depends only on the
+ * column and a part that depends only on the row, so a texel costs a few
+ * multiplies instead of ten sines.
+ */
+function bakeCausticTile(out, size, phase, sharpness, rgb, hot) {
+  const cell = size / TILE_CELLS;
+  const turn = phase * TAU;
+  for (let s = 0; s < SITES; s++) {
+    const i = s % TILE_CELLS;
+    const j = (s / TILE_CELLS) | 0;
+    const dir = siteHash(s, 7) < 0.5 ? -1 : 1;
+    siteX[s] = (i + 0.5 + (siteHash(s, 1) - 0.5) * 0.5 + Math.sin(turn * dir + siteHash(s, 5) * TAU) * 0.13) * cell;
+    siteY[s] = (j + 0.5 + (siteHash(s, 2) - 0.5) * 0.5 + Math.cos(turn * dir + siteHash(s, 6) * TAU) * 0.13) * cell;
+    // About half the cells hold a pool of light, breathing round the loop.
+    const p = siteHash(s, 9);
+    sitePool[s] = p > 0.45 ? ((p - 0.45) / 0.55) * (0.75 + 0.25 * Math.sin(turn + siteHash(s, 10) * TAU)) : 0;
+  }
+  // The nine candidate points for every cell a warped texel can land in.
+  for (let cy = -1; cy < NEAR - 1; cy++) {
+    for (let cx = -1; cx < NEAR - 1; cx++) {
+      let n = ((cy + 1) * NEAR + (cx + 1)) * 9;
+      for (let dj = -1; dj <= 1; dj++) {
+        const wrapY = Math.floor((cy + dj) / TILE_CELLS);
+        const sj = cy + dj - wrapY * TILE_CELLS;
+        for (let di = -1; di <= 1; di++) {
+          const wrapX = Math.floor((cx + di) / TILE_CELLS);
+          const s = sj * TILE_CELLS + (cx + di - wrapX * TILE_CELLS);
+          nearX[n] = siteX[s] + wrapX * size;
+          nearY[n] = siteY[s] + wrapY * size;
+          nearSite[n] = s;
+          n++;
+        }
+      }
+    }
+  }
+  if (waveSize !== size) {
+    waveSize = size;
+    colSin = new Float64Array(WAVE_COUNT * size);
+    colCos = new Float64Array(WAVE_COUNT * size);
+    rowSin = new Float64Array(WAVE_COUNT * size);
+    rowCos = new Float64Array(WAVE_COUNT * size);
+  }
+  for (let k = 0; k < WAVE_COUNT; k++) {
+    const [a, b, q, c] = CAUSTIC_WAVES[k];
+    for (let x = 0; x < size; x++) {
+      const u = ((x + 0.5) / size) * TAU;
+      colSin[k * size + x] = Math.sin(u * a);
+      colCos[k * size + x] = Math.cos(u * a);
+      rowSin[k * size + x] = Math.sin(u * b + q * turn + c);
+      rowCos[k * size + x] = Math.cos(u * b + q * turn + c);
+    }
+  }
+
+  const bend = cell * 0.09;
+  // Sharpness narrows the filaments.
+  const width = cell * 0.05 * Math.pow(3.5 / clamp(sharpness, 1, 10), 0.6);
+  const nearScale = 1 / (cell * 0.18);
+  const poolScale = 1 / (cell * 0.5);
+  for (let y = 0; y < size; y++) {
+    // The row halves of the ten terms, hoisted out of the inner loop.
+    const c0 = rowCos[y], s0 = rowSin[y], c1 = rowCos[size + y], s1w = rowSin[size + y];
+    const c2 = rowCos[2 * size + y], s2 = rowSin[2 * size + y], c3 = rowCos[3 * size + y], s3 = rowSin[3 * size + y];
+    const c4 = rowCos[4 * size + y], s4 = rowSin[4 * size + y], c5 = rowCos[5 * size + y], s5 = rowSin[5 * size + y];
+    const c6 = rowCos[6 * size + y], s6 = rowSin[6 * size + y], c7 = rowCos[7 * size + y], s7 = rowSin[7 * size + y];
+    const c8 = rowCos[8 * size + y], s8 = rowSin[8 * size + y], c9 = rowCos[9 * size + y], s9 = rowSin[9 * size + y];
+    for (let x = 0; x < size; x++) {
+      // sin(u + v) = sin u cos v + cos u sin v, for each of the ten waves.
+      const px = x + 0.5 + bend * (colSin[x] * c0 + colCos[x] * s0
+        + colSin[size + x] * c1 + colCos[size + x] * s1w
+        + colSin[2 * size + x] * c2 + colCos[2 * size + x] * s2);
+      const py = y + 0.5 + bend * (colSin[3 * size + x] * c3 + colCos[3 * size + x] * s3
+        + colSin[4 * size + x] * c4 + colCos[4 * size + x] * s4
+        + colSin[5 * size + x] * c5 + colCos[5 * size + x] * s5);
+      const thick = 0.5 + 0.25 * (colSin[6 * size + x] * c6 + colCos[6 * size + x] * s6
+        + colSin[7 * size + x] * c7 + colCos[7 * size + x] * s7);
+      const bright = 0.5 + 0.25 * (colSin[8 * size + x] * c8 + colCos[8 * size + x] * s8
+        + colSin[9 * size + x] * c9 + colCos[9 * size + x] * s9);
+      const cx = clamp(Math.floor(px / cell), -1, NEAR - 2);
+      const cy = clamp(Math.floor(py / cell), -1, NEAR - 2);
+      const base = ((cy + 1) * NEAR + (cx + 1)) * 9;
+      let d1 = Infinity;
+      let d2 = Infinity;
+      let d3 = Infinity;
+      let s1 = 0;
+      for (let n = base; n < base + 9; n++) {
+        const dx = px - nearX[n];
+        const dy = py - nearY[n];
+        const d = dx * dx + dy * dy;
+        if (d < d1) { d3 = d2; d2 = d1; d1 = d; s1 = nearSite[n]; } else if (d < d2) { d3 = d2; d2 = d; } else if (d < d3) d3 = d;
+      }
+      const f1 = Math.sqrt(d1);
+      const gap = Math.sqrt(d3) - f1;
+      // How close this is to a junction, where filaments converge and swell.
+      const near = falloff(gap * nearScale);
+      // Never much under a texel: thinner than that and a filament breaks into dots.
+      const w = Math.max(1.1, width * (0.4 + 1.2 * thick) * (1 + 1.4 * near));
+      const e = (Math.sqrt(d2) - f1) / w;
+      const k = gap / (w * 1.5);
+      const r = f1 * poolScale;
+      const light = falloff(e * e) * (0.3 + bright) * (1 + 0.7 * near)
+        + falloff(k * k) * 0.8
+        + sitePool[s1] * falloff(r * r) * 0.3;
+      // Past full alpha the extra light goes into whiteness: the hottest knots burn white.
+      const white = clamp((light - 0.75) / 0.85, 0, 1);
+      const o = (y * size + x) * 4;
+      out[o] = rgb.r + (hot.r - rgb.r) * white;
+      out[o + 1] = rgb.g + (hot.g - rgb.g) * white;
+      out[o + 2] = rgb.b + (hot.b - rgb.b) * white;
+      out[o + 3] = (light > 1 ? 1 : light) * 255;
+    }
+  }
+}
+
+/**
+ * The loop of tiles for one colour, sharpness and resolution, shared by every
+ * layer and shape that asks for the same.
+ *
+ * All of its canvases are made on first use, so a warm layer never allocates;
+ * each moment is *baked* only the first time the show reaches it, a few
+ * milliseconds a time over the first trip round rather than a stall of a few
+ * hundred at the start. What a moment looks like depends on nothing but the
+ * key and its index, so it does not matter which tab baked it when.
+ *
+ * Keyed on `stable`, never on `p`: Sharpness bound to the microphone would
+ * otherwise throw the loop away every frame.
+ */
+const causticLoops = new Map();
+
+/**
+ * How many looks are kept at once. Each is three or four megabytes at the
+ * usual Detail, and a show has one or two; but the limit has to be well above
+ * that, because a show with one more look than the limit would evict a loop
+ * every frame and rebuild it the next — twenty-four canvases a frame, which
+ * is the one thing a cache must never do. Least recently used goes first.
+ */
+const CAUSTIC_LOOKS = 6;
+
+function causticLoop(colour, sharpness, size) {
+  const key = `${colour}|${sharpness}|${size}`;
+  let loop = causticLoops.get(key);
+  if (loop) {
+    // To the back of the queue: most recently used.
+    if (causticLoops.size > 1) {
+      causticLoops.delete(key);
+      causticLoops.set(key, loop);
+    }
+    return loop;
+  }
+  if (causticLoops.size >= CAUSTIC_LOOKS) causticLoops.delete(causticLoops.keys().next().value);
+  const frames = [];
+  for (let f = 0; f < CAUSTIC_FRAMES; f++) frames.push(offscreen(size, size));
+  const rgb = hexToRgb(colour);
+  loop = {
+    size,
+    sharpness,
+    frames,
+    baked: new Uint8Array(CAUSTIC_FRAMES),
+    image: frames[0].getContext('2d').createImageData(size, size),
+    rgb,
+    hot: hexToRgb(mixHex(colour, '#ffffff', 0.85)),
+  };
+  causticLoops.set(key, loop);
+  return loop;
+}
+
+/** Moment `f` of `loop`, baked if this is the first time anybody has asked. */
+function causticMoment(loop, f) {
+  const tile = loop.frames[f];
+  if (!loop.baked[f]) {
+    bakeCausticTile(loop.image.data, loop.size, f / CAUSTIC_FRAMES, loop.sharpness, loop.rgb, loop.hot);
+    tile.getContext('2d').putImageData(loop.image, 0, 0);
+    loop.baked[f] = 1;
+  }
+  return tile;
+}
+
+/**
+ * Cover `bbox` with `tile` repeated at `scale` world pixels per texel, slid by
+ * `ox, oy`.
+ *
+ * Stamped as a grid of `drawImage`s rather than filled with a repeating
+ * pattern, which would be the obvious way to write it: measured on the demo
+ * wall the stamps cost about three fifths of the pattern fill for the same
+ * pixels, and the tile wraps cleanly enough that the joins cannot be found.
+ */
+function fillTiled(g, tile, bbox, scale, ox, oy) {
+  const span = tile.width * scale;
+  if (!(span > 1)) return;
+  const x0 = ox + Math.floor((bbox.x - ox) / span) * span;
+  const y0 = oy + Math.floor((bbox.y - oy) / span) * span;
+  for (let y = y0; y < bbox.y + bbox.h; y += span) {
+    for (let x = x0; x < bbox.x + bbox.w; x += span) g.drawImage(tile, x, y, span, span);
+  }
+}
+
+/**
+ * One web at `position` round the loop, cross-faded between the two moments
+ * either side of it and stamped over `bbox` at `alpha`.
+ *
+ * The fade is done on the wall, two stamps at complementary alphas adding up
+ * under `lighter`, rather than in a scratch tile first: a scratch tile would
+ * be a canvas drawn into every frame, and a canvas drawn into every frame is
+ * a different history in a tab painting at fifty frames a second from one
+ * painting at sixty. Near the ends of the fade only one moment is worth
+ * drawing.
+ */
+function stampWeb(g, loop, position, alpha, bbox, scale, ox, oy) {
+  const at = ((position % CAUSTIC_FRAMES) + CAUSTIC_FRAMES) % CAUSTIC_FRAMES;
+  const f0 = Math.floor(at) % CAUSTIC_FRAMES;
+  const mix = at - Math.floor(at);
+  if (mix < 0.97) {
+    g.globalAlpha = clamp(alpha * (1 - mix), 0, 1);
+    fillTiled(g, causticMoment(loop, f0), bbox, scale, ox, oy);
+  }
+  if (mix > 0.03) {
+    g.globalAlpha = clamp(alpha * mix, 0, 1);
+    fillTiled(g, causticMoment(loop, (f0 + 1) % CAUSTIC_FRAMES), bbox, scale, ox, oy);
+  }
+}
 
 const caustics = {
   id: 'caustics',
@@ -245,7 +790,7 @@ const caustics = {
   category: 'atmosphere',
   scope: 'shape',
   description:
-    'Rippling light like sun through water. Slow it right down and it becomes a very good "something is wrong" wash.',
+    'The web of light that sun through moving water throws on whatever is under it: thin sharp folds closing into cells, brightest where they meet, re-forming as the surface moves. Slow it right down and it becomes a very good "something is wrong" wash.',
   params: [
     { key: 'color', type: 'color', label: 'Colour', default: '#7fe8ff' },
     { key: 'color2', type: 'color', label: 'Deep colour', default: '#04203a' },
@@ -255,55 +800,124 @@ const caustics = {
     { key: 'level', type: 'range', label: 'Brightness', default: 0.8, min: 0, max: 2, step: 0.01 },
     { key: 'resolution', type: 'range', label: 'Detail', default: 56, min: 12, max: 130, step: 2 },
   ],
-  draw({ g, p, shape, t, state, noise }) {
+  draw({ g, p, stable, shape, t }) {
     const { bbox } = shape;
-    if (bbox.w <= 2 || bbox.h <= 2) return;
+    if (bbox.w <= 2 || bbox.h <= 2 || p.level <= 0) return;
 
-    // A field rather than thousands of fillRects: one draw call, and the
-    // browser's bilinear filtering turns the cells into continuous ripples.
-    const cols = Math.max(8, Math.round(p.resolution));
-    const rows = Math.max(8, Math.round((cols * bbox.h) / bbox.w));
-    const field = ensureField(state, 'field', cols, rows);
-    field.clear();
+    /**
+     * Detail is how finely the tile is drawn: crisper filaments for more
+     * memory and a longer bake. A hundred and ninety-two texels at the
+     * Sunken preset's 64, which puts a texel at about two world pixels on the
+     * demo wall — as fine as a projector at that distance resolves.
+     */
+    const size = clamp(Math.round((stable.resolution * 3) / 16) * 16, 96, 320);
+    const loop = causticLoop(stable.color, stable.sharpness, size);
 
-    // Precompute the colour ramp once per frame instead of per cell — building
-    // a CSS string 5000 times a frame is what made the old version expensive.
-    const RAMP_STEPS = 24;
-    const ramp = [];
-    for (let i = 0; i < RAMP_STEPS; i++) {
-      const hex = mixLinear(p.color2, p.color, i / (RAMP_STEPS - 1)).replace('#', '');
-      const n = parseInt(hex, 16) || 0;
-      ramp.push([(n >> 16) & 255, (n >> 8) & 255, n & 255]);
-    }
+    /**
+     * How big a cell is on the wall: Scale of them across the shape, roughly,
+     * and the fine web a little under half that, at a ratio that keeps the
+     * two tiles from ever repeating in step.
+     */
+    const span = (bbox.w + bbox.h) / 2;
+    const cell = Math.max(8, span / Math.max(0.5, p.scale * 2.2));
+    const coarse = (cell * TILE_CELLS) / size;
+    const fine = coarse * 0.453;
 
-    for (let y = 0; y < rows; y++) {
-      const v = (y + 0.5) / rows;
-      for (let x = 0; x < cols; x++) {
-        const u = (x + 0.5) / cols;
-        // Two counter-drifting noise fields; ridged so the bright veins are
-        // thin and the dark areas broad, which is what caustics actually do.
-        const a = noise.noise3(u * p.scale, v * p.scale, t * p.speed);
-        const b = noise.noise3(u * p.scale * 1.7 + 4.2, v * p.scale * 1.7 - 2.1, t * p.speed * 0.7);
-        const ridge = 1 - Math.abs(a + b) * 0.5;
-        const value = Math.pow(clamp(ridge, 0, 1), p.sharpness);
-        if (value < 0.02) continue;
-
-        const [r, gg, bb] = ramp[Math.min(RAMP_STEPS - 1, (value * RAMP_STEPS) | 0)];
-        field.set(x, y, r, gg, bb, clamp(value * p.level, 0, 1));
-      }
-    }
+    // Round the loop at a rate the Speed slider sets, the fine web faster
+    // because chop is quicker than swell; and drifting, the two webs in
+    // different directions, because the surface is going somewhere.
+    const clock = t * p.speed;
+    const slide = clock * cell * 0.22;
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
-    field.blit(g, bbox.x, bbox.y, bbox.w, bbox.h);
+
+    /**
+     * The water between the folds: not black — the light that was not
+     * gathered into a fold is still arriving, spread thin — but dim and the
+     * deep colour, so the web has something to be brighter than.
+     */
+    g.fillStyle = rgba(p.color2, clamp(0.6 * p.level, 0, 1));
+    g.fillRect(bbox.x, bbox.y, bbox.w, bbox.h);
+
+    /**
+     * Brightness above one is a second stamp of the same web, because the
+     * tile's hot core is already at full alpha and `globalAlpha` stops at one:
+     * clamping instead would leave the top half of the slider doing nothing.
+     */
+    for (let level = p.level; level > 0.004; level -= 1) {
+      stampWeb(g, loop, clock * 2.6, Math.min(1, level), bbox, coarse,
+        bbox.x + slide * 0.88, bbox.y + slide * 0.47);
+      stampWeb(g, loop, clock * 3.7 + CAUSTIC_FRAMES * 0.37, Math.min(1, level) * 0.5, bbox, fine,
+        bbox.x - slide * 0.61 + cell * 0.31, bbox.y + slide * 0.35 + cell * 0.77);
+    }
+    g.globalAlpha = 1;
     g.restore();
   },
 };
 
-/** Temperature falls fast at first, then levels off — Newtonian cooling. */
+/* ------------------------------------------------------------------ *
+ * Drifting embers
+ * ------------------------------------------------------------------ */
+
+/**
+ * Temperature falls fast at first, then levels off — Newtonian cooling — over
+ * an ember's life, `f` from 0 to 1. Two time constants in a lifetime: by the
+ * end it has lost most of its heat, but it is still glowing for most of the
+ * climb, which is what makes a column of them read as a fire somewhere below.
+ */
 function lerpTemp(hot, cool, f) {
-  return cool + (hot - cool) * Math.exp(-3.2 * f);
+  return cool + (hot - cool) * Math.exp(-2 * f);
+}
+
+/**
+ * The sprite ladder: one baked ember per step of temperature.
+ *
+ * An ember is a point of incandescence with a glow round it, and both take
+ * their colour from how hot it is — so the sprite is a white-hot pinpoint
+ * fading through the blackbody colour of its temperature to nothing, and a
+ * cooling ember is stamped from a cooler rung of the ladder. Twelve rungs
+ * between the layer's hot and cooled temperatures is finer than the eye can
+ * tell apart, and it means a show of a few hundred embers is a few hundred
+ * `drawImage`s rather than a few hundred gradients built and thrown away
+ * every frame.
+ */
+const EMBER_RUNGS = 12;
+const EMBER_SPRITE = 64;
+
+/**
+ * Kept in the layer's state, as every cache in this library is, so each tab
+ * bakes the same canvases; keyed on `stable`, so a temperature bound to the
+ * microphone does not bake a new ladder every frame.
+ */
+function emberLadder(state, hot, cool) {
+  const key = `${hot}|${cool}`;
+  if (state.ladderKey === key) return state.ladder;
+  const ladder = [];
+  for (let r = 0; r < EMBER_RUNGS; r++) {
+    const kelvin = lerp(cool, hot, r / (EMBER_RUNGS - 1));
+    const colour = blackbodyCss(kelvin);
+    // The core goes whiter the hotter the ember: the same blackbody,
+    // overexposed, which is what a camera and an eye both make of it.
+    const core = mixHex(colour, '#ffffff', 0.25 + 0.5 * (r / (EMBER_RUNGS - 1)));
+    const sprite = offscreen(EMBER_SPRITE, EMBER_SPRITE);
+    const g = sprite.getContext('2d');
+    const m = EMBER_SPRITE / 2;
+    const grad = g.createRadialGradient(m, m, 0, m, m, m);
+    grad.addColorStop(0, rgba(core, 1));
+    grad.addColorStop(0.13, rgba(core, 0.92));
+    grad.addColorStop(0.28, rgba(colour, 0.6));
+    grad.addColorStop(0.52, rgba(colour, 0.18));
+    grad.addColorStop(0.78, rgba(colour, 0.04));
+    grad.addColorStop(1, rgba(colour, 0));
+    g.fillStyle = grad;
+    g.fillRect(0, 0, EMBER_SPRITE, EMBER_SPRITE);
+    ladder.push(sprite);
+  }
+  state.ladder = ladder;
+  state.ladderKey = key;
+  return ladder;
 }
 
 const embers = {
@@ -312,7 +926,7 @@ const embers = {
   category: 'atmosphere',
   scope: 'shape',
   description:
-    'Slow motes rising through the frame with turbulence. Costs almost nothing and adds enormous depth behind other effects.',
+    'Hot motes rising on the air and tumbling as they go, white-gold when they leave and cooling to a dull red as they climb. Costs almost nothing and adds enormous depth behind other effects.',
   params: [
     { key: 'hotTemp', type: 'range', label: 'Hot temperature (K)', default: 2000, min: 900, max: 3500, step: 25 },
     { key: 'coolTemp', type: 'range', label: 'Cooled temperature (K)', default: 1050, min: 800, max: 2500, step: 25 },
@@ -332,13 +946,32 @@ const embers = {
     if (bbox.w <= 0 || bbox.h <= 0) return;
     const target = Math.round(p.count);
 
+    /**
+     * Where an ember starts, and how long it has.
+     *
+     * Most come up from below, where the fire is; a third flare up in mid-air,
+     * because an ember that has been smouldering dark in the smoke catches a
+     * breath of air and lights again. And each lives long enough to climb a
+     * good part of the shape: the old lifetime of four to twelve seconds, at
+     * the thirty pixels a second the presets rise at, meant no ember ever got
+     * out of the bottom third of the house.
+     */
     const spawn = (mote = {}, fresh = false) => {
+      const flare = !fresh || rng() < 0.35;
       mote.x = bbox.x + rng() * bbox.w;
-      mote.y = fresh ? bbox.y + bbox.h + rng() * bbox.h * 0.1 : bbox.y + rng() * bbox.h;
+      mote.y = flare
+        ? bbox.y + bbox.h * (0.25 + rng() * 0.8)
+        : bbox.y + bbox.h + rng() * bbox.h * 0.1;
       mote.seed = rng() * 100;
       mote.scale = 0.4 + rng() * 1.1;
       mote.life = 0;
-      mote.span = 4 + rng() * 8;
+      const climb = bbox.h / Math.max(8, Math.abs(p.rise));
+      mote.span = clamp(climb * (0.45 + rng() * 0.75), 3, 60);
+      // Some burn hotter than others: a spark off a resinous knot is not a
+      // flake of ash.
+      mote.heat = 0.55 + rng() * 0.45;
+      mote.vx = 0;
+      mote.vy = -p.rise;
       return mote;
     };
 
@@ -348,45 +981,174 @@ const embers = {
     for (const mote of state.motes) {
       mote.life += dt;
       const turb = noise.noise3(mote.x * 0.003, mote.y * 0.003, t * 0.25 + mote.seed);
-      mote.x += (p.drift + turb * p.turbulence) * dt;
-      mote.y -= p.rise * dt;
+      mote.vx = p.drift + turb * p.turbulence;
+      mote.vy = -p.rise;
+      mote.x += mote.vx * dt;
+      mote.y += mote.vy * dt;
 
       if (mote.y < bbox.y - bbox.h * 0.1 || mote.y > bbox.y + bbox.h * 1.1 || mote.life > mote.span) {
         spawn(mote, true);
       }
     }
   },
-  draw({ g, p, shape, t, state }) {
+  draw({ g, p, shape, t, state, stable }) {
     const { bbox } = shape;
-    if (bbox.w <= 0 || bbox.h <= 0) return;
+    if (bbox.w <= 0 || bbox.h <= 0 || !state.motes?.length) return;
+    const ladder = emberLadder(state, stable.hotTemp, stable.coolTemp);
+    const span = Math.max(1, p.hotTemp - p.coolTemp);
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
 
     for (const mote of state.motes) {
-      // Fade in and out over the mote's life so nothing pops.
-      const f = clamp(mote.life / mote.span, 0, 1);
-      let alpha = Math.sin(f * Math.PI) * p.opacity;
-      if (p.twinkle > 0) alpha *= 1 - p.twinkle * (0.5 + 0.5 * Math.sin(t * 5 + mote.seed * 3));
+      const f = clamp(mote.life / Math.max(0.01, mote.span), 0, 1);
+      /**
+       * Hot, then cooling: the colour is a temperature, and so is the
+       * brightness. A blackbody's output climbs as the fourth power of its
+       * temperature, so an ember at twice the temperature is sixteen times
+       * as bright — which is why a fresh spark is a point of white-gold and a
+       * dying one is a dull red. Drawn far gentler than the fourth power,
+       * because the eye is logarithmic, the projector has a ceiling and a
+       * dull red ember still has to be seen from the pavement; but drawn
+       * rising with the heat: the old embers kept one brightness from birth
+       * to death and every one of them was a dim red dot.
+       */
+      const kelvin = lerpTemp(p.hotTemp * mote.heat + p.coolTemp * (1 - mote.heat), p.coolTemp, f);
+      const warmth = clamp((kelvin - p.coolTemp) / span, 0, 1);
+      // In and out over the first and last moments of its life, so nothing pops.
+      let alpha = p.opacity * clamp(f * 12, 0, 1) * clamp((1 - f) * 6, 0, 1) * (0.8 + 0.5 * warmth ** 1.3);
+      /**
+       * The twinkle is the ember tumbling: a flake hot on one face and cooled
+       * on the other shows each in turn, several times a second, and no two
+       * at the same rate.
+       */
+      if (p.twinkle > 0) {
+        const spin = 7 + (mote.seed % 7);
+        alpha *= 1 - p.twinkle * 0.55 * (0.5 + 0.5 * Math.sin(t * spin + mote.seed * 3)) ** 2;
+      }
       if (alpha <= 0.01) continue;
 
-      const r = p.size * mote.scale;
-      // An ember cools as it travels, so its colour is a temperature rather
-      // than a fade between two chosen hexes. That is what makes a dying one go
-      // deep red instead of merely dim.
-      const colour = blackbodyCss(lerpTemp(p.hotTemp, p.coolTemp, clamp(f, 0, 1)));
-      const grad = g.createRadialGradient(mote.x, mote.y, 0, mote.x, mote.y, r * 3);
-      grad.addColorStop(0, rgba(colour, alpha));
-      grad.addColorStop(1, rgba(colour, 0));
-      g.fillStyle = grad;
-      g.beginPath();
-      g.arc(mote.x, mote.y, r * 3, 0, TAU);
-      g.fill();
+      const sprite = ladder[Math.round(warmth * (EMBER_RUNGS - 1))];
+      const r = p.size * mote.scale * (0.8 + 0.5 * warmth);
+      const size = r * 8.5;
+      g.globalAlpha = clamp(alpha, 0, 1);
+      g.drawImage(sprite, mote.x - size / 2, mote.y - size / 2, size, size);
+
+      /**
+       * And a fainter, smaller echo a little way back along its path, the way
+       * it is drawn by an eye following the fire rather than the ember, so a
+       * hot mote reads as a moving spark rather than as a point.
+       */
+      const speed = Math.hypot(mote.vx, mote.vy);
+      if (speed > 1 && warmth > 0.15) {
+        const back = Math.min(r * 3, speed * 0.12);
+        const shrink = size * 0.7;
+        g.globalAlpha = clamp(alpha * 0.4, 0, 1);
+        g.drawImage(sprite, mote.x - (mote.vx / speed) * back - shrink / 2,
+          mote.y - (mote.vy / speed) * back - shrink / 2, shrink, shrink);
+      }
     }
+    g.globalAlpha = 1;
     g.restore();
   },
 };
+
+/* ------------------------------------------------------------------ *
+ * Cracking glass
+ * ------------------------------------------------------------------ */
+
+/**
+ * How glass breaks, which is the whole of this effect.
+ *
+ * A pane struck at a point fails in two families of crack, and the pattern
+ * anybody recognises — the spider's web in a car windscreen — is the two
+ * together. First the radial cracks: the blow bends the pane, the far face
+ * stretches, and cracks race outward from the impact in every direction,
+ * nearly straight, kinking a little where they meet a flaw, now and then
+ * forking. Then the concentric ones: the sectors of glass between the radials
+ * bend as hinged flaps, and they fail in tension across their width, in rough
+ * chords from one radial to the next, a few of them at widening intervals.
+ * Right at the impact the glass is crushed to a frosted rosette of tiny
+ * cracks.
+ *
+ * Every crack is a thin bright line because a crack in glass is a mirror —
+ * two faces a hair apart, each catching the light — and where cracks cross
+ * the faces are tilted every way at once, so those are where it glints.
+ *
+ * The old version drew random branching walks from the impact: a bramble,
+ * with no rings, so it read as frost or lightning rather than as a broken
+ * window, and its hold faded out from the moment the cracks stopped growing,
+ * so most of the time there was nothing there at all.
+ */
+
+/** Scratch for the radial cracks: up to 24 of them, nine points each. */
+const RADIAL_POINTS = 9;
+const crackX = new Float64Array(24 * RADIAL_POINTS);
+const crackY = new Float64Array(24 * RADIAL_POINTS);
+const crackLength = new Float64Array(24);
+
+/**
+ * Three small seeded generators — the radials, the finer cracks, the glints —
+ * reseeded from the impact's index on every frame, so the same window breaks
+ * the same way in every tab and stays broken the same way while it is up.
+ * Separate streams so that moving Branching does not reshape the radials.
+ */
+const crackStreams = new Uint32Array(3);
+
+function seedCracks(stream, seed) {
+  crackStreams[stream] = (Math.imul(seed + 1, 2654435761) + 0x9e3779b9) >>> 0;
+}
+
+function crackRand(stream) {
+  const a = crackStreams[stream];
+  crackStreams[stream] = (Math.imul(a ^ (a >>> 15), 2246822519) + 0x9e3779b9) >>> 0;
+  return crackStreams[stream] / 4294967296;
+}
+
+/** Where radial `i` is at distance `r` from the impact, walking its own kinked path. */
+function alongCrack(i, r, out) {
+  const base = i * RADIAL_POINTS;
+  const step = crackLength[i] / (RADIAL_POINTS - 1);
+  const at = clamp(r / Math.max(1e-6, step), 0, RADIAL_POINTS - 1);
+  const k = Math.min(RADIAL_POINTS - 2, Math.floor(at));
+  const f = at - k;
+  out.x = crackX[base + k] + (crackX[base + k + 1] - crackX[base + k]) * f;
+  out.y = crackY[base + k] + (crackY[base + k + 1] - crackY[base + k]) * f;
+}
+const CRACK_A = { x: 0, y: 0 };
+const CRACK_B = { x: 0, y: 0 };
+
+/** Every crack is stroked twice: `[width multiple, alpha]` — a faint glow, then the hairline. */
+const CRACK_PASSES = [[3.4, 0.13], [1, 0.85]];
+
+/** A glint: a hot point with four fine rays, baked once per colour into the layer's state. */
+function glassGlint(state, colour) {
+  if (state.glintKey === colour) return state.glint;
+  const S = 48;
+  const sprite = offscreen(S, S);
+  const g = sprite.getContext('2d');
+  const m = S / 2;
+  g.globalCompositeOperation = 'lighter';
+  const core = g.createRadialGradient(m, m, 0, m, m, m * 0.45);
+  core.addColorStop(0, rgba('#ffffff', 1));
+  core.addColorStop(0.18, rgba('#ffffff', 0.65));
+  core.addColorStop(0.5, rgba(colour, 0.18));
+  core.addColorStop(1, rgba(colour, 0));
+  g.fillStyle = core;
+  g.fillRect(0, 0, S, S);
+  for (const [w, h] of [[S, 2], [2, S]]) {
+    const ray = w > h ? g.createLinearGradient(0, 0, S, 0) : g.createLinearGradient(0, 0, 0, S);
+    ray.addColorStop(0, rgba(colour, 0));
+    ray.addColorStop(0.5, rgba('#ffffff', 0.8));
+    ray.addColorStop(1, rgba(colour, 0));
+    g.fillStyle = ray;
+    g.fillRect(m - w / 2, m - h / 2, w, h);
+  }
+  state.glint = sprite;
+  state.glintKey = colour;
+  return sprite;
+}
 
 const shatter = {
   id: 'shatter',
@@ -394,12 +1156,20 @@ const shatter = {
   category: 'atmosphere',
   scope: 'shape',
   description:
-    'A crack spreading from an impact point, on a timer. Point it at a window and time it with a bang.',
+    'A pane breaking from an impact point, on a timer: radial cracks racing out, concentric ones between them, a crushed rosette at the strike and glints where the cracks cross. Point it at a window and time it with a bang.',
   params: [
     { key: 'color', type: 'color', label: 'Colour', default: '#dff0ff' },
     { key: 'interval', type: 'range', label: 'Every (s)', default: 25, min: 2, max: 600, step: 1 },
     { key: 'grow', type: 'range', label: 'Spread time (s)', default: 0.35, min: 0.05, max: 5, step: 0.01 },
-    { key: 'hold', type: 'range', label: 'Hold (s)', default: 4, min: 0, max: 60, step: 0.5 },
+    /**
+     * How long the broken pane stays, once it has broken.
+     *
+     * Glass does not heal, so this is really how long the show leaves it
+     * there. Fifteen of the twenty-five seconds by default: the old four
+     * meant the window was whole five times out of six, and a still taken at
+     * almost any moment showed nothing.
+     */
+    { key: 'hold', type: 'range', label: 'Hold (s)', default: 15, min: 0, max: 60, step: 0.5 },
     { key: 'branches', type: 'range', label: 'Main cracks', default: 9, min: 3, max: 24, step: 1 },
     { key: 'depth', type: 'range', label: 'Branching', default: 3, min: 0, max: 5, step: 1 },
     { key: 'width', type: 'range', label: 'Thickness', default: 2.4, min: 0.4, max: 12, step: 0.1 },
@@ -407,71 +1177,190 @@ const shatter = {
     { key: 'impactY', type: 'range', label: 'Impact Y', default: 0.45, min: 0, max: 1, step: 0.01 },
     { key: 'flash', type: 'range', label: 'Impact flash', default: 0.7, min: 0, max: 1, step: 0.01 },
   ],
-  draw({ g, p, shape, t, rng }) {
+  draw({ g, p, stable, shape, t, state }) {
     const { bbox } = shape;
-    const cycle = t % Math.max(1, p.interval);
+    if (bbox.w <= 1 || bbox.h <= 1) return;
+    const interval = Math.max(1, p.interval);
+    const cycle = t % interval;
     const total = p.grow + p.hold;
     if (cycle > total) return;
 
     const progress = clamp(cycle / Math.max(0.01, p.grow), 0, 1);
-    // Fade the whole thing out over the last second of the hold.
-    const fade = cycle > p.grow ? clamp(1 - (cycle - p.grow) / Math.max(0.01, p.hold), 0, 1) : 1;
+    // Out over the last second and a half of the hold, not across all of it.
+    const fade = clamp((total - cycle) / Math.min(1.5, Math.max(0.01, p.hold)), 0, 1);
+    // Cracks run fast and slow down: a crack front decelerates as the energy
+    // the blow put into the pane is spent.
     const eased = 1 - (1 - progress) ** 3;
 
     const cx = bbox.x + p.impactX * bbox.w;
     const cy = bbox.y + p.impactY * bbox.h;
-    const reach = Math.hypot(bbox.w, bbox.h) * 0.6;
+    const reach = Math.hypot(bbox.w, bbox.h) * 0.62;
+    // Each pane breaks its own way: seeded by which impact this is and by
+    // which shape, so four windows struck at once are four different breaks.
+    const impact = (Math.floor(t / interval) * 7919 + hashString(String(shape.id))) >>> 0;
+    seedCracks(0, impact);
+    const radials = clamp(Math.round(p.branches), 3, 24);
+    const width = Math.max(0.4, p.width);
 
-    // Seeded per impact so the same crack pattern persists while it is on
-    // screen, and a different one appears next time.
-    const impact = Math.floor(t / Math.max(1, p.interval));
-    const seeded = (() => {
-      let a = (impact * 2654435761) >>> 0;
-      return () => {
-        a = (Math.imul(a ^ (a >>> 15), 2246822519) + 0x9e3779b9) >>> 0;
-        return a / 4294967296;
-      };
-    })();
+    // The radial cracks, as kinked paths from the impact outwards.
+    for (let i = 0; i < radials; i++) {
+      const base = i * RADIAL_POINTS;
+      let angle = ((i + (crackRand(0) - 0.5) * 0.55) / radials) * TAU;
+      crackLength[i] = reach * (0.45 + crackRand(0) * 0.7);
+      const step = crackLength[i] / (RADIAL_POINTS - 1);
+      crackX[base] = cx;
+      crackY[base] = cy;
+      for (let k = 1; k < RADIAL_POINTS; k++) {
+        angle += (crackRand(0) - 0.5) * 0.13;
+        crackX[base + k] = crackX[base + k - 1] + Math.cos(angle) * step;
+        crackY[base + k] = crackY[base + k - 1] + Math.sin(angle) * step;
+      }
+    }
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
     g.lineCap = 'round';
-    g.globalAlpha = fade;
+    g.lineJoin = 'round';
 
-    const drawCrack = (x, y, angle, length, width, depth) => {
-      if (length < 4 || width < 0.15) return;
-      let px = x;
-      let py = y;
-      let a = angle;
-      const steps = 6;
-      g.strokeStyle = rgba(p.color, 0.85);
-      g.lineWidth = width;
+    /**
+     * Two paths — the radials, and everything finer: forks, rings and the
+     * crushed rosette — each stroked twice, a faint wide glow and a bright
+     * hairline. Four strokes for the whole pane.
+     */
+    const front = eased * reach;
+    for (const [wide, alpha] of CRACK_PASSES) {
+      // Radials, each as far as the front has got.
+      g.strokeStyle = rgba(p.color, alpha * fade);
+      g.lineWidth = width * wide;
       g.beginPath();
-      g.moveTo(px, py);
-      for (let i = 1; i <= steps; i++) {
-        a += (seeded() - 0.5) * 0.5;
-        const seg = (length / steps) * eased;
-        px += Math.cos(a) * seg;
-        py += Math.sin(a) * seg;
-        g.lineTo(px, py);
-        if (depth > 0 && seeded() < 0.4) {
-          drawCrack(px, py, a + (seeded() - 0.5) * 1.8, length * 0.45, width * 0.55, depth - 1);
+      for (let i = 0; i < radials; i++) {
+        const base = i * RADIAL_POINTS;
+        const shown = Math.min(front, crackLength[i]);
+        if (shown <= 0) continue;
+        g.moveTo(crackX[base], crackY[base]);
+        const step = crackLength[i] / (RADIAL_POINTS - 1);
+        for (let k = 1; k < RADIAL_POINTS; k++) {
+          if (k * step <= shown) {
+            g.lineTo(crackX[base + k], crackY[base + k]);
+          } else {
+            alongCrack(i, shown, CRACK_A);
+            g.lineTo(CRACK_A.x, CRACK_A.y);
+            break;
+          }
         }
       }
       g.stroke();
-    };
 
-    for (let i = 0; i < Math.round(p.branches); i++) {
-      const angle = (i / p.branches) * TAU + seeded() * 0.4;
-      drawCrack(cx, cy, angle, reach * (0.5 + seeded() * 0.6), p.width, Math.round(p.depth));
+      // The finer cracks, from their own stream, restarted for each pass so
+      // the glow and the hairline trace the same cracks.
+      seedCracks(1, impact);
+      g.lineWidth = width * wide * 0.6;
+      g.strokeStyle = rgba(p.color, alpha * 0.85 * fade);
+      g.beginPath();
+      /**
+       * The concentric cracks: a few rings at widening radii, each a broken
+       * chain of chords from one radial to the next — nearly straight, each
+       * at its own distance out, many of them missing — because each is the
+       * hinge line of a flap of glass that bent away from the blow and failed
+       * where it was weakest. They form once the radial front has gone past.
+       * Drawn as continuous rings they make a cobweb, which is what the eye
+       * reads first and the one thing a broken window must not look like.
+       */
+      const rings = 2 + Math.round(p.depth * 0.6);
+      let radius = reach * (0.1 + crackRand(1) * 0.05);
+      for (let ring = 0; ring < rings; ring++) {
+        if (front > radius * 1.15) {
+          for (let i = 0; i < radials; i++) {
+            const j = (i + 1) % radials;
+            const keep = crackRand(1);
+            const r1 = radius * (0.85 + 0.3 * crackRand(1));
+            const r2 = radius * (0.85 + 0.3 * crackRand(1));
+            const kink = (crackRand(1) - 0.5) * 0.12;
+            if (keep > 0.5 - ring * 0.05 || crackLength[i] < r1 || crackLength[j] < r2) continue;
+            alongCrack(i, r1, CRACK_A);
+            alongCrack(j, r2, CRACK_B);
+            const mx = (CRACK_A.x + CRACK_B.x) / 2;
+            const my = (CRACK_A.y + CRACK_B.y) / 2;
+            g.moveTo(CRACK_A.x, CRACK_A.y);
+            g.lineTo(mx + (cx - mx) * kink, my + (cy - my) * kink);
+            g.lineTo(CRACK_B.x, CRACK_B.y);
+          }
+        }
+        radius *= 1.6 + crackRand(1) * 0.4;
+      }
+      /**
+       * Forks: a radial now and then splits, the branch leaving at a shallow
+       * angle and running a fraction of the way out. More of them, further
+       * out, the more Branching is turned up.
+       */
+      for (let i = 0; i < radials; i++) {
+        for (let f = 0; f < Math.round(p.depth); f++) {
+          if (crackRand(1) > 0.45) continue;
+          const at = crackLength[i] * (0.25 + crackRand(1) * 0.55);
+          if (front <= at) continue;
+          alongCrack(i, at, CRACK_A);
+          alongCrack(i, at + 4, CRACK_B);
+          const heading = Math.atan2(CRACK_B.y - CRACK_A.y, CRACK_B.x - CRACK_A.x) + (crackRand(1) < 0.5 ? -1 : 1) * (0.3 + crackRand(1) * 0.4);
+          const run = Math.min(front - at, crackLength[i] * (0.18 + crackRand(1) * 0.25));
+          let x = CRACK_A.x;
+          let y = CRACK_A.y;
+          let h = heading;
+          g.moveTo(x, y);
+          for (let k = 0; k < 4; k++) {
+            h += (crackRand(1) - 0.5) * 0.3;
+            x += Math.cos(h) * run * 0.25;
+            y += Math.sin(h) * run * 0.25;
+            g.lineTo(x, y);
+          }
+        }
+      }
+      // The crushed rosette at the strike: a tight star of short cracks.
+      const crush = reach * 0.045;
+      for (let k = 0; k < 14; k++) {
+        const a = crackRand(1) * TAU;
+        const r0 = crush * crackRand(1) * 0.4;
+        const r1 = crush * (0.6 + crackRand(1) * 0.8);
+        g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
+        g.lineTo(cx + Math.cos(a + 0.2) * r1, cy + Math.sin(a + 0.2) * r1);
+      }
+      g.stroke();
     }
 
+    /**
+     * Glints where the cracks cross, and the hot white heart of the strike.
+     * They come and go slowly as the light finds each facet, but every one
+     * is a fixed place on the pane, so the twinkle is in the brightness and
+     * never in the position.
+     */
+    const sprite = glassGlint(state, stable.color);
+    seedCracks(2, impact);
+    let radius = reach * 0.13;
+    for (let ring = 0; ring < 3; ring++) {
+      for (let i = 0; i < radials; i++) {
+        const chance = crackRand(2);
+        const phase = crackRand(2) * TAU;
+        if (chance > 0.35 || crackLength[i] < radius || front < radius) continue;
+        alongCrack(i, radius, CRACK_A);
+        const twinkle = 0.55 + 0.45 * Math.sin(t * (1.3 + chance * 2) + phase);
+        const size = width * (7 + 7 * twinkle);
+        g.globalAlpha = clamp(0.9 * twinkle * fade, 0, 1);
+        g.drawImage(sprite, CRACK_A.x - size / 2, CRACK_A.y - size / 2, size, size);
+      }
+      radius *= 1.75;
+    }
+    const heart = width * 12;
+    g.globalAlpha = clamp(fade, 0, 1);
+    g.drawImage(sprite, cx - heart / 2, cy - heart / 2, heart, heart);
+    g.globalAlpha = 1;
+
+    // The flash of the blow itself, over in the first third of the spread.
     if (p.flash > 0 && progress < 0.3) {
       const punch = (1 - progress / 0.3) * p.flash;
       const r = reach * 0.5 * (0.3 + progress * 2);
       const grad = g.createRadialGradient(cx, cy, 0, cx, cy, r);
       grad.addColorStop(0, rgba('#ffffff', punch));
+      grad.addColorStop(0.3, rgba(p.color, punch * 0.35));
       grad.addColorStop(1, rgba(p.color, 0));
       g.fillStyle = grad;
       g.beginPath();
@@ -481,6 +1370,45 @@ const shatter = {
     g.restore();
   },
 };
+
+/**
+ * The two colour ramps a plasma blends between, as flat RGB tables, built
+ * once per set of colours and shared. Mixed in linear light, which is what
+ * keeps the transitions from passing through a muddy grey.
+ */
+const PLASMA_STEPS = 32;
+const plasmaRamps = new Map();
+
+function plasmaRamp(a, b, c) {
+  const key = `${a}|${b}|${c}`;
+  let ramp = plasmaRamps.get(key);
+  if (ramp) return ramp;
+  if (plasmaRamps.size > 16) plasmaRamps.clear();
+  ramp = { ab: new Float32Array(PLASMA_STEPS * 3), ac: new Float32Array(PLASMA_STEPS * 3) };
+  for (let i = 0; i < PLASMA_STEPS; i++) {
+    const f = i / (PLASMA_STEPS - 1);
+    for (const [table, to] of [[ramp.ab, b], [ramp.ac, c]]) {
+      const n = parseInt(mixLinear(a, to, f).slice(1), 16) || 0;
+      table[i * 3] = (n >> 16) & 255;
+      table[i * 3 + 1] = (n >> 8) & 255;
+      table[i * 3 + 2] = n & 255;
+    }
+  }
+  plasmaRamps.set(key, ramp);
+  return ramp;
+}
+
+/** Read a ramp at `f` in 0..1, interpolated, into `out`. */
+function readRamp(table, f, out) {
+  const at = clamp(f, 0, 1) * (PLASMA_STEPS - 1);
+  const i = Math.min(PLASMA_STEPS - 2, Math.floor(at));
+  const w = at - i;
+  out[0] = table[i * 3] + (table[i * 3 + 3] - table[i * 3]) * w;
+  out[1] = table[i * 3 + 1] + (table[i * 3 + 4] - table[i * 3 + 1]) * w;
+  out[2] = table[i * 3 + 2] + (table[i * 3 + 5] - table[i * 3 + 2]) * w;
+}
+const PLASMA_BASE = new Float32Array(3);
+const PLASMA_TINT = new Float32Array(3);
 
 const plasma = {
   id: 'plasma',
@@ -499,28 +1427,18 @@ const plasma = {
     { key: 'resolution', type: 'range', label: 'Detail', default: 40, min: 8, max: 100, step: 2 },
     { key: 'contrast', type: 'range', label: 'Contrast', default: 1.3, min: 0.2, max: 4, step: 0.05 },
   ],
-  draw({ g, p, shape, t, state, noise }) {
+  draw({ g, p, stable, shape, t, state, noise }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2) return;
 
-    const cols = Math.max(6, Math.round(p.resolution));
+    // The field's size from `stable`: it is a cache, and Detail bound to the
+    // microphone rebuilt the canvas behind it every frame.
+    const cols = Math.max(6, Math.round(stable.resolution));
     const rows = Math.max(6, Math.round((cols * bbox.h) / bbox.w));
     const field = ensureField(state, 'field', cols, rows);
     field.clear();
 
-    // Two precomputed ramps, blended per cell. Mixing in linear light is what
-    // keeps the transitions from passing through a muddy grey.
-    const STEPS = 20;
-    const rampAB = [];
-    const rampC = [];
-    for (let i = 0; i < STEPS; i++) {
-      const f = i / (STEPS - 1);
-      for (const [target, from, to] of [[rampAB, p.colorA, p.colorB], [rampC, p.colorA, p.colorC]]) {
-        const hex = mixLinear(from, to, f).replace('#', '');
-        const n = parseInt(hex, 16) || 0;
-        target.push([(n >> 16) & 255, (n >> 8) & 255, n & 255]);
-      }
-    }
+    const ramp = plasmaRamp(p.colorA, p.colorB, p.colorC);
 
     for (let y = 0; y < rows; y++) {
       const v = (y + 0.5) / rows;
@@ -534,15 +1452,25 @@ const plasma = {
         const shaped = clamp((a - 0.5) * p.contrast + 0.5, 0, 1);
         const shapedB = clamp((b - 0.5) * p.contrast + 0.5, 0, 1);
 
-        const base = rampAB[Math.min(STEPS - 1, (shaped * STEPS) | 0)];
-        const tint = rampC[Math.min(STEPS - 1, (shapedB * 0.6 * STEPS) | 0)];
+        /**
+         * Read between the steps of the ramp, not off them.
+         *
+         * The ramp used to be indexed by the floor of the weight, so a cell
+         * took one of twenty fixed colours, and neighbouring cells either
+         * side of a step were a whole step apart — which the bilinear blow-up
+         * then drew as a flat plateau with a hard ledge round it. On a wash a
+         * hundred pixels to the cell those ledges are what the eye finds:
+         * contour lines and rectangles in what should be a cloud.
+         */
+        readRamp(ramp.ab, shaped, PLASMA_BASE);
+        readRamp(ramp.ac, shapedB * 0.6, PLASMA_TINT);
         const mix = shapedB * 0.6;
 
         field.set(
           x, y,
-          base[0] * (1 - mix) + tint[0] * mix,
-          base[1] * (1 - mix) + tint[1] * mix,
-          base[2] * (1 - mix) + tint[2] * mix,
+          PLASMA_BASE[0] * (1 - mix) + PLASMA_TINT[0] * mix,
+          PLASMA_BASE[1] * (1 - mix) + PLASMA_TINT[1] * mix,
+          PLASMA_BASE[2] * (1 - mix) + PLASMA_TINT[2] * mix,
           clamp(p.level * (0.35 + 0.65 * shaped), 0, 1)
         );
       }
@@ -555,12 +1483,22 @@ const plasma = {
   },
 };
 
+/**
+ * The grid a scan reveals: cells across the shape's longer side.
+ *
+ * Square cells, both ways, because a grid of lines all running one way is a
+ * set of ruled lines rather than a grid; and the same spacing as the old
+ * fourteen lines across the sweep, so a show that had the grid turned up has
+ * the same density of it.
+ */
+const SCAN_CELLS = 14;
+
 const scanner = {
   id: 'scan-lines',
   name: 'Scan Sweep',
   category: 'atmosphere',
   scope: 'shape',
-  description: 'A bright line sweeping across the shape, leaving a decaying trail. Clean, technical, very readable.',
+  description: 'A bright line sweeping across the shape, leaving a decaying trail and lighting up the grid it passes over. Clean, technical, very readable.',
   params: [
     { key: 'color', type: 'color', label: 'Colour', default: '#00ffc8' },
     { key: 'axis', type: 'select', label: 'Direction', default: 'down', options: ['down', 'up', 'right', 'left'] },
@@ -576,27 +1514,50 @@ const scanner = {
     const vertical = p.axis === 'down' || p.axis === 'up';
     const reversed = p.axis === 'up' || p.axis === 'left';
     const span = vertical ? bbox.h : bbox.w;
-    if (span <= 0) return;
+    const across = vertical ? bbox.w : bbox.h;
+    if (span <= 0 || across <= 0) return;
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
-    g.globalAlpha = clamp(p.level, 0, 3);
+    g.globalAlpha = clamp(p.level, 0, 1);
+    const hot = mixHex(p.color, '#ffffff', 0.7);
+    const step = Math.max(span, across) / SCAN_CELLS;
 
-    if (p.grid > 0) {
-      g.strokeStyle = rgba(p.color, p.grid);
-      g.lineWidth = 1;
-      const step = span / 14;
-      g.beginPath();
-      for (let i = 0; i <= 14; i++) {
+    /** Add the grid's lines inside `[from, to]` along the sweep to the current path. */
+    const gridPath = (from, to) => {
+      const lo = Math.min(from, to);
+      const hi = Math.max(from, to);
+      const origin = vertical ? bbox.y : bbox.x;
+      for (let k = Math.ceil((lo - origin) / step); origin + k * step <= hi; k++) {
+        const at = origin + k * step;
         if (vertical) {
-          g.moveTo(bbox.x, bbox.y + i * step);
-          g.lineTo(bbox.x + bbox.w, bbox.y + i * step);
+          g.moveTo(bbox.x, at);
+          g.lineTo(bbox.x + bbox.w, at);
         } else {
-          g.moveTo(bbox.x + i * step, bbox.y);
-          g.lineTo(bbox.x + i * step, bbox.y + bbox.h);
+          g.moveTo(at, bbox.y);
+          g.lineTo(at, bbox.y + bbox.h);
         }
       }
+      const side = vertical ? bbox.x : bbox.y;
+      for (let k = 0; side + k * step <= side + across; k++) {
+        const at = side + k * step;
+        if (vertical) {
+          g.moveTo(at, lo);
+          g.lineTo(at, hi);
+        } else {
+          g.moveTo(lo, at);
+          g.lineTo(hi, at);
+        }
+      }
+    };
+
+    // The grid at rest: faint, always there.
+    if (p.grid > 0) {
+      g.strokeStyle = rgba(p.color, p.grid * 0.6);
+      g.lineWidth = 1;
+      g.beginPath();
+      gridPath(vertical ? bbox.y : bbox.x, vertical ? bbox.y + bbox.h : bbox.x + bbox.w);
       g.stroke();
     }
 
@@ -605,25 +1566,67 @@ const scanner = {
       if (reversed) f = 1 - f;
       const pos = (vertical ? bbox.y : bbox.x) + f * span;
       const trailLen = span * p.trail;
+      const behind = reversed ? 1 : -1;
 
+      /**
+       * The trail: what the beam has just lit, decaying the way phosphor and
+       * a retina both do — fast at first, then slowly, which is an
+       * exponential and not the straight ramp it was. Brightest right behind
+       * the line, a long faint tail, and the grid it has crossed lit up
+       * inside it and fading with it, so the sweep reads as scanning
+       * something rather than as a bar being dragged across the wall.
+       */
       if (trailLen > 1) {
-        const from = reversed ? pos + trailLen : pos - trailLen;
+        const from = pos + behind * trailLen;
         const grad = vertical
-          ? g.createLinearGradient(0, from, 0, pos)
-          : g.createLinearGradient(from, 0, pos, 0);
-        grad.addColorStop(0, rgba(p.color, 0));
-        grad.addColorStop(1, rgba(p.color, 0.4));
+          ? g.createLinearGradient(0, pos, 0, from)
+          : g.createLinearGradient(pos, 0, from, 0);
+        for (let k = 0; k <= 5; k++) {
+          const u = k / 5;
+          grad.addColorStop(u, rgba(p.color, 0.36 * Math.exp(-u * 2.2) * (1 - u)));
+        }
         g.fillStyle = grad;
-        if (vertical) {
-          g.fillRect(bbox.x, Math.min(from, pos), bbox.w, Math.abs(pos - from));
-        } else {
-          g.fillRect(Math.min(from, pos), bbox.y, Math.abs(pos - from), bbox.h);
+        if (vertical) g.fillRect(bbox.x, Math.min(from, pos), bbox.w, Math.abs(pos - from));
+        else g.fillRect(Math.min(from, pos), bbox.y, Math.abs(pos - from), bbox.h);
+
+        if (p.grid > 0) {
+          const lit = vertical
+            ? g.createLinearGradient(0, pos, 0, from)
+            : g.createLinearGradient(pos, 0, from, 0);
+          lit.addColorStop(0, rgba(hot, clamp(0.4 + p.grid * 2, 0, 1)));
+          lit.addColorStop(0.25, rgba(p.color, clamp(0.15 + p.grid, 0, 1) * 0.6));
+          lit.addColorStop(1, rgba(p.color, 0));
+          g.strokeStyle = lit;
+          g.lineWidth = 1.5;
+          g.beginPath();
+          gridPath(pos, from);
+          g.stroke();
         }
       }
 
-      g.fillStyle = p.color;
-      if (vertical) g.fillRect(bbox.x, pos - p.thickness / 2, bbox.w, p.thickness);
-      else g.fillRect(pos - p.thickness / 2, bbox.y, p.thickness, bbox.h);
+      /**
+       * The line itself, as light: a soft glow either side falling away
+       * from a hot, nearly white core. One gradient across the line, filled
+       * as one band. A flat rectangle of the colour reads as a strip of
+       * tape; this reads as a beam.
+       */
+      const half = Math.max(1, p.thickness / 2);
+      const reach = half * 5 + 6;
+      const beam = vertical
+        ? g.createLinearGradient(0, pos - reach, 0, pos + reach)
+        : g.createLinearGradient(pos - reach, 0, pos + reach, 0);
+      const core = half / reach;
+      beam.addColorStop(0, rgba(p.color, 0));
+      beam.addColorStop(0.5 - core * 2.2, rgba(p.color, 0.18));
+      beam.addColorStop(0.5 - core, rgba(p.color, 0.85));
+      beam.addColorStop(0.5 - core * 0.35, rgba(hot, 1));
+      beam.addColorStop(0.5 + core * 0.35, rgba(hot, 1));
+      beam.addColorStop(0.5 + core, rgba(p.color, 0.85));
+      beam.addColorStop(0.5 + core * 2.2, rgba(p.color, 0.18));
+      beam.addColorStop(1, rgba(p.color, 0));
+      g.fillStyle = beam;
+      if (vertical) g.fillRect(bbox.x, pos - reach, bbox.w, reach * 2);
+      else g.fillRect(pos - reach, bbox.y, reach * 2, bbox.h);
     }
     g.restore();
   },

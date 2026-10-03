@@ -206,7 +206,7 @@ const gradientMap = {
     { key: 'bandsAcross', type: 'range', label: 'Bands across shape', default: 0, min: 0, max: 12, step: 1 },
     { key: 'angle', type: 'range', label: 'Band angle', default: 90, min: 0, max: 360, step: 1 },
   ],
-  draw({ g, p, shape, t, i, n }) {
+  draw({ g, p, shape, t, i, n, state, world }) {
     const baseHue = (t * p.speed * 360 + (i / Math.max(1, n)) * 360 * p.spread) % 360;
     const { bbox } = shape;
 
@@ -231,9 +231,65 @@ const gradientMap = {
       g.fillStyle = `hsl(${baseHue} ${p.saturation}% ${p.lightness}%)`;
     }
     g.fill(shape.path);
+
+    /**
+     * A pane of coloured light rather than a coloured card.
+     *
+     * Glass lit from behind is never evenly bright to its edges — the middle
+     * of the pane is nearest the light and the corners are in the reveal — and
+     * a perfectly flat block of saturated colour is exactly the "sticker on the
+     * wall" look. So the colour is shaded down towards the corners of an
+     * ellipse fitted to the shape: unchanged in the middle, about two-fifths
+     * darker in the corners, which is enough to read as light and too little
+     * to read as a gradient anybody chose.
+     *
+     * Openings only — anything up to a quarter of the frame. Pointed at a
+     * whole wall or the whole frame it is a wash rather than a pane, and the
+     * shading would be a full-frame gradient paid for on every frame for
+     * a vignette nobody asked for.
+     */
+    const frameArea = (world?.w || 1920) * (world?.h || 1080);
+    if (bbox.w > 1 && bbox.h > 1 && bbox.w * bbox.h < frameArea * 0.25) {
+      const rx = bbox.w * 0.72;
+      const ry = bbox.h * 0.72;
+      const unit = unitPath(state, shape, rx, ry);
+      g.translate(bbox.cx, bbox.cy);
+      g.scale(rx, ry);
+      const shade = g.createRadialGradient(0, 0, 0.35, 0, 0, 1);
+      shade.addColorStop(0, 'rgba(0,0,0,0)');
+      shade.addColorStop(0.5, 'rgba(0,0,0,0.12)');
+      shade.addColorStop(1, 'rgba(0,0,0,0.4)');
+      g.fillStyle = shade;
+      g.fill(unit);
+    }
     g.restore();
   },
 };
+
+/**
+ * The shape's outline in the unit space of an ellipse fitted to it, kept.
+ *
+ * A radial gradient is a circle; filling the shape under a transform that
+ * turns the fitted ellipse into one fits the shading to a wide window rather
+ * than to a square. The transform squashes the path too, so the path is handed
+ * over pre-stretched by the inverse — built once and kept until the outline
+ * changes, which is when the renderer hands over a new path object. (Clipping
+ * to the shape and filling a rectangle draws the same thing, at several times
+ * the cost when the shape is the whole frame.)
+ */
+function unitPath(state, shape, rx, ry) {
+  if (state.unit && state.unitOf === shape.path && state.unitRx === rx && state.unitRy === ry) {
+    return state.unit;
+  }
+  const { bbox } = shape;
+  const path = new Path2D();
+  path.addPath(shape.path, { a: 1 / rx, b: 0, c: 0, d: 1 / ry, e: -bbox.cx / rx, f: -bbox.cy / ry });
+  state.unit = path;
+  state.unitOf = shape.path;
+  state.unitRx = rx;
+  state.unitRy = ry;
+  return path;
+}
 
 const solidPreview = {
   id: 'test-grid',

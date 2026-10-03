@@ -2,7 +2,8 @@
 
 Over eighty effects, and a **Browse…** button on every layer that
 renders all of them live, on a shape like the one you are pointing at. Pick by
-eye; this file is for the ideas behind them.
+eye — [the gallery](gallery.md) has a frame of every one of them on the demo
+house — and this file is for the ideas behind them.
 
 - [Targeting](#targeting)
 - [Effects that know where the windows are](#effects-that-know-where-the-windows-are)
@@ -89,6 +90,15 @@ of the Effects panel.
 The one that catches everybody is the fourth: a layer aimed at `#window` before
 any window has been tagged looks completely normal in the list, because it *is*
 completely normal. It just has nothing to draw into.
+
+And one the list cannot see, because nothing is wrong with the layer: a **Shadow
+in the Window** at Light level 0. At zero it brings no room of its own — the
+figure is cut out of whatever light is already in the glass, which is how you
+put somebody in front of Candle Flicker. So it needs light under it, and it
+needs to be *directly* on top of that light at full opacity, with blend left at
+`source-over` and no softness. Any of those sends a layer through a buffer of
+its own, where there is nothing to cut, and the figure vanishes. The Halloween
+starter stacks the two exactly that way.
 
 ## Effects that know where the windows are
 
@@ -513,11 +523,13 @@ than anything clever, and it wants changing once a year.
 | **Catherine Wheel** | A wheel that spins up, throws sparks and burns out. Relights on a timer, or once when triggered. |
 | **Sparkler** | A sparkler head running round a path, throwing forked iron sparks and leaving the after-image you get writing your name with one. |
 
-The wheel is the one to look closely at. Sparks leave it **tangentially** — a
-spark on the rim is travelling along the rim at ωR, and when the casing lets go
-it carries straight on at ninety degrees to the spoke. Sparks that fly outwards
-along the spoke give you a sea urchin; tangential ones give you the curved,
-lopsided wheel everybody has actually stood in front of. There is a test for it.
+The wheel is the one to look closely at. Sparks leave it **tangentially** —
+each nozzle points along the rim and the sparks are its exhaust, blown out
+behind it at ninety degrees to the spoke, which is what drives the wheel round.
+Every spark flies straight, but the nozzle has moved on by the time the next one
+leaves, so the jets curl into spiral arms. Sparks that fly outwards along the
+spoke give you a sea urchin; tangential ones give you the curved, lopsided wheel
+everybody has actually stood in front of. There is a test for it.
 
 The sparkler's forks are not decoration either: the wire is coated in iron
 filings, each filing burns from the outside in, and when the molten shell fails
@@ -716,6 +728,13 @@ This is a starter preset like the rest, with its own demo:
 Any shape — closed area or open line — carries an arc-length path. Chase, Fairy
 Lights, Comet, Trace and Sparks all walk it, which is why a chase takes as long
 crossing a short edge as a long one.
+
+Fairy Lights are bulbs on a wire rather than dots on a line: each one a small
+glass envelope with a white-hot filament and a pool of its own colour on the
+wall, pinned every few bulbs with the wire sagging between pins — **Sag between
+pins**, more on a level run than on a steep one, as a real string hangs. No two
+bulbs sit at quite the same angle or burn at quite the same brightness, because
+a string where they all do reads as a printed border.
 
 Text can follow it too: set Placement to `path` and the lettering wraps round an
 arch or along a roofline. Trace a shallow arch over the door, tag it `sign`, and
@@ -1081,9 +1100,15 @@ up where they land, slump to a natural angle, and when a ledge gets too loaded
 the excess breaks away as slabs that slide down the wall and fade out at the
 bottom.
 
-Turn it off with **Settle on shapes**, aim it at one group of shapes with
-**Settle on tag**, and control how fast it gathers and how deep it gets before
-it lets go. `fx.ensureSurfaces` and friends are available to your own effects —
+Turn it off with **Settle on shapes**, aim it at the shapes that are really
+there with **Settle on tags** — a list, `roof, window, door` — and control how
+fast it gathers and how deep it gets before it lets go. The list is worth
+setting on any real house: left to settle on everything, snow lies along the
+top of every shape you traced, including the ones that are decisions rather
+than things — a `primary` panel, a `sign` arch — and a drift on a rectangle
+nobody can see floats on the wall, while one along a sign is a line struck
+through the lettering. The Christmas starter settles on `roof, wall, chimney,
+window, door`. `fx.ensureSurfaces` and friends are available to your own effects —
 [`js/effects/collide.js`](../js/effects/collide.js) explains the model.
 
 One thing worth knowing about the surfaces: they are built *per shape*, not as
