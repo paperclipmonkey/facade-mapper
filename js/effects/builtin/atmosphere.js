@@ -15,13 +15,27 @@ import { offscreen, glow } from '../lib.js';
 import { blackbodyCss, mixLinear } from '../color.js';
 import { ensureField } from '../field.js';
 
+/**
+ * How many depths the shower is drawn at.
+ *
+ * Every drop at one depth is the same width and brightness, so a depth is one
+ * path holding every streak at it, stroked twice — a soft wide pass and a
+ * bright core. Four depths is enough that the eye reads a continuous range
+ * from the far curtain to the near streaks, and it is eight strokes a frame
+ * instead of seven hundred.
+ */
+const RAIN_DEPTHS = 4;
+
+/** How long a splash lives, in seconds. */
+const SPLASH_LIFE = 0.42;
+
 const rain = {
   id: 'rain',
   name: 'Rain',
   category: 'atmosphere',
   scope: 'shape',
   description:
-    'Falling rain with depth, wind and optional splashes where it lands. Leave targets empty to cover the house.',
+    'Falling rain catching the light, from a fine far curtain to bright near streaks, blown by the wind and splashing where it lands. Leave targets empty to cover the house.',
   params: [
     { key: 'color', type: 'color', label: 'Colour', default: '#bcd6ff' },
     { key: 'count', type: 'range', label: 'Drops', default: 450, min: 20, max: 3000, step: 10 },
@@ -51,6 +65,8 @@ const rain = {
       drop.x = bbox.x + (rng() * 1.6 - 0.3) * bbox.w;
       drop.y = atTop ? bbox.y - rng() * bbox.h * 0.2 : bbox.y + rng() * bbox.h;
       drop.z = 1 - p.depth * rng();
+      // Its own length and catch of the light, so no two streaks are clones.
+      drop.v = rng();
       return drop;
     };
 
@@ -65,9 +81,18 @@ const rain = {
       drop.x += (dirX * fall) + gust * 120 * z * dt;
       drop.y += dirY * fall;
 
-      if (drop.y > bbox.y + bbox.h) {
+      /**
+       * Where this drop meets the ground, which depends on how far away it is.
+       *
+       * The ground is a plane running away from you, so in the picture the
+       * near rain lands at the bottom of the frame and the far rain lands
+       * higher up, against the foot of the wall. Landing them all on the
+       * bottom edge put every splash half out of shot.
+       */
+      const ground = bbox.y + bbox.h - (bbox.h * 0.12 * (1 - z)) / Math.max(1e-3, p.depth);
+      if (drop.y > ground) {
         if (p.splash > 0 && rng() < p.splash * 0.5) {
-          state.splashes.push({ x: drop.x, y: bbox.y + bbox.h, age: 0, z });
+          state.splashes.push({ x: drop.x, y: ground, age: 0, z, seed: rng() });
         }
         spawn(drop, true);
       } else if (drop.x < bbox.x - bbox.w * 0.35 || drop.x > bbox.x + bbox.w * 1.35) {
@@ -85,7 +110,7 @@ const rain = {
       for (let i = state.splashes.length - 1; i >= 0; i--) {
         const s = state.splashes[i];
         s.age += dt;
-        if (s.age > 0.35) state.splashes.splice(i, 1);
+        if (s.age > SPLASH_LIFE) state.splashes.splice(i, 1);
       }
       // Runaway guard if the splash rate ever outpaces the lifetime.
       if (state.splashes.length > 400) state.splashes.length = 400;
@@ -93,63 +118,109 @@ const rain = {
   },
   draw({ g, p, shape, state }) {
     const { bbox } = shape;
-    if (bbox.w <= 0 || bbox.h <= 0) return;
+    if (bbox.w <= 0 || bbox.h <= 0 || !state.drops?.length) return;
 
     const angle = (p.angle * Math.PI) / 180;
     const dirX = Math.sin(angle);
     const dirY = Math.cos(angle);
+    const near = mixHex(p.color, '#ffffff', 0.45);
 
     g.save();
     g.clip(shape.path);
+    g.globalCompositeOperation = 'lighter';
     g.lineCap = 'round';
 
     /**
-     * One gradient for the whole shower, not one per drop.
+     * Rain is only visible where it catches light, and what a camera — or an
+     * eye — sees of a falling drop is the streak it draws in the time it is
+     * looked at: a line of even brightness with soft ends, not a dot with a
+     * comet's tail. So every streak is a plain round-capped line along the
+     * fall.
      *
-     * Every streak is the same fade along the same direction — only its
-     * position, length and brightness differ — so the gradient can be built
-     * once at the origin and each drop drawn through a translate and a scale.
-     * Depth then rides on the transform (length and thickness) and on
-     * `globalAlpha` (brightness), which is what it meant anyway.
-     *
-     * At the default four hundred and fifty drops the old version allocated
-     * four hundred and fifty `CanvasGradient` objects sixty times a second —
-     * twenty-seven thousand a second, thrown away immediately. Rain was the
-     * most expensive effect in the library and this was most of the reason.
+     * Depth is three things moving together, which is the whole illusion: a
+     * near drop is longer (it crosses more of the view in the same time),
+     * wider and brighter, and slightly whiter, because it is catching the
+     * light rather than being lit by the haze; a far one is a short faint
+     * thread in the colour of the night. The old version had the covariance
+     * right and drew every drop as a single faint pixel line through its own
+     * transform and its own gradient, which at the Night City preset's
+     * settings was rain nobody could see.
      */
-    const unit = p.length;
-    const streak = g.createLinearGradient(0, 0, -dirX * unit, -dirY * unit);
-    streak.addColorStop(0, rgba(p.color, 1));
-    streak.addColorStop(1, rgba(p.color, 0));
-
-    for (const drop of state.drops) {
-      const z = drop.z;
-      // Nearer drops are longer, thicker and brighter — the whole illusion of
-      // depth in a rain effect comes from covarying those three.
-      g.save();
-      g.translate(drop.x, drop.y);
-      g.scale(z, z);
-      g.globalAlpha = p.opacity * z;
-      g.strokeStyle = streak;
-      g.lineWidth = Math.max(0.3 / z, p.width);
-      g.beginPath();
-      g.moveTo(0, 0);
-      g.lineTo(-dirX * unit, -dirY * unit);
-      g.stroke();
-      g.restore();
-    }
-    g.globalAlpha = 1;
-
-    if (p.splash > 0 && state.splashes.length) {
-      g.globalCompositeOperation = 'lighter';
-      for (const s of state.splashes) {
-        const f = s.age / 0.35;
-        const r = p.length * 0.35 * s.z * (0.3 + f);
-        g.globalAlpha = (1 - f) * p.opacity * p.splash;
-        g.strokeStyle = p.color;
-        g.lineWidth = Math.max(0.3, p.width * s.z * 0.7);
+    for (let d = 0; d < RAIN_DEPTHS; d++) {
+      const lo = d / RAIN_DEPTHS;
+      const hi = (d + 1) / RAIN_DEPTHS;
+      const z = 1 - p.depth * (1 - (lo + hi) / 2);
+      const colour = mixHex(p.color, near, (lo + hi) / 2);
+      const bright = p.opacity * (0.45 + 1.1 * ((lo + hi) / 2) ** 1.5);
+      for (const [wide, alpha] of [[3.2, 0.16], [1, 1]]) {
+        g.strokeStyle = rgba(colour, clamp(bright * alpha, 0, 1));
+        g.lineWidth = Math.max(0.5, p.width * (0.45 + 0.75 * z) * wide);
         g.beginPath();
-        g.ellipse(s.x, s.y, r, r * 0.35, 0, Math.PI, TAU);
+        for (const drop of state.drops) {
+          // Which depth bucket: drop.z runs from 1 − depth to 1.
+          const at = p.depth > 0 ? (drop.z - (1 - p.depth)) / p.depth : 1;
+          if (at < lo || at >= hi + (d === RAIN_DEPTHS - 1 ? 1e-9 : 0)) continue;
+          const len = p.length * drop.z * (0.7 + 0.6 * (drop.v ?? 0.5));
+          g.moveTo(drop.x, drop.y);
+          g.lineTo(drop.x - dirX * len, drop.y - dirY * len);
+        }
+        g.stroke();
+      }
+    }
+
+    /**
+     * Splashes, where the rain meets the ground.
+     *
+     * A drop hitting a hard surface throws a crown — a ring of droplets flung
+     * up and out, which rise, slow and fall back on real ballistics — and
+     * leaves a ring of water spreading flat around where it struck. The
+     * droplets catch the light as short bright streaks along their flight;
+     * the ring is a fading ellipse, flat because it is lying on the ground
+     * and we are looking along it. Both in one path each, for every splash at
+     * once.
+     */
+    if (p.splash > 0 && state.splashes.length) {
+      const reach = p.length * 0.6;
+      // Three ages, so a splash fades as it goes: a stroke has one alpha.
+      for (let band = 0; band < 3; band++) {
+        const from = band / 3;
+        const to = (band + 1) / 3;
+        const fade = (1 - (from + to) / 2) ** 2;
+        g.strokeStyle = rgba(near, clamp(p.opacity * p.splash * 2.2 * fade, 0, 1));
+        g.lineWidth = Math.max(0.6, p.width * 1.1);
+        g.beginPath();
+        for (const s of state.splashes) {
+          const f = s.age / SPLASH_LIFE;
+          if (f < from || f >= to) continue;
+          const seed = s.seed ?? 0.5;
+          const size = reach * s.z;
+          // Four droplets: out at a spread of angles, up and back down under
+          // gravity scaled to the splash, each drawn along its own velocity.
+          for (let k = 0; k < 4; k++) {
+            const side = (k < 2 ? -1 : 1) * (0.45 + 0.55 * frac(seed * (7 + k * 3)));
+            const up = 0.75 + 0.5 * frac(seed * (13 + k * 5));
+            const x = s.x + side * size * f * 1.6;
+            const y = s.y - size * up * 4 * f * (1 - f);
+            const vx = side * size * 1.6;
+            const vy = -size * up * 4 * (1 - 2 * f);
+            const speed = Math.hypot(vx, vy) || 1;
+            const tail = Math.max(0.6, size * 0.14);
+            g.moveTo(x, y);
+            g.lineTo(x - (vx / speed) * tail, y - (vy / speed) * tail);
+          }
+        }
+        g.stroke();
+
+        g.strokeStyle = rgba(p.color, clamp(p.opacity * p.splash * 1.2 * fade, 0, 1));
+        g.lineWidth = Math.max(0.5, p.width * 0.8);
+        g.beginPath();
+        for (const s of state.splashes) {
+          const f = s.age / SPLASH_LIFE;
+          if (f < from || f >= to) continue;
+          const r = reach * s.z * (0.25 + f * 1.1);
+          g.moveTo(s.x + r, s.y);
+          g.ellipse(s.x, s.y, r, r * 0.22, 0, 0, TAU);
+        }
         g.stroke();
       }
     }
