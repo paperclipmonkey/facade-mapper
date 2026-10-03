@@ -227,6 +227,13 @@
 
 .stage-empty p { max-width: 46ch; color: var(--text-dim); }
 
+/* The logo, so the first thing a new visitor sees is what the app is for. */
+.stage-empty-art {
+  width: 220px;
+  height: auto;
+  margin-bottom: 14px;
+}
+
 /* The overlay ignores pointer events so it can never swallow a stray click on
    the canvas; the buttons have to opt back in. */
 .stage-empty-actions {
