@@ -2,7 +2,8 @@
 
 Over eighty effects, and a **Browse…** button on every layer that
 renders all of them live, on a shape like the one you are pointing at. Pick by
-eye; this file is for the ideas behind them.
+eye — [the gallery](gallery.md) has a frame of every one of them on the demo
+house — and this file is for the ideas behind them.
 
 - [Targeting](#targeting)
 - [Effects that know where the windows are](#effects-that-know-where-the-windows-are)

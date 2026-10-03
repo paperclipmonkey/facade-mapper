@@ -180,6 +180,7 @@ different order, it is work you will lose.
 | [Setting up a house](docs/setting-up.md) | Cameras, projector tabs, alignment, walls that aren't flat, overlapping projectors, running it every night |
 | [More than one device](docs/multi-device.md) | The phone remote, a second computer driving projectors, and the shared clock |
 | [The effect library](docs/effects.md) | Targeting, paths, the look, modulation, triggers, and how the effects are built |
+| [The effect gallery](docs/gallery.md) | Every effect, one frame each, on the demo house |
 | [Writing your own effects](docs/writing-effects.md) | The `draw` contract, the `fx` helpers, and the three rules |
 | [Performance](docs/performance.md) | The budget, the benchmark, and the traps that cost more than a frame |
 | [How it fits together](docs/architecture.md) | The project model, coordinate spaces, the render path, cross-tab |
@@ -243,7 +244,8 @@ hardware.
 
 Every picture in this file is generated rather than taken — the demos and the
 picture under the title are one frame each through the real renderer and the
-real colour grade, and the screenshot of the app is the real app, driven in a
+real colour grade, the [gallery](docs/gallery.md) is the same for every effect
+in the library, and the screenshot of the app is the real app, driven in a
 browser. Nothing here is drawn *for* the README, which is the point: a
 hand-taken screenshot goes out of date the day after it is taken and never says
 so. Regenerating them is the one thing in the repository that needs anything
@@ -254,6 +256,7 @@ npm i -D playwright && npx playwright install chromium
 node tools/screenshots.mjs             # every demo, and the picture up top
 node tools/screenshots.mjs birthday    # just one
 node tools/appshots.mjs                # the control tab
+node tools/gallery.mjs                 # every effect, for docs/gallery.md
 ```
 
 ## Licence

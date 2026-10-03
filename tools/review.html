@@ -162,7 +162,10 @@
         return renderDemoFacade(w, H).toDataURL('image/png');
       };
 
-      /** Tile already-rendered stills into one labelled sheet. */
+      /**
+       * Tile already-rendered stills into one labelled sheet: each picture with
+       * its name under it, on the app's own dark panel colour.
+       */
       window.composeSheet = async ({ images, labels, cols = 3, cellW = 800 }) => {
         const loaded = await Promise.all(images.map((src) => new Promise((resolve) => {
           const img = new Image();
@@ -172,26 +175,38 @@
         })));
         const first = loaded.find(Boolean);
         const cellH = Math.round(cellW * (first ? first.height / first.width : 9 / 16));
-        const labelH = 30;
+        const gap = Math.round(cellW * 0.03);
+        const labelH = Math.round(cellW * 0.075);
         const rows = Math.ceil(images.length / cols);
         const sheet = document.createElement('canvas');
-        sheet.width = cols * cellW + (cols + 1) * 6;
-        sheet.height = rows * (cellH + labelH) + (rows + 1) * 6;
+        sheet.width = cols * cellW + (cols + 1) * gap;
+        sheet.height = rows * (cellH + labelH) + (rows + 1) * gap;
         const g = sheet.getContext('2d');
-        g.fillStyle = '#16181d';
+        g.fillStyle = '#0c0e13';
         g.fillRect(0, 0, sheet.width, sheet.height);
+        const radius = Math.round(cellW * 0.012);
         loaded.forEach((img, i) => {
           const c = i % cols;
           const r = Math.floor(i / cols);
-          const x = 6 + c * (cellW + 6);
-          const y = 6 + r * (cellH + labelH + 6);
-          g.fillStyle = '#e6e9ef';
-          g.font = '600 20px system-ui, sans-serif';
+          const x = gap + c * (cellW + gap);
+          const y = gap + r * (cellH + labelH + gap);
+          g.save();
+          g.beginPath();
+          g.roundRect(x, y, cellW, cellH, radius);
+          g.clip();
+          if (img) g.drawImage(img, x, y, cellW, cellH);
+          g.restore();
+          g.strokeStyle = '#262c3a';
+          g.lineWidth = 1;
+          g.beginPath();
+          g.roundRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1, radius);
+          g.stroke();
+          g.fillStyle = '#e7eaf2';
+          g.font = `600 ${Math.round(labelH * 0.5)}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
           g.textBaseline = 'middle';
-          g.fillText(labels[i] || '', x + 4, y + labelH / 2);
-          if (img) g.drawImage(img, x, y + labelH, cellW, cellH);
+          g.fillText(labels[i] || '', x + 2, y + cellH + labelH * 0.55);
         });
-        return sheet.toDataURL('image/jpeg', 0.88);
+        return sheet.toDataURL('image/jpeg', 0.86);
       };
 
       window.__ready = true;
