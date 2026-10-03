@@ -252,7 +252,9 @@ function layBrick(c, x, y, w, h, gap, look, relief, variation, recess, fine) {
       c.fillRect(x, y, w, h);
     }
 
-    const specks = Math.min(48, Math.round(((w * h) / 46) * relief));
+    // By area, so a big brick is as gritty as a small one, up to a ceiling
+    // that keeps the bake of a large wall of large bricks quick.
+    const specks = Math.min(150, Math.round(((w * h) / 46) * relief));
     if (specks > 0) {
       c.beginPath();
       for (let k = 0; k < specks; k++) {
@@ -652,27 +654,55 @@ function wallKey(shape, p, obstacles) {
  * fraction of the fitted width each one takes — which is honest about what it
  * covers, because every one of them is inside the outline that was fitted.
  */
-function tentacleRibbon(g, joints, widths, scale = 1) {
+function tentacleRibbon(g, joints, widths, scale = 1, nx = null, ny = null) {
+  if (!nx) {
+    jointNormals(joints);
+    nx = NX;
+    ny = NY;
+  }
   g.beginPath();
   for (let i = 0; i < joints.length; i++) {
-    const a = joints[i];
-    const b = joints[Math.min(i + 1, joints.length - 1)];
-    const prev = joints[Math.max(i - 1, 0)];
-    const angle = Math.atan2(b.y - prev.y, b.x - prev.x) + Math.PI / 2;
-    const wx = Math.cos(angle) * widths[i] * scale;
-    const wy = Math.sin(angle) * widths[i] * scale;
-    if (i === 0) g.moveTo(a.x + wx, a.y + wy);
-    else g.lineTo(a.x + wx, a.y + wy);
+    const wx = nx[i] * widths[i] * scale;
+    const wy = ny[i] * widths[i] * scale;
+    if (i === 0) g.moveTo(joints[i].x + wx, joints[i].y + wy);
+    else g.lineTo(joints[i].x + wx, joints[i].y + wy);
   }
   for (let i = joints.length - 1; i >= 0; i--) {
-    const a = joints[i];
-    const b = joints[Math.min(i + 1, joints.length - 1)];
-    const prev = joints[Math.max(i - 1, 0)];
-    const angle = Math.atan2(b.y - prev.y, b.x - prev.x) + Math.PI / 2;
-    g.lineTo(a.x - Math.cos(angle) * widths[i] * scale, a.y - Math.sin(angle) * widths[i] * scale);
+    g.lineTo(joints[i].x - nx[i] * widths[i] * scale, joints[i].y - ny[i] * widths[i] * scale);
   }
   g.closePath();
   g.fill();
+}
+
+/**
+ * The unit normal at every joint — from the joints either side, which is the
+ * one `fitWidths` measures against — into `NX` and `NY`.
+ *
+ * Worked out once an arm and shared by every ribbon of its skin and its sheen,
+ * which were each working out the same few hundred angles for themselves.
+ */
+let NX = new Float64Array(1024);
+let NY = new Float64Array(1024);
+function jointNormals(joints) {
+  const n = joints.length;
+  if (NX.length < n) {
+    NX = new Float64Array(n * 2);
+    NY = new Float64Array(n * 2);
+  }
+  for (let i = 0; i < n; i++) {
+    const b = joints[Math.min(i + 1, n - 1)];
+    const prev = joints[Math.max(i - 1, 0)];
+    const tx = b.x - prev.x;
+    const ty = b.y - prev.y;
+    const len = Math.hypot(tx, ty);
+    if (len > 0) {
+      NX[i] = -ty / len;
+      NY[i] = tx / len;
+    } else {
+      NX[i] = 0;
+      NY[i] = 1;
+    }
+  }
 }
 
 /** A closed outline into the current path, for clipping. */
@@ -2465,6 +2495,63 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
   }
 
   /**
+   * The tip curls.
+   *
+   * The last few widths of the arm are turned progressively further towards
+   * the belly — a little at first and a lot at the very end, so it spirals
+   * rather than bending at a hinge — by an amount that breathes with the
+   * writhe. It is the one gesture that is unmistakably a tentacle, and a
+   * straight point, however well shaded, is half a leaf.
+   *
+   * Every curled joint is a new position, so each is checked like the sway
+   * is, and a curl that would put the tip anywhere it should not be is tried
+   * at half and a quarter before being given up for this frame. Still at no
+   * writhe, like everything else.
+   */
+  if (n > 8) {
+    const curlLen = base * 2.8;
+    let acc = 0;
+    let start = n - 1;
+    while (start > 1 && acc < curlLen) {
+      acc += Math.hypot(joints[start].x - joints[start - 1].x, joints[start].y - joints[start - 1].y);
+      start--;
+    }
+    const span = n - 1 - start;
+    if (CURL.length < n * 2) CURL = new Float64Array(n * 4);
+    if (span >= 2) {
+      const want = (arm.side ?? 1) * (1.5 + 0.9 * Math.sin(wave * 0.55 + arm.phase * 1.7)) * emerge;
+      for (const scale of [1, 0.5, 0.25]) {
+        const total = want * scale;
+        let px = joints[start].x;
+        let py = joints[start].y;
+        let ok = true;
+        for (let i = start + 1; i < n; i++) {
+          const turn = total * ((i - start) / span) ** 1.6;
+          const dx = joints[i].x - joints[i - 1].x;
+          const dy = joints[i].y - joints[i - 1].y;
+          const c = Math.cos(turn);
+          const s = Math.sin(turn);
+          px += dx * c - dy * s;
+          py += dx * s + dy * c;
+          if (container && !stepClear(container, obstacles, px, py, Math.atan2(dy, dx) + turn, widths[i])) {
+            ok = false;
+            break;
+          }
+          CURL[i * 2] = px;
+          CURL[i * 2 + 1] = py;
+        }
+        if (ok) {
+          for (let i = start + 1; i < n; i++) {
+            joints[i].x = CURL[i * 2];
+            joints[i].y = CURL[i * 2 + 1];
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  /**
    * Take the sharpest corners out of the swayed spine before anything is drawn.
    *
    * A ribbon of half-width `w` following a curve of radius `R` turns inside out
@@ -2489,8 +2576,11 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
       const my = (joints[i - 1].y + joints[i + 1].y) * 0.5;
       const sx = joints[i].x + (mx - joints[i].x) * 0.34;
       const sy = joints[i].y + (my - joints[i].y) * 0.34;
+      // In place: these are this frame's own points, never the crawl's, and
+      // the pass already reads the neighbour behind it after moving it.
       if (!container || stepClear(container, obstacles, sx, sy, 0, widths[i] * 0.7)) {
-        joints[i] = { x: sx, y: sy };
+        joints[i].x = sx;
+        joints[i].y = sy;
       }
     }
   }
@@ -2578,31 +2668,35 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
     ? guardOpenings(g, obstacles, bx0 - pad, by0 - pad, bx1 + pad, by1 + pad)
     : false;
 
+  jointNormals(joints);
+  const nx = NX;
+  const ny = NY;
+
   const drop = base * 0.42 * emerge;
   if (drop > 0.5) {
     g.save();
     g.translate(drop * 0.5, drop * 0.86);
     g.fillStyle = 'rgba(0,0,0,0.34)';
-    tentacleRibbon(g, joints, widths);
+    tentacleRibbon(g, joints, widths, 1, nx, ny);
     g.restore();
   }
 
   g.fillStyle = mixHex(p.armColor, '#040604', 0.78);
-  tentacleRibbon(g, joints, widths);
+  tentacleRibbon(g, joints, widths, 1, nx, ny);
 
   const ramp = g.createLinearGradient(root.x, root.y, tip0.x, tip0.y);
   ramp.addColorStop(0, mixHex(p.armColor, '#000000', 0.5));
   ramp.addColorStop(0.45, p.armColor);
   ramp.addColorStop(1, mixHex(p.armColor, p.armTip, 0.45));
   g.fillStyle = ramp;
-  tentacleRibbon(g, joints, widths, 0.85);
+  tentacleRibbon(g, joints, widths, 0.85, nx, ny);
 
   const round = g.createLinearGradient(root.x, root.y, tip0.x, tip0.y);
   round.addColorStop(0, rgba(mixHex(p.armColor, p.armTip, 0.4), 0));
   round.addColorStop(0.35, rgba(mixHex(p.armColor, p.armTip, 0.5), 0.22));
   round.addColorStop(1, rgba(p.armTip, 0.32));
   g.fillStyle = round;
-  tentacleRibbon(g, joints, widths, 0.45);
+  tentacleRibbon(g, joints, widths, 0.45, nx, ny);
 
   const side = arm.side ?? 1;
 
@@ -2714,14 +2808,9 @@ function drawArm(g, p, hole, arm, t, w, h, alive = 1, container = null, obstacle
       let sum = 0;
       g.beginPath();
       for (let i = i0; i <= i1; i++) {
-        const b = joints[Math.min(i + 1, n - 1)];
-        const prev = joints[Math.max(i - 1, 0)];
-        const nrm = Math.atan2(b.y - prev.y, b.x - prev.x) + Math.PI / 2;
-        const nx = Math.cos(nrm);
-        const ny = Math.sin(nrm);
         const off = -side * widths[i] * 0.38;
-        if (i === i0) g.moveTo(joints[i].x + nx * off, joints[i].y + ny * off);
-        else g.lineTo(joints[i].x + nx * off, joints[i].y + ny * off);
+        if (i === i0) g.moveTo(joints[i].x + nx[i] * off, joints[i].y + ny[i] * off);
+        else g.lineTo(joints[i].x + nx[i] * off, joints[i].y + ny[i] * off);
         sum += widths[i];
       }
       const glint = 0.5 + 0.5 * Math.sin(wave * 1.3 + s * 2.1 + arm.phase);
@@ -2781,6 +2870,9 @@ function guardOpenings(g, obstacles, x0, y0, x1, y1) {
 /** Suckers an arm can carry, and a scratch table for them: x, y, radius, angle. */
 const MAX_SUCKERS = 160;
 const SUCKERS = new Float64Array(MAX_SUCKERS * 4);
+
+/** Trial positions for a curling tip, grown if an arm is ever longer than this. */
+let CURL = new Float64Array(2048);
 
 /** A draw in [0, 1] for the k-th marking on an arm, the same every frame. */
 function spot(k, phase) {
