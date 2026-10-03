@@ -2125,15 +2125,31 @@ const kelp = {
 const SQUEEZE = 0.28;
 
 /**
- * One strand's points, gathered before it is traced.
+ * Every strand's points, gathered before any of them is traced.
  *
  * Module-level and reused, because this is inside a loop over every strand of
- * every jellyfish on screen and a fresh pair of arrays per strand would be a
- * few hundred allocations a frame for nothing. Sized well past the twelve
- * segments a strand is drawn with.
+ * every jellyfish on screen and fresh arrays per strand would be a few
+ * hundred allocations a frame for nothing. All of one animal's strands are
+ * gathered at once, because each is traced twice — a glow and a core — and
+ * computing a strand's history twice is the expensive half. Sized for the
+ * thirty-two strands the slider allows at thirteen points each.
  */
-const strandX = new Float64Array(64);
-const strandY = new Float64Array(64);
+const strandX = new Float64Array(32 * 13);
+const strandY = new Float64Array(32 * 13);
+
+/**
+ * Trace the `count` gathered points from `start` as one smooth strand — the
+ * same curve `curveThrough` makes, read from an offset into the scratch so
+ * that no strand needs an array of its own.
+ */
+function traceStrand(g, start, count) {
+  g.moveTo(strandX[start], strandY[start]);
+  for (let i = 1; i < count - 1; i++) {
+    const a = start + i;
+    g.quadraticCurveTo(strandX[a], strandY[a], (strandX[a] + strandX[a + 1]) / 2, (strandY[a] + strandY[a + 1]) / 2);
+  }
+  if (count > 1) g.lineTo(strandX[start + count - 1], strandY[start + count - 1]);
+}
 
 /**
  * How far back in time strand `s` reaches, in seconds.
@@ -2267,6 +2283,8 @@ const jellyfish = {
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
 
     for (let i = 0; i < count; i++) {
       const rng = makeRng(`jellyfish:${shape.id}:${i}`);
@@ -2309,7 +2327,18 @@ const jellyfish = {
       // Contracted: narrower and taller. Relaxed: a flatter dome.
       const bellW = R * (1.18 - 0.34 * now.c);
       const bellH = R * (0.62 + 0.36 * now.c);
-      const alpha = clamp(0.5 * p.level, 0, 1);
+      const level = p.level;
+
+      /**
+       * The margin lights up on the recoil, not on the squeeze.
+       *
+       * Bioluminescence in a medusa is a startle response — it fires *after*
+       * something happens, and the flash outlasts the movement that set it off.
+       * Peaking it just past the end of the contraction is a small thing that
+       * makes the animal look alive rather than lit.
+       */
+      const flash = Math.max(0, 1 - Math.abs(now.phase - SQUEEZE * 1.4) * 4);
+      const glowing = p.glow * (0.55 + 0.45 * flash);
 
       /**
        * The tentacles, drawn out of the bell's own past.
@@ -2322,21 +2351,25 @@ const jellyfish = {
        * themselves, lag behind on the fast part of the stroke, and gather back
        * under the bell as it coasts. None of which is drawn; all of it falls
        * out of the delay.
+       *
+       * Every strand is gathered first and traced twice: a wide faint pass
+       * that the bloom turns into the haze of a living thread, and a fine
+       * bright one inside it. A thread a couple of pixels wide at a quarter
+       * of the brightness of the bell is what made the tentacles vanish at
+       * any distance — real ones are the length of a person and catch the
+       * light along all of it.
        */
       const strands = Math.round(p.tentacles);
       if (strands > 0) {
-        g.lineCap = 'round';
         const anchorY = now.y + bellH * 0.55;
+        let n = 0;
         for (let s = 0; s < strands; s++) {
           const across = strands > 1 ? (s / (strands - 1) - 0.5) * 2 : 0;
           const anchorX = across * bellW * 0.82;
           const isArm = s % 3 === 0;
           const span = strandLag(s, p.trail);
-          g.strokeStyle = rgba(isArm ? bell : rimColour, alpha * (isArm ? 0.75 : 0.4));
-          g.lineWidth = Math.max(0.6, R * (isArm ? 0.11 : 0.05));
           // Gathered first, then traced as a curve: a strand is a hanging
           // thing and a chain of chords looks like a chain. See `curveThrough`.
-          let n = 0;
           strandX[n] = now.x + anchorX;
           strandY[n++] = anchorY;
           for (let k = 1; k <= segments; k++) {
@@ -2369,60 +2402,165 @@ const jellyfish = {
             strandX[n] = now.x - (now.cx - past.cx) + splay;
             strandY[n++] = anchorY - (now.ty - past.ty) + drop + swing;
           }
-          g.beginPath();
-          curveThrough(g, strandX, strandY, n, { move: true });
-          g.stroke();
         }
+        /**
+         * Brightest where they leave the bell and gone by the tips, because a
+         * thread thins and the light along it is scattered away — one
+         * gradient down the whole fringe, shared by every strand of a kind.
+         */
+        const per = segments + 1;
+        const reach = anchorY + p.trail * hang * 1.2;
+        const fringe = g.createLinearGradient(0, anchorY, 0, reach);
+        fringe.addColorStop(0, rgba(rimColour, 1));
+        fringe.addColorStop(0.55, rgba(rimColour, 0.55));
+        fringe.addColorStop(1, rgba(rimColour, 0));
+        const lobes = g.createLinearGradient(0, anchorY, 0, anchorY + p.trail * hang * 0.6);
+        lobes.addColorStop(0, rgba(bell, 1));
+        lobes.addColorStop(1, rgba(bell, 0.1));
+        for (const [width, alpha] of [[0.12, 0.1], [0.035, 0.55]]) {
+          for (let s = 0; s < strands; s++) {
+            const isArm = s % 3 === 0;
+            g.strokeStyle = isArm ? lobes : fringe;
+            g.globalAlpha = clamp(alpha * (isArm ? 1.1 : 1) * level, 0, 1);
+            g.lineWidth = Math.max(0.6, R * width * (isArm ? 1.6 : 1));
+            g.beginPath();
+            traceStrand(g, s * per, per);
+            g.stroke();
+          }
+        }
+        g.globalAlpha = 1;
       }
 
-      // The bell: a dome with the margin curled under, which is the silhouette
-      // everybody recognises and the thing a plain half-ellipse misses.
-      const dome = g.createRadialGradient(now.x, now.y - bellH * 0.3, 0, now.x, now.y, bellW);
-      dome.addColorStop(0, rgba('#ffffff', alpha * 0.55));
-      dome.addColorStop(0.45, rgba(bell, alpha * 0.8));
-      dome.addColorStop(1, rgba(bell, alpha * 0.12));
+      /**
+       * The oral arms: four frilled lobes hanging from the middle of the bell.
+       *
+       * They are the other half of the silhouette everybody knows — the
+       * tentacles are a fringe, the arms are a skirt — and what makes them
+       * read is the frill: a ruffled edge, not a smooth ribbon. Each is a
+       * short trail of the bell's past like a tentacle, but stiffer, each its
+       * own length, tapering to a point, with a ripple running down both
+       * edges out of step with each other.
+       */
+      for (let a = 0; a < 4; a++) {
+        const side = (a - 1.5) / 1.5;
+        const armLength = R * (1.15 + 0.5 * ((a * 0.618 + j.hue) % 1));
+        let m = 0;
+        for (let k = 0; k <= 8; k++) {
+          const u = k / 8;
+          const past = bellAt(t - p.trail * 0.35 * u, j, p, world, bbox);
+          const sway = Math.sin(t * 1.3 + a * 1.9 + u * 3) * R * 0.1 * u;
+          strandX[m] = now.x - (now.cx - past.cx) + side * bellW * (0.12 + 0.3 * u) + sway;
+          strandY[m++] = now.y + bellH * 0.3 + u * armLength
+            - clamp((now.ty - past.ty) * 0.5, -u * armLength * 0.4, u * armLength * 0.4);
+        }
+        // Both edges, rippled out of phase with each other: the frill.
+        const ribbon = R * (0.13 - 0.04 * Math.abs(side));
+        g.fillStyle = rgba(mixHex(bell, rimColour, 0.3), clamp(0.16 * level, 0, 1));
+        g.strokeStyle = rgba(mixHex(bell, rimColour, 0.45), clamp(0.32 * level, 0, 1));
+        g.lineWidth = Math.max(0.6, R * 0.022);
+        g.beginPath();
+        for (let k = 0; k <= 8; k++) {
+          const taper = 1 - k / 8;
+          const ruffle = 1 + 0.55 * Math.sin(k * 2.3 + t * 2.2 + a);
+          const x = strandX[k] - ribbon * ruffle * (0.25 + taper);
+          if (k === 0) g.moveTo(x, strandY[k]);
+          else g.lineTo(x, strandY[k]);
+        }
+        for (let k = 8; k >= 0; k--) {
+          const taper = 1 - k / 8;
+          const ruffle = 1 + 0.55 * Math.sin(k * 2.3 + t * 2.2 + a + 2.4);
+          g.lineTo(strandX[k] + ribbon * ruffle * (0.25 + taper), strandY[k]);
+        }
+        g.closePath();
+        g.fill();
+        g.stroke();
+      }
+
+      /**
+       * The bell: a dome with the margin curled under, which is the
+       * silhouette everybody recognises and the thing a plain half-ellipse
+       * misses.
+       *
+       * Lit the way jelly is lit. Most of the bell is clear, so the body is a
+       * faint wash brightest near the crown; but seen through its own edge the
+       * light crosses far more of it, so the outline glows — the rim lighting
+       * that lets you see a moon jelly in murky water at all — and it is that
+       * glowing edge, not the fill, that carries the shape.
+       */
+      const crown = now.y - bellH * 1.42;
+      const dome = g.createRadialGradient(now.x, now.y - bellH * 0.75, 0, now.x, now.y - bellH * 0.4, bellW * 1.05);
+      dome.addColorStop(0, rgba(mixHex(bell, '#ffffff', 0.4), clamp(0.42 * level, 0, 1)));
+      dome.addColorStop(0.55, rgba(bell, clamp(0.24 * level, 0, 1)));
+      dome.addColorStop(1, rgba(bell, clamp(0.1 * level, 0, 1)));
       g.fillStyle = dome;
       g.beginPath();
       g.moveTo(now.x - bellW, now.y);
-      g.bezierCurveTo(
-        now.x - bellW, now.y - bellH * 1.9,
-        now.x + bellW, now.y - bellH * 1.9,
-        now.x + bellW, now.y
-      );
+      g.bezierCurveTo(now.x - bellW, now.y - bellH * 1.9, now.x + bellW, now.y - bellH * 1.9, now.x + bellW, now.y);
       g.quadraticCurveTo(now.x + bellW * 0.45, now.y + bellH * 0.7, now.x, now.y + bellH * 0.42);
       g.quadraticCurveTo(now.x - bellW * 0.45, now.y + bellH * 0.7, now.x - bellW, now.y);
       g.closePath();
       g.fill();
 
-      // Radial canals.
-      g.strokeStyle = rgba(bell, alpha * 0.5);
-      g.lineWidth = Math.max(0.5, R * 0.035);
-      for (let c = -2; c <= 2; c++) {
-        const off = (c / 2.4) * bellW * 0.8;
+      // The edge, in two passes: a soft glow and a bright line.
+      for (const [width, alpha] of [[0.14, 0.18], [0.045, 0.7]]) {
+        g.strokeStyle = rgba(mixHex(bell, '#ffffff', 0.25), clamp(alpha * level, 0, 1));
+        g.lineWidth = Math.max(0.8, R * width);
         g.beginPath();
-        g.moveTo(now.x + off * 0.25, now.y - bellH * 0.95);
-        g.quadraticCurveTo(now.x + off * 0.8, now.y - bellH * 0.2, now.x + off, now.y + bellH * 0.12);
+        g.moveTo(now.x - bellW, now.y);
+        g.bezierCurveTo(now.x - bellW, now.y - bellH * 1.9, now.x + bellW, now.y - bellH * 1.9, now.x + bellW, now.y);
         g.stroke();
       }
 
       /**
-       * The margin lights up on the recoil, not on the squeeze.
+       * Radial canals, running from the crown to the margin.
        *
-       * Bioluminescence in a medusa is a startle response — it fires *after*
-       * something happens, and the flash outlasts the movement that set it off.
-       * Peaking it just past the end of the contraction is a small thing that
-       * makes the animal look alive rather than lit.
+       * Eight of them round a real bell; seen side-on, the five on the near
+       * face. Fine and faint, but they are what make the dome a structure
+       * rather than a blob.
        */
+      g.strokeStyle = rgba(mixHex(bell, '#ffffff', 0.3), clamp(0.3 * level, 0, 1));
+      g.lineWidth = Math.max(0.6, R * 0.025);
+      g.beginPath();
+      for (let c = -2; c <= 2; c++) {
+        const off = (c / 2.4) * bellW * 0.85;
+        g.moveTo(now.x + off * 0.18, crown + bellH * 0.12);
+        g.quadraticCurveTo(now.x + off * 0.8, now.y - bellH * 0.55, now.x + off, now.y + bellH * 0.1);
+      }
+      g.stroke();
+
+      /**
+       * The gonads: four horseshoes in a cross round the middle of a moon
+       * jelly, which seen from the side and a little below merge into one
+       * soft, flattened blush of denser tissue in the middle of the bell —
+       * the first thing a light through it picks out. Drawn as that blush:
+       * outlined, the horseshoes are letters, and drawn as separate lobes the
+       * two at the sides are a pair of eyes looking back at you.
+       */
+      {
+        const gy = now.y - bellH * 0.58;
+        const blush = g.createRadialGradient(now.x, gy, 0, now.x, gy, bellW * 0.5);
+        const ink = mixHex(rimColour, '#ffffff', 0.2);
+        const strength = clamp(0.32 * level * (0.6 + 0.4 * p.glow), 0, 1);
+        blush.addColorStop(0, rgba(ink, strength));
+        blush.addColorStop(0.6, rgba(ink, strength * 0.55));
+        blush.addColorStop(1, rgba(ink, 0));
+        g.fillStyle = blush;
+        g.beginPath();
+        g.ellipse(now.x, gy, bellW * 0.5, bellH * 0.28, 0, 0, TAU);
+        g.fill();
+      }
+
       if (p.glow > 0) {
-        const flash = Math.max(0, 1 - Math.abs(now.phase - SQUEEZE * 1.4) * 4);
-        g.strokeStyle = rgba(rimColour, clamp((0.35 + flash * 0.6) * p.glow * p.level, 0, 1));
-        g.lineWidth = Math.max(0.8, R * 0.09);
+        // The margin itself, where the light organs are.
+        g.strokeStyle = rgba(rimColour, clamp((0.45 + flash * 0.5) * p.glow * level, 0, 1));
+        g.lineWidth = Math.max(0.8, R * 0.08);
         g.beginPath();
         g.moveTo(now.x - bellW, now.y);
-        g.quadraticCurveTo(now.x, now.y + bellH * 0.85, now.x + bellW, now.y);
+        g.quadraticCurveTo(now.x - bellW * 0.45, now.y + bellH * 0.7, now.x, now.y + bellH * 0.42);
+        g.quadraticCurveTo(now.x + bellW * 0.45, now.y + bellH * 0.7, now.x + bellW, now.y);
         g.stroke();
-        glow(g, now.x, now.y - bellH * 0.2, R * (1.6 + flash), rimColour,
-          clamp((0.12 + flash * 0.3) * p.glow * p.level, 0, 1));
+        glow(g, now.x, now.y - bellH * 0.35, R * (2 + flash), rimColour,
+          clamp((0.14 + flash * 0.25) * glowing * level, 0, 1));
       }
     }
 
