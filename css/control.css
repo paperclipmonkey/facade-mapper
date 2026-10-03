@@ -29,9 +29,10 @@
 }
 
 .logo {
-  color: var(--accent);
-  font-size: 18px;
-  line-height: 1;
+  display: block;
+  flex: none;
+  width: 26px;
+  height: 26px;
 }
 
 .project-name {
