@@ -240,75 +240,79 @@ export function orbitalDecay(z, lambda) {
  * ------------------------------------------------------------------ */
 
 /**
- * How many depths a shaft's gradient is sampled at.
+ * Where along a shaft its colour is sampled, from the surface down.
  *
- * Absorption is exponential, and a two-stop gradient across ten metres of it is
- * visibly a straight line where the curve should be steepest. Six is enough
- * that the knee is smooth, and it is six `waterAbsorb` calls per shaft per
- * frame — about sixty for a full fan, which is nothing.
+ * Absorption is exponential, and a two-stop gradient across ten metres of it
+ * is visibly a straight line where the curve should be steepest. So eight
+ * stops, bunched near the top where two things change fast — the shaft
+ * fading *in* out of the bright band under the surface over its first few
+ * per cent, and the knee of the absorption just below — and spread out over
+ * the long tail. Eight `waterAbsorb` calls per shaft per frame, cached and
+ * quantised: about a hundred for a full fan, which is nothing.
  */
-const SHAFT_STOPS = 6;
+const SHAFT_STOPS = [0, 0.035, 0.1, 0.2, 0.34, 0.52, 0.74, 1];
 
 /**
- * The cross-section of a shaft, as [width, alpha] pairs, widest first.
+ * How a shaft is drawn, and why it is not drawn at full size.
  *
- * The slices are drawn additively one inside the next, so what the eye sees at
- * a given distance from the centre is the *sum* of every slice that reaches
- * it. Getting a Gaussian section out of that means each slice carries the
- * **increment** between its own reach and the previous one's — not the value
- * of the curve at its own width, which is what this used to do.
+ * Canvas has no gradient across the width of a shape, and a beam with a hard
+ * edge is a plank. The old answer was a dozen nested quads, each carrying an
+ * increment of a Gaussian — but the outermost still stood at a tenth of the
+ * peak, so every shaft had a visible edge at its full width and read as a
+ * slab of cellophane, and the stack painted the middle of every beam twelve
+ * times, which made the shafts the dearest thing in the set.
  *
- * That distinction is the whole difference between a shaft and a streak. With
- * the raw values the innermost sliver carried full alpha and the stack summed
- * to three at the centre, so the beam clipped to flat white over about a sixth
- * of the width the slider asked for, with a faint halo outside it that read as
- * a separate thing. On a wall that is a hard bright stripe: cellophane, not
- * light. With increments the sum reaches one exactly at the centre and falls
- * off across the full width, which is what a shaft of sunlight in water
- * actually looks like.
+ * A shaft of light in water has no detail finer than a few centimetres. So
+ * the fan is drawn into a buffer at a quarter of the resolution: each shaft a
+ * soft-sided body, a narrower, brighter core that drifts from side to side as
+ * the lens above it changes, and a few thin streaks — three fills, each with
+ * the shaft's own gradient down its length. Then the whole buffer is blurred
+ * once and blown back up over the shape. The blur is what feathers every
+ * edge into nothing, and it costs one filter for the entire fan rather than
+ * one per shaft; under it the three add up to a beam that is brightest along
+ * a line that wanders and is grained along its length, which is how a shaft
+ * of sunlight in water actually looks — light gathered by a moving lens and
+ * caught by whatever is suspended in it, not shone through a slot.
  *
- * Twelve slices rather than five, because the steps are now what you would see
- * if you saw anything: each is under a tenth of the peak, which is below the
- * threshold at which a gradient bands. Twelve fills of a quad is nothing next
- * to the gradient each one is filled with, which is made once per shaft.
+ * Painting at a sixteenth of the pixels also pays for itself: the fan costs
+ * about what the old stack did on a software canvas, and far less wherever
+ * the canvas is on the GPU and the old stack's twelvefold overdraw was the
+ * whole bill.
+ *
+ * Where a browser has no canvas filter the blow-up alone softens the edges a
+ * little, and the shafts are harder but still correct.
  */
-const SHAFT_SLICES_MAX = 12;
-const SHAFT_SLICES_MIN = 4;
+const SHAFT_RESOLUTION = 0.25;
+const SHAFT_BUFFER_MAX = 720;
+let shaftBuffer = null;
+let shaftSoft = null;
 
-/** Normalised so the centre is 1; 2.2 puts the knee inside the stated width. */
-const shaftReach = (scale) => Math.exp(-2.2 * scale * scale);
-
-/**
- * A section for every slice count, built once.
- *
- * How many slices a shaft needs is a question about how wide it is on the
- * wall, not about the effect: the steps are only visible if there are enough
- * pixels between them to see. A shaft forty pixels across looks identical at
- * four slices and at twelve, and a fan of forty narrow ones would pay for the
- * other eight on every one of them, every frame.
- */
-const SHAFT_SECTIONS = (() => {
-  const table = [];
-  for (let slices = 0; slices <= SHAFT_SLICES_MAX; slices++) {
-    if (slices < SHAFT_SLICES_MIN) { table.push(null); continue; }
-    const out = [];
-    let previous = 0;
-    for (let i = 0; i < slices; i++) {
-      // Down to a sliver rather than to zero: the last slice is the core.
-      const scale = 1 - (i / slices) * 0.93;
-      const here = shaftReach(scale);
-      out.push([scale, here - previous]);
-      previous = here;
-    }
-    table.push(out);
+/** A buffer of at least `w × h`, grown rather than replaced, cleared over that much of it. */
+function shaftScratch(canvas, w, h) {
+  const out = canvas || offscreen(w, h);
+  if (out.width < w || out.height < h) {
+    out.width = Math.max(out.width, w);
+    out.height = Math.max(out.height, h);
   }
-  return table;
-})();
+  const b = out.getContext('2d');
+  b.setTransform(1, 0, 0, 1, 0, 0);
+  b.filter = 'none';
+  b.globalAlpha = 1;
+  b.globalCompositeOperation = 'copy';
+  b.fillStyle = 'rgba(0,0,0,0)';
+  b.fillRect(0, 0, w, h);
+  return out;
+}
 
-/** As many slices as the width can show, and no more. About one per ten pixels. */
-function shaftSection(widthPx) {
-  const wanted = Math.round(widthPx / 10);
-  return SHAFT_SECTIONS[clamp(wanted, SHAFT_SLICES_MIN, SHAFT_SLICES_MAX)];
+/** One side-to-side slice of a shaft, `lo..hi` in half-widths of its axis, added to the path as a closed quad. */
+function shaftSlice(b, originX, top, endX, endY, w0, w1, lo, hi) {
+  // Offsets taken along the surface rather than square to the shaft, so a
+  // slanting shaft does not poke a corner up out of the water.
+  b.moveTo(originX + lo * w0 * 0.5, top);
+  b.lineTo(originX + hi * w0 * 0.5, top);
+  b.lineTo(endX + hi * w1 * 0.5, endY);
+  b.lineTo(endX + lo * w1 * 0.5, endY);
+  b.closePath();
 }
 
 const godrays = {
@@ -317,7 +321,7 @@ const godrays = {
   category: 'underwater',
   scope: 'shape',
   description:
-    'Sunlight coming down through the surface in shafts, swaying with the swell and reddening out of existence as it goes deeper. The colour is absorption rather than a tint, so the depth reads even in a still.',
+    'Sunlight coming down through the surface in soft shafts, brightest just under it, swaying and shimmering with the swell and reddening out of existence as it goes deeper. The colour is absorption rather than a tint, so the depth reads even in a still.',
   params: [
     { key: 'color', type: 'color', label: 'Light at the surface', default: '#eaf7ff' },
     ...SURFACE_PARAMS,
@@ -340,6 +344,13 @@ const godrays = {
     // The surface is below the shape: there is no water here to put light in.
     if (bottom - top <= 1) return;
 
+    // Only the part of the shape a projector can show is worth drawing into.
+    const left = Math.max(bbox.x, -world.w * 0.1);
+    const right = Math.min(bbox.x + bbox.w, world.w * 1.1);
+    const high = Math.max(top, -world.h * 0.1);
+    const low = Math.min(bottom, world.h * 1.1);
+    if (right - left < 2 || low - high < 2) return;
+
     const count = Math.max(1, Math.round(p.shafts));
     const tiltRad = (p.tilt * Math.PI) / 180;
     const spreadRad = (p.spread * Math.PI) / 180;
@@ -359,8 +370,8 @@ const godrays = {
      */
     if (p.haze > 0) {
       const wash = g.createLinearGradient(0, top, 0, bottom);
-      for (let i = 0; i < SHAFT_STOPS; i++) {
-        const u = i / (SHAFT_STOPS - 1);
+      for (let i = 0; i < 6; i++) {
+        const u = i / 5;
         const y = lerp(top, bottom, u);
         const colour = waterAbsorb(p.color, depthAt(p, y, world), p.turbidity);
         wash.addColorStop(u, rgba(colour, p.haze * 0.16 * p.intensity * (1 - u * 0.45)));
@@ -369,6 +380,18 @@ const godrays = {
       g.fillRect(bbox.x, top, bbox.w, bottom - top);
     }
 
+    // The quarter-size buffer, in world coordinates with a little margin all
+    // round so the blur has room to fall off before the edge.
+    const res = Math.min(SHAFT_RESOLUTION, SHAFT_BUFFER_MAX / (right - left), SHAFT_BUFFER_MAX / (low - high));
+    const pad = 12;
+    const bw = Math.ceil((right - left) * res) + pad * 2;
+    const bh = Math.ceil((low - high) * res) + pad * 2;
+    shaftBuffer = shaftScratch(shaftBuffer, bw, bh);
+    const b = shaftBuffer.getContext('2d');
+    b.globalCompositeOperation = 'lighter';
+    b.setTransform(res, 0, 0, res, pad - left * res, pad - high * res);
+
+    let totalWidth = 0;
     for (let i = 0; i < count; i++) {
       const rng = makeRng(`godrays:${shape.id}:${i}`);
       const jitter = rng();
@@ -390,11 +413,10 @@ const godrays = {
       const angle = tiltRad + fan * spreadRad + Math.sin(phase) * p.sway * 0.16;
       const focus = 0.5 + 0.5 * Math.cos(phase * 1.37 + jitter * 3.1);
 
-      const length = (bottom - top) / Math.max(0.15, Math.cos(clamp(angle, -1.4, 1.4)));
-      const dx = Math.sin(angle);
-      const dy = Math.cos(angle);
-      const endX = originX + dx * length;
-      const endY = top + dy * length;
+      const slant = Math.max(0.15, Math.cos(clamp(angle, -1.4, 1.4)));
+      const length = (bottom - top) / slant;
+      const endX = originX + Math.sin(angle) * length;
+      const endY = top + Math.cos(angle) * length;
 
       const w0 = bbox.w * p.width * (0.55 + 0.9 * (1 - focus)) * (0.7 + jitter * 0.6);
       // Beams widen going down: the surface is a rough lens, not a slit.
@@ -403,53 +425,83 @@ const godrays = {
       // The shimmer is the surface breaking up, and it is independent per shaft
       // — a fan that brightens as one reads as a lamp behind a fan blade.
       const shimmer = 1 - p.shimmer * 0.5 * (0.5 + 0.5 * noise.noise2(i * 3.7, t * 0.9));
-      /**
-       * Raised to match what the section now sums to.
-       *
-       * The old stack reached three times this at the centre and was clipped
-       * there by the compositor; the new one reaches one, so the same number
-       * would have made the shafts a third of the brightness they were. This
-       * is the figure that keeps a default shaft as bright as it looked, while
-       * spending that brightness across the width instead of piling it into a
-       * sliver.
-       */
-      const peak = 0.85 * p.intensity * shimmer * (0.6 + 0.4 * focus);
+      // A focused shaft is narrower and brighter at once: the lens again.
+      const peak = 0.9 * p.intensity * shimmer * (0.6 + 0.4 * focus);
 
+      /**
+       * The shaft's own gradient, down its length.
+       *
+       * Its colour is the light after the water it has actually crossed, and
+       * a slanting shaft has crossed more of it than its depth: to get `z`
+       * metres down at an angle θ off vertical, sunlight travels `z / cos θ`.
+       * So the shafts at the edge of the fan redden out sooner than the ones
+       * coming straight down — which is the only reason a fan of them is not
+       * one colour, and is visible as the outer ones going bluer first.
+       *
+       * Made on `g` and filled on the buffer: a gradient belongs to no
+       * context in particular, and it is in world coordinates either way.
+       */
       const grad = g.createLinearGradient(originX, top, endX, endY);
-      for (let s = 0; s < SHAFT_STOPS; s++) {
-        const u = s / (SHAFT_STOPS - 1);
+      for (const u of SHAFT_STOPS) {
         const y = lerp(top, endY, u);
-        const colour = waterAbsorb(p.color, depthAt(p, y, world), p.turbidity);
-        // Fades out along its own length as well as reddening: a shaft ends
-        // because the light in it has been scattered away, not at a hard edge.
-        grad.addColorStop(u, rgba(colour, peak * (1 - u) ** 1.6));
+        const colour = waterAbsorb(p.color, depthAt(p, y, world) / slant, p.turbidity);
+        /**
+         * Out of the surface band, brightest a little way down, then fading
+         * along its own length as well as reddening: a shaft ends because the
+         * light in it has been scattered away, not at a hard edge — and it
+         * does not begin at one either. The first few per cent rise out of
+         * the bright mirror under the waterline instead of starting at a ruled
+         * line across the top of the picture.
+         */
+        const rise = smoothstep(0, 0.09, u);
+        grad.addColorStop(u, rgba(colour, (0.3 + 0.7 * rise) * (1 - u) ** 1.2));
       }
+      b.fillStyle = grad;
 
+      // The body, soft-sided under the blur...
+      b.globalAlpha = Math.min(1, peak * 0.42);
+      b.beginPath();
+      shaftSlice(b, originX, top, endX, endY, w0, w1, -1, 1);
+      b.fill();
+      // ...the core: narrower, brighter, wandering across the beam...
+      const wander = 0.4 * p.shimmer * noise.noise2(i * 2.3 + 7.1, t * 0.35);
+      b.globalAlpha = Math.min(1, peak * 0.4);
+      b.beginPath();
+      shaftSlice(b, originX, top, endX, endY, w0, w1, wander - 0.36, wander + 0.36);
+      b.fill();
       /**
-       * Nested quads rather than one, because Canvas has no gradient across the
-       * width of a shape and a beam with a hard edge is a plank.
-       *
-       * Five rather than three, and this is worth the extra two fills: the
-       * widths are a geometric series and the alphas are the Gaussian
-       * `exp(−2u²)` evaluated at them, so the stack sums to a smooth section
-       * instead of to visible steps. At three the steps are plainly there on a
-       * wide shaft — the beam reads as three planks stacked, which is worse
-       * than one plank because it looks like a mistake rather than a style.
+       * ...and the streaks: a few thin rays inside the beam, each its own
+       * width, drifting slowly across it. The light in a shaft does not come
+       * through as a smooth wash; it is gathered by facets of the surface,
+       * and each facet sends its own ray. One path, so one fill for all of
+       * them.
        */
-      g.fillStyle = grad;
-      for (const [scale, alpha] of shaftSection(w1)) {
-        g.globalAlpha = alpha;
-        g.beginPath();
-        g.moveTo(originX - w0 * scale * 0.5, top);
-        g.lineTo(originX + w0 * scale * 0.5, top);
-        g.lineTo(endX + w1 * scale * 0.5, endY);
-        g.lineTo(endX - w1 * scale * 0.5, endY);
-        g.closePath();
-        g.fill();
+      b.globalAlpha = Math.min(1, peak * 0.5);
+      b.beginPath();
+      for (let k = 0; k < 4; k++) {
+        const at = 0.8 * noise.noise2(i * 4.1 + k * 9.7, t * 0.12 * (1 + k * 0.3));
+        const thin = 0.05 + 0.07 * rng();
+        shaftSlice(b, originX, top, endX, endY, w0, w1, at - thin, at + thin);
       }
-      g.globalAlpha = 1;
+      b.fill();
+      totalWidth += w0;
     }
 
+    /**
+     * The one blur, sized to the shafts: about a tenth of a typical shaft's
+     * width at the surface. Enough that no edge survives it, and not so much
+     * that a shaft turns into a column of fog — it keeps its body, its core
+     * and its streaks, only feathered.
+     */
+    shaftSoft = shaftScratch(shaftSoft, bw, bh);
+    const s = shaftSoft.getContext('2d');
+    const sigma = clamp((totalWidth / count) * res * 0.1, 1, 6);
+    s.filter = `blur(${sigma.toFixed(1)}px)`;
+    s.drawImage(shaftBuffer, 0, 0, bw, bh, 0, 0, bw, bh);
+    s.filter = 'none';
+    s.globalCompositeOperation = 'source-over';
+
+    g.drawImage(shaftSoft, 0, 0, bw, bh, left - pad / res, high - pad / res, bw / res, bh / res);
     g.restore();
   },
 };
