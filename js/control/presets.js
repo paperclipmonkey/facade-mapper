@@ -95,17 +95,13 @@ const HALLOWEEN = () => [
     blend: 'lighter',
     params: { color: '#ff8a2b', mode: 'both', rate: 0.34, wave: 'sine', min: 0.12, max: 0.85, width: 16, grow: 0.012 },
   }),
-  layer('pulse', {
-    name: 'Window pulse',
-    tags: ['window'],
-    blend: 'lighter',
-    opacity: 0.5,
-    stagger: 0.35,
-    params: { color: '#8b00ff', mode: 'outline', rate: 0.5, wave: 'heartbeat', min: 0, max: 0.9, width: 8 },
-  }),
-  // Brick, then the thing behind the brick, then the rot growing over both.
-  // The order is the whole point: Breach has to draw after the wall it is
-  // taking apart, and the vine has to draw after the wall it is climbing.
+  // No heartbeat round the window frames any more. It was there to give the
+  // windows something to do once the old candles came out, and with somebody
+  // standing in the candlelight they have their one idea already: a purple
+  // outline on top of that is a second, and reads as decoration.
+  //
+  // Brick, then the thing behind the brick. The order is the whole point:
+  // Breach has to draw after the wall it is taking apart.
   //
   // On a rendered or painted house this bottom layer is doing more work than
   // anything else in the preset — it is what turns a flat pale wall into a
@@ -989,7 +985,7 @@ export const PRESETS = [
     id: 'halloween',
     name: 'Halloween starter',
     description:
-      'Candlelit windows with something looking out, blood down the door, rot creeping over the brickwork, ground fog and a storm overhead.',
+      'Candlelit windows with somebody looking out, something breaking out through the brickwork, blood down the door, ground fog and a storm overhead.',
     tagsUsed: ['window', 'door', 'planter'],
     grade: 'haunted',
     build: HALLOWEEN,
@@ -998,7 +994,7 @@ export const PRESETS = [
     id: 'christmas',
     name: 'Christmas starter',
     description:
-      'Chasing lights along the roofline, warm windows behind frosted glass, icicles, a candy-cane door, snow and a Santa fly-past.',
+      'Coloured lights and icicles along the gutter, warm windows behind frosted glass, a candy-cane door, snow settling on the ledges and a Santa fly-past.',
     tagsUsed: ['roof', 'window', 'door', 'planter'],
     grade: 'frost',
     build: CHRISTMAS,
