@@ -1767,6 +1767,87 @@ function ventsFor(shape, count, rng, spread) {
   return vents;
 }
 
+/**
+ * A bubble, baked once per colour and size, and stamped.
+ *
+ * A bubble is a rim, not a disc. Under water it is a lens of air with almost
+ * nothing in the middle of it: light passing through the centre is barely
+ * bent and carries on, while light meeting the edge hits the interface at a
+ * grazing angle and is thrown back at you whole — total internal reflection,
+ * the same physics as the mirror under the waterline. So what you see is a
+ * bright ring that falls away steeply inside (a Fresnel rim rather than a
+ * stroke), a hard catchlight where the top of the bubble faces the surface,
+ * and a fainter crescent underneath from the light that went through and
+ * came back. Drawn as a filled circle it is a pearl; drawn as a plain stroked
+ * circle, as it was, it is a diagram of one.
+ *
+ * A ladder of three sizes, because a rim is a feature a pixel or two wide
+ * whatever the size of the bubble, and shrinking one big sprite down to a
+ * small bubble averages its rim into the dark middle and puts it out. Each
+ * rung has its rim drawn at its own scale, and a bubble is stamped from the
+ * smallest rung at least as big as it is. Baked rather than drawn because
+ * there are hundreds of them: one `drawImage` each, where the old rings were
+ * three paths and three fills.
+ */
+const BUBBLE_RUNGS = [16, 32, 64];
+const bubbleSprites = new Map();
+
+function bubbleSprite(colour, diameter) {
+  let ladder = bubbleSprites.get(colour);
+  if (!ladder) {
+    if (bubbleSprites.size > 64) bubbleSprites.clear();
+    ladder = BUBBLE_RUNGS.map((size) => bakeBubble(colour, size));
+    bubbleSprites.set(colour, ladder);
+  }
+  for (let i = 0; i < BUBBLE_RUNGS.length - 1; i++) {
+    if (diameter <= BUBBLE_RUNGS[i]) return ladder[i];
+  }
+  return ladder[BUBBLE_RUNGS.length - 1];
+}
+
+function bakeBubble(colour, size) {
+  const sprite = offscreen(size, size);
+  const g = sprite.getContext('2d');
+  const m = size / 2;
+  const r = m - 0.5;
+  // The rim is never thinner than a pixel and a half of this rung.
+  const band = Math.max(1.5 / r, 0.12);
+  g.globalCompositeOperation = 'lighter';
+
+  const rim = g.createRadialGradient(m, m, 0, m, m, r);
+  rim.addColorStop(0, rgba(colour, 0.05));
+  rim.addColorStop(Math.max(0.3, 1 - band * 3), rgba(colour, 0.1));
+  rim.addColorStop(1 - band * 1.2, rgba(colour, 0.55));
+  rim.addColorStop(1 - band * 0.45, rgba(mixHex(colour, '#ffffff', 0.35), 1));
+  rim.addColorStop(1, rgba(colour, 0.15));
+  g.fillStyle = rim;
+  g.beginPath();
+  g.arc(m, m, r, 0, TAU);
+  g.fill();
+
+  // The catchlight, up and to one side, where the bubble faces the surface.
+  const hx = m - r * 0.36;
+  const hy = m - r * 0.4;
+  const hr = Math.max(1.2, r * 0.28);
+  const catchlight = g.createRadialGradient(hx, hy, 0, hx, hy, hr);
+  catchlight.addColorStop(0, rgba('#ffffff', 1));
+  catchlight.addColorStop(0.4, rgba('#ffffff', 0.6));
+  catchlight.addColorStop(1, rgba('#ffffff', 0));
+  g.fillStyle = catchlight;
+  g.beginPath();
+  g.arc(hx, hy, hr, 0, TAU);
+  g.fill();
+
+  // The crescent underneath: light that went through and came back.
+  g.strokeStyle = rgba(mixHex(colour, '#ffffff', 0.3), 0.45);
+  g.lineWidth = Math.max(1, r * 0.1);
+  g.lineCap = 'round';
+  g.beginPath();
+  g.arc(m, m, r * 0.7, Math.PI * 0.2, Math.PI * 0.7);
+  g.stroke();
+  return sprite;
+}
+
 const bubbles = {
   id: 'bubbles',
   name: 'Bubbles',
@@ -1861,9 +1942,20 @@ const bubbles = {
       b.x += b.vx * dt;
       b.y += b.vy * dt;
 
-      // The house is in the way, and a bubble that meets a sill does not bounce
-      // off it — it presses against the underside and slides out sideways,
-      // which is what a restitution near zero plus a lateral wobble gives.
+      /**
+       * The house is in the way, and a bubble that meets a sill does not
+       * bounce off it — it presses against the underside and creeps along it
+       * to the nearer end, then carries on up past the edge.
+       *
+       * The creep has to be put in. A restitution near zero and the zigzag
+       * alone were supposed to slide it out, but the zigzag is symmetric, so
+       * under a level sill a bubble went nowhere: every one released below a
+       * window gathered at the same spot under it and, drawn additively,
+       * the pile burned into a white ball. Under a real sill the slightest
+       * tilt decides which way they go and they stream out along it; here
+       * the nearer end decides, at a steady crawl that drag holds to about a
+       * third of the rise speed.
+       */
       for (const o of obstacles) {
         const { bbox: ob } = o;
         if (
@@ -1872,7 +1964,13 @@ const bubbles = {
           || b.y < ob.y - b.r
           || b.y > ob.y + ob.h + b.r
         ) continue;
+        const wasX = b.x;
+        const wasY = b.y;
         deflect(o.points, b, b.r, 0.05, false);
+        if (b.x !== wasX || b.y !== wasY) {
+          const toward = b.x < ob.x + ob.w / 2 ? -1 : 1;
+          b.vx += toward * p.rise * 0.35 * drag * dt;
+        }
       }
 
       // Gone at the surface, or off the top of what we were given.
@@ -1895,42 +1993,33 @@ const bubbles = {
 
     for (const b of state.bubbles) {
       const metres = depthAt(p, b.y, world);
-      const colour = waterAbsorb(p.color, metres * 0.35, p.turbidity);
+      // Quantised to half a metre so the sprites can be shared: a bubble is
+      // the same colour as its neighbour a hand's width below it.
+      const colour = waterAbsorb(p.color, Math.round(metres * 0.7) / 2, p.turbidity);
       // Fades in off the vent and out at the surface, so nothing appears or
       // vanishes on a frame boundary.
       const fade = clamp(b.life * 4, 0, 1)
         * clamp((b.y - top) / Math.max(1, world.h * 0.06), 0, 1);
-      const alpha = clamp(0.75 * fade * p.level, 0, 1);
+      const alpha = clamp(0.9 * fade * p.level, 0, 1);
       if (alpha <= 0.004 || b.r < 0.4) continue;
 
       /**
-       * A bubble is a rim, not a disc.
+       * Bigger bubbles are not round.
        *
-       * Under water a bubble is a lens of air with almost nothing in the middle
-       * of it: light passing through the centre is barely bent and carries on,
-       * while light meeting the edge hits the interface at a grazing angle and
-       * is thrown back at you whole. So what you see is a bright ring, a hard
-       * highlight where the surface faces the light, and a second smaller one
-       * underneath from the light that went through and came back. Drawn as a
-       * filled circle it is a pearl.
+       * Below a couple of millimetres surface tension holds a bubble to a
+       * sphere; above it the pressure of the water it is shouldering aside
+       * flattens it into an oblate spheroid, wider than tall, and it rocks
+       * and wobbles as it sheds the vortices that make it zigzag. So the
+       * aspect follows the size, and wobbles on the same phase as the zigzag.
        */
-      g.strokeStyle = rgba(colour, alpha);
-      g.lineWidth = Math.max(0.6, b.r * 0.22);
-      g.beginPath();
-      g.arc(b.x, b.y, Math.max(0.5, b.r - g.lineWidth * 0.5), 0, TAU);
-      g.stroke();
-
-      if (b.r > 2.2) {
-        g.fillStyle = rgba('#ffffff', alpha * 0.8);
-        g.beginPath();
-        g.arc(b.x - b.r * 0.32, b.y - b.r * 0.36, Math.max(0.4, b.r * 0.2), 0, TAU);
-        g.fill();
-        g.fillStyle = rgba(colour, alpha * 0.45);
-        g.beginPath();
-        g.arc(b.x + b.r * 0.3, b.y + b.r * 0.34, Math.max(0.3, b.r * 0.13), 0, TAU);
-        g.fill();
-      }
+      const big = clamp((b.r - 5) / 18, 0, 1);
+      const squash = 1 - big * (0.22 + 0.07 * Math.sin(b.phase + b.life * 9));
+      const w = b.r * 2 * (1 + big * 0.12);
+      const h = b.r * 2 * squash;
+      g.globalAlpha = alpha;
+      g.drawImage(bubbleSprite(colour, w), b.x - w / 2, b.y - h / 2, w, h);
     }
+    g.globalAlpha = 1;
 
     g.restore();
   },
@@ -1942,6 +2031,15 @@ const bubbles = {
 
 /** Nodes up a frond. Enough for a smooth curve, few enough to be free. */
 const KELP_NODES = 14;
+
+/** Points down each side of one blade, and the scratch its outline is gathered in. */
+const BLADE_STEPS = 6;
+const bladeX = new Float64Array(BLADE_STEPS * 2 + 2);
+const bladeY = new Float64Array(BLADE_STEPS * 2 + 2);
+/** Per node of the frond being drawn: which side its blade is on (0 for none), its size and ruffle. */
+const leafSide = new Int8Array(KELP_NODES + 1);
+const leafSize = new Float64Array(KELP_NODES + 1);
+const leafRipple = new Float64Array(KELP_NODES + 1);
 
 const kelp = {
   id: 'kelp',
@@ -2026,6 +2124,7 @@ const kelp = {
        */
       const drift = p.current * height * 0.3
         * Math.sin(t * 0.21 + jitter * 5.3 + rootMetresX * 0.05);
+      const swell = omega * t - k * rootMetresX + jitter * 2.4;
 
       for (let i = 0; i <= KELP_NODES; i++) {
         const u = i / KELP_NODES;
@@ -2035,8 +2134,7 @@ const kelp = {
         // Anchored at the holdfast: the exponential alone still leaves a base
         // that slides, and a plant that slides is a plant that is not rooted.
         const anchored = u * u * (3 - 2 * u);
-        const phase = omega * t - k * rootMetresX + jitter * 2.4;
-        const offset = swayPx * decay * anchored * (Math.sin(phase) + 0.35 * Math.sin(phase * 2.1 + 1.1));
+        const offset = swayPx * decay * anchored * (Math.sin(swell) + 0.35 * Math.sin(swell * 2.1 + 1.1));
         nx[i] = rootX + offset + (lean * height + drift) * anchored;
         ny[i] = y;
       }
@@ -2047,38 +2145,124 @@ const kelp = {
       grad.addColorStop(0, rgba(nearColour, clamp(0.75 * p.level, 0, 1)));
       grad.addColorStop(1, rgba(tipColour, clamp(0.95 * p.level, 0, 1)));
 
-      // Blades first, so the stipe is drawn over their roots.
-      if (p.blades > 0) {
-        g.fillStyle = grad;
+      /**
+       * Which way the water is moving past the frond, -1..1: the rate of
+       * change of the sway, which is the same sign all the way up a frond
+       * because the whole of it is in the same phase of the wave. Blades
+       * stream with it, so the frond is visibly being moved by something
+       * rather than waving on its own.
+       */
+      const stream = (Math.cos(swell) + 0.735 * Math.cos(swell * 2.1 + 1.1)) / 1.735 * Math.min(1, p.sway * 2);
+
+      /**
+       * The blades, first, so the stipe is drawn over their roots.
+       *
+       * A giant kelp frond is a cord with a blade hanging off it every hand's
+       * width or so, each on a small gas bladder that holds it up: long,
+       * narrow and ruffled along both edges, leaving the stipe at a shallow
+       * angle and curving back up along it, because it floats. Not every node
+       * has one and they do not strictly alternate — the old regular
+       * left-right leaves read as an ear of wheat, which is a picture of a
+       * plant that has never been in water. Each blade is its own length,
+       * swings out with the water passing it, and the ruffle along its edges
+       * moves, which is most of what makes weed look wet.
+       */
+      if (p.blades > 0 || p.bladders > 0) {
+        // Which nodes carry a blade, which side, how big — drawn from the
+        // frond's own generator so they are the same every frame.
+        let side = rng() < 0.5 ? 1 : -1;
         for (let i = 2; i < KELP_NODES; i++) {
-          const side = i % 2 === 0 ? 1 : -1;
-          const u = i / KELP_NODES;
-          const dx = nx[i + 1] - nx[i - 1];
-          const dy = ny[i + 1] - ny[i - 1];
-          const len = Math.hypot(dx, dy) || 1;
-          // Perpendicular to the stipe, so a blade lies along the flow instead
-          // of sticking out sideways from a plant that is bent double.
-          const px = (-dy / len) * side;
-          const py = (dx / len) * side;
-          const bladeLen = width * 3.4 * p.blades * (0.5 + u * 0.9);
-          const along = (height / KELP_NODES) * 1.5;
-          g.beginPath();
-          g.moveTo(nx[i], ny[i]);
-          g.quadraticCurveTo(
-            nx[i] + px * bladeLen * 0.7 + (dx / len) * along * 0.5,
-            ny[i] + py * bladeLen * 0.7 + (dy / len) * along * 0.5,
-            nx[i] + px * bladeLen * 0.35 + (dx / len) * along * 1.6,
-            ny[i] + py * bladeLen * 0.35 + (dy / len) * along * 1.6
-          );
-          g.quadraticCurveTo(
-            nx[i] + px * bladeLen * 0.12,
-            ny[i] + py * bladeLen * 0.12,
-            nx[i],
-            ny[i]
-          );
-          g.closePath();
-          g.fill();
+          const here = rng();
+          leafSize[i] = rng();
+          leafRipple[i] = rng() * TAU;
+          // Mostly alternating, sometimes not; and some nodes bare.
+          side = here < 0.2 ? side : -side;
+          leafSide[i] = here > 0.82 ? 0 : side;
         }
+
+        /**
+         * All of a frond's blades are one path and one fill, and so are all
+         * of its bladders. A fill costs about the same whatever is in it, and
+         * the blades of one frond overlapping is the same weed seen through
+         * itself, not two lights adding up — so one fill is both cheaper and
+         * more right. Every outline goes round the same way relative to its
+         * own blade, so where two overlap the non-zero rule fills them once
+         * rather than cutting a hole.
+         */
+        g.fillStyle = grad;
+        g.globalAlpha = 0.72;
+        g.beginPath();
+        for (let pass = 0; pass < 2; pass++) {
+          if (pass === 1) {
+            if (p.blades > 0) g.fill();
+            g.globalAlpha = 1;
+            g.fillStyle = rgba(tipColour, clamp(0.5 * p.level, 0, 1));
+            g.beginPath();
+          }
+          for (let i = 2; i < KELP_NODES; i++) {
+            const leaf = leafSide[i];
+            if (!leaf) continue;
+            const u = i / KELP_NODES;
+            const size = leafSize[i];
+            let tx = nx[i + 1] - nx[i - 1];
+            let ty = ny[i + 1] - ny[i - 1];
+            const tl = Math.hypot(tx, ty) || 1;
+            tx /= tl;
+            ty /= tl;
+            // The normal on this blade's side of the stipe.
+            const qx = -ty * leaf;
+            const qy = tx * leaf;
+            const swing = 0.5 + stream * leaf * 0.32;
+
+            if (pass === 0) {
+              if (!(p.blades > 0)) break;
+              /**
+               * Two and a half to five node spacings long, so neighbouring
+               * blades overlap into a mane instead of standing apart like the
+               * teeth of a comb; and a ribbon, seven or eight times as long as
+               * it is wide, which is the proportion that says kelp rather
+               * than corn. Down the midrib it turns back towards the stipe,
+               * because it floats.
+               */
+              const length = (height / KELP_NODES) * p.blades * (2.4 + 2.4 * size) * (0.7 + 0.45 * u);
+              const breadth = Math.max(width * 1.1, length * 0.135);
+              let mx = nx[i];
+              let my = ny[i];
+              bladeX[0] = mx;
+              bladeY[0] = my;
+              for (let j = 1; j <= BLADE_STEPS; j++) {
+                const sAt = j / BLADE_STEPS;
+                const turn = swing * (1 - 0.6 * sAt);
+                const dx = tx * Math.cos(turn) + qx * Math.sin(turn);
+                const dy = ty * Math.cos(turn) + qy * Math.sin(turn);
+                mx += (dx * length) / BLADE_STEPS;
+                my += (dy * length) / BLADE_STEPS;
+                // Lanceolate — widest a third of the way out — and ruffled.
+                const w = breadth * 0.5 * Math.sin(Math.PI * sAt ** 0.7)
+                  * (1 + 0.32 * Math.sin(sAt * 16 + leafRipple[i] + t * 1.7));
+                bladeX[j] = mx - dy * w;
+                bladeY[j] = my + dx * w;
+                bladeX[BLADE_STEPS * 2 + 1 - j] = mx + dy * w;
+                bladeY[BLADE_STEPS * 2 + 1 - j] = my - dx * w;
+              }
+              bladeX[BLADE_STEPS * 2 + 1] = nx[i];
+              bladeY[BLADE_STEPS * 2 + 1] = ny[i];
+              curveThrough(g, bladeX, bladeY, BLADE_STEPS * 2 + 2, { move: true });
+              g.closePath();
+            } else if (p.bladders > 0) {
+              // Its gas bladder, at the root of the blade: what holds a real
+              // frond up, and the one detail that makes weed look like weed
+              // rather than like rope.
+              const r = width * 0.42 * p.bladders * (0.75 + 0.5 * size) * (0.7 + 0.5 * u);
+              const along = Math.atan2(ty * Math.cos(swing) + qy * Math.sin(swing), tx * Math.cos(swing) + qx * Math.sin(swing));
+              const bx = nx[i] + Math.cos(along) * r;
+              const by = ny[i] + Math.sin(along) * r;
+              g.moveTo(bx + Math.cos(along) * r * 1.5, by + Math.sin(along) * r * 1.5);
+              g.ellipse(bx, by, r * 1.5, r, along, 0, TAU);
+            }
+          }
+        }
+        if (p.bladders > 0) g.fill();
       }
 
       g.strokeStyle = grad;
@@ -2091,18 +2275,6 @@ const kelp = {
       g.beginPath();
       curveThrough(g, nx, ny, KELP_NODES + 1, { move: true });
       g.stroke();
-
-      // Gas bladders, which is what holds a real frond up and is also the one
-      // detail that makes weed look like weed rather than like rope.
-      if (p.bladders > 0) {
-        g.fillStyle = rgba(tipColour, clamp(0.8 * p.level, 0, 1));
-        for (let i = 4; i < KELP_NODES; i += 3) {
-          const r = width * 0.7 * p.bladders * (0.6 + (i / KELP_NODES) * 0.8);
-          g.beginPath();
-          g.ellipse(nx[i], ny[i], r, r * 1.5, 0, 0, TAU);
-          g.fill();
-        }
-      }
     }
 
     g.restore();
