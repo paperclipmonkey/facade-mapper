@@ -1422,6 +1422,45 @@ const shatter = {
   },
 };
 
+/**
+ * The two colour ramps a plasma blends between, as flat RGB tables, built
+ * once per set of colours and shared. Mixed in linear light, which is what
+ * keeps the transitions from passing through a muddy grey.
+ */
+const PLASMA_STEPS = 32;
+const plasmaRamps = new Map();
+
+function plasmaRamp(a, b, c) {
+  const key = `${a}|${b}|${c}`;
+  let ramp = plasmaRamps.get(key);
+  if (ramp) return ramp;
+  if (plasmaRamps.size > 16) plasmaRamps.clear();
+  ramp = { ab: new Float32Array(PLASMA_STEPS * 3), ac: new Float32Array(PLASMA_STEPS * 3) };
+  for (let i = 0; i < PLASMA_STEPS; i++) {
+    const f = i / (PLASMA_STEPS - 1);
+    for (const [table, to] of [[ramp.ab, b], [ramp.ac, c]]) {
+      const n = parseInt(mixLinear(a, to, f).slice(1), 16) || 0;
+      table[i * 3] = (n >> 16) & 255;
+      table[i * 3 + 1] = (n >> 8) & 255;
+      table[i * 3 + 2] = n & 255;
+    }
+  }
+  plasmaRamps.set(key, ramp);
+  return ramp;
+}
+
+/** Read a ramp at `f` in 0..1, interpolated, into `out`. */
+function readRamp(table, f, out) {
+  const at = clamp(f, 0, 1) * (PLASMA_STEPS - 1);
+  const i = Math.min(PLASMA_STEPS - 2, Math.floor(at));
+  const w = at - i;
+  out[0] = table[i * 3] + (table[i * 3 + 3] - table[i * 3]) * w;
+  out[1] = table[i * 3 + 1] + (table[i * 3 + 4] - table[i * 3 + 1]) * w;
+  out[2] = table[i * 3 + 2] + (table[i * 3 + 5] - table[i * 3 + 2]) * w;
+}
+const PLASMA_BASE = new Float32Array(3);
+const PLASMA_TINT = new Float32Array(3);
+
 const plasma = {
   id: 'plasma',
   name: 'Plasma Wash',
@@ -1448,19 +1487,7 @@ const plasma = {
     const field = ensureField(state, 'field', cols, rows);
     field.clear();
 
-    // Two precomputed ramps, blended per cell. Mixing in linear light is what
-    // keeps the transitions from passing through a muddy grey.
-    const STEPS = 20;
-    const rampAB = [];
-    const rampC = [];
-    for (let i = 0; i < STEPS; i++) {
-      const f = i / (STEPS - 1);
-      for (const [target, from, to] of [[rampAB, p.colorA, p.colorB], [rampC, p.colorA, p.colorC]]) {
-        const hex = mixLinear(from, to, f).replace('#', '');
-        const n = parseInt(hex, 16) || 0;
-        target.push([(n >> 16) & 255, (n >> 8) & 255, n & 255]);
-      }
-    }
+    const ramp = plasmaRamp(p.colorA, p.colorB, p.colorC);
 
     for (let y = 0; y < rows; y++) {
       const v = (y + 0.5) / rows;
@@ -1474,15 +1501,25 @@ const plasma = {
         const shaped = clamp((a - 0.5) * p.contrast + 0.5, 0, 1);
         const shapedB = clamp((b - 0.5) * p.contrast + 0.5, 0, 1);
 
-        const base = rampAB[Math.min(STEPS - 1, (shaped * STEPS) | 0)];
-        const tint = rampC[Math.min(STEPS - 1, (shapedB * 0.6 * STEPS) | 0)];
+        /**
+         * Read between the steps of the ramp, not off them.
+         *
+         * The ramp used to be indexed by the floor of the weight, so a cell
+         * took one of twenty fixed colours, and neighbouring cells either
+         * side of a step were a whole step apart — which the bilinear blow-up
+         * then drew as a flat plateau with a hard ledge round it. On a wash a
+         * hundred pixels to the cell those ledges are what the eye finds:
+         * contour lines and rectangles in what should be a cloud.
+         */
+        readRamp(ramp.ab, shaped, PLASMA_BASE);
+        readRamp(ramp.ac, shapedB * 0.6, PLASMA_TINT);
         const mix = shapedB * 0.6;
 
         field.set(
           x, y,
-          base[0] * (1 - mix) + tint[0] * mix,
-          base[1] * (1 - mix) + tint[1] * mix,
-          base[2] * (1 - mix) + tint[2] * mix,
+          PLASMA_BASE[0] * (1 - mix) + PLASMA_TINT[0] * mix,
+          PLASMA_BASE[1] * (1 - mix) + PLASMA_TINT[1] * mix,
+          PLASMA_BASE[2] * (1 - mix) + PLASMA_TINT[2] * mix,
           clamp(p.level * (0.35 + 0.65 * shaped), 0, 1)
         );
       }
@@ -1495,12 +1532,22 @@ const plasma = {
   },
 };
 
+/**
+ * The grid a scan reveals: cells across the shape's longer side.
+ *
+ * Square cells, both ways, because a grid of lines all running one way is a
+ * set of ruled lines rather than a grid; and the same spacing as the old
+ * fourteen lines across the sweep, so a show that had the grid turned up has
+ * the same density of it.
+ */
+const SCAN_CELLS = 14;
+
 const scanner = {
   id: 'scan-lines',
   name: 'Scan Sweep',
   category: 'atmosphere',
   scope: 'shape',
-  description: 'A bright line sweeping across the shape, leaving a decaying trail. Clean, technical, very readable.',
+  description: 'A bright line sweeping across the shape, leaving a decaying trail and lighting up the grid it passes over. Clean, technical, very readable.',
   params: [
     { key: 'color', type: 'color', label: 'Colour', default: '#00ffc8' },
     { key: 'axis', type: 'select', label: 'Direction', default: 'down', options: ['down', 'up', 'right', 'left'] },
@@ -1516,27 +1563,50 @@ const scanner = {
     const vertical = p.axis === 'down' || p.axis === 'up';
     const reversed = p.axis === 'up' || p.axis === 'left';
     const span = vertical ? bbox.h : bbox.w;
-    if (span <= 0) return;
+    const across = vertical ? bbox.w : bbox.h;
+    if (span <= 0 || across <= 0) return;
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
-    g.globalAlpha = clamp(p.level, 0, 3);
+    g.globalAlpha = clamp(p.level, 0, 1);
+    const hot = mixHex(p.color, '#ffffff', 0.7);
+    const step = Math.max(span, across) / SCAN_CELLS;
 
-    if (p.grid > 0) {
-      g.strokeStyle = rgba(p.color, p.grid);
-      g.lineWidth = 1;
-      const step = span / 14;
-      g.beginPath();
-      for (let i = 0; i <= 14; i++) {
+    /** Add the grid's lines inside `[from, to]` along the sweep to the current path. */
+    const gridPath = (from, to) => {
+      const lo = Math.min(from, to);
+      const hi = Math.max(from, to);
+      const origin = vertical ? bbox.y : bbox.x;
+      for (let k = Math.ceil((lo - origin) / step); origin + k * step <= hi; k++) {
+        const at = origin + k * step;
         if (vertical) {
-          g.moveTo(bbox.x, bbox.y + i * step);
-          g.lineTo(bbox.x + bbox.w, bbox.y + i * step);
+          g.moveTo(bbox.x, at);
+          g.lineTo(bbox.x + bbox.w, at);
         } else {
-          g.moveTo(bbox.x + i * step, bbox.y);
-          g.lineTo(bbox.x + i * step, bbox.y + bbox.h);
+          g.moveTo(at, bbox.y);
+          g.lineTo(at, bbox.y + bbox.h);
         }
       }
+      const side = vertical ? bbox.x : bbox.y;
+      for (let k = 0; side + k * step <= side + across; k++) {
+        const at = side + k * step;
+        if (vertical) {
+          g.moveTo(at, lo);
+          g.lineTo(at, hi);
+        } else {
+          g.moveTo(lo, at);
+          g.lineTo(hi, at);
+        }
+      }
+    };
+
+    // The grid at rest: faint, always there.
+    if (p.grid > 0) {
+      g.strokeStyle = rgba(p.color, p.grid * 0.6);
+      g.lineWidth = 1;
+      g.beginPath();
+      gridPath(vertical ? bbox.y : bbox.x, vertical ? bbox.y + bbox.h : bbox.x + bbox.w);
       g.stroke();
     }
 
@@ -1545,25 +1615,67 @@ const scanner = {
       if (reversed) f = 1 - f;
       const pos = (vertical ? bbox.y : bbox.x) + f * span;
       const trailLen = span * p.trail;
+      const behind = reversed ? 1 : -1;
 
+      /**
+       * The trail: what the beam has just lit, decaying the way phosphor and
+       * a retina both do — fast at first, then slowly, which is an
+       * exponential and not the straight ramp it was. Brightest right behind
+       * the line, a long faint tail, and the grid it has crossed lit up
+       * inside it and fading with it, so the sweep reads as scanning
+       * something rather than as a bar being dragged across the wall.
+       */
       if (trailLen > 1) {
-        const from = reversed ? pos + trailLen : pos - trailLen;
+        const from = pos + behind * trailLen;
         const grad = vertical
-          ? g.createLinearGradient(0, from, 0, pos)
-          : g.createLinearGradient(from, 0, pos, 0);
-        grad.addColorStop(0, rgba(p.color, 0));
-        grad.addColorStop(1, rgba(p.color, 0.4));
+          ? g.createLinearGradient(0, pos, 0, from)
+          : g.createLinearGradient(pos, 0, from, 0);
+        for (let k = 0; k <= 5; k++) {
+          const u = k / 5;
+          grad.addColorStop(u, rgba(p.color, 0.36 * Math.exp(-u * 2.2) * (1 - u)));
+        }
         g.fillStyle = grad;
-        if (vertical) {
-          g.fillRect(bbox.x, Math.min(from, pos), bbox.w, Math.abs(pos - from));
-        } else {
-          g.fillRect(Math.min(from, pos), bbox.y, Math.abs(pos - from), bbox.h);
+        if (vertical) g.fillRect(bbox.x, Math.min(from, pos), bbox.w, Math.abs(pos - from));
+        else g.fillRect(Math.min(from, pos), bbox.y, Math.abs(pos - from), bbox.h);
+
+        if (p.grid > 0) {
+          const lit = vertical
+            ? g.createLinearGradient(0, pos, 0, from)
+            : g.createLinearGradient(pos, 0, from, 0);
+          lit.addColorStop(0, rgba(hot, clamp(0.4 + p.grid * 2, 0, 1)));
+          lit.addColorStop(0.25, rgba(p.color, clamp(0.15 + p.grid, 0, 1) * 0.6));
+          lit.addColorStop(1, rgba(p.color, 0));
+          g.strokeStyle = lit;
+          g.lineWidth = 1.5;
+          g.beginPath();
+          gridPath(pos, from);
+          g.stroke();
         }
       }
 
-      g.fillStyle = p.color;
-      if (vertical) g.fillRect(bbox.x, pos - p.thickness / 2, bbox.w, p.thickness);
-      else g.fillRect(pos - p.thickness / 2, bbox.y, p.thickness, bbox.h);
+      /**
+       * The line itself, as light: a soft glow either side falling away
+       * from a hot, nearly white core. One gradient across the line, filled
+       * as one band. A flat rectangle of the colour reads as a strip of
+       * tape; this reads as a beam.
+       */
+      const half = Math.max(1, p.thickness / 2);
+      const reach = half * 5 + 6;
+      const beam = vertical
+        ? g.createLinearGradient(0, pos - reach, 0, pos + reach)
+        : g.createLinearGradient(pos - reach, 0, pos + reach, 0);
+      const core = half / reach;
+      beam.addColorStop(0, rgba(p.color, 0));
+      beam.addColorStop(0.5 - core * 2.2, rgba(p.color, 0.18));
+      beam.addColorStop(0.5 - core, rgba(p.color, 0.85));
+      beam.addColorStop(0.5 - core * 0.35, rgba(hot, 1));
+      beam.addColorStop(0.5 + core * 0.35, rgba(hot, 1));
+      beam.addColorStop(0.5 + core, rgba(p.color, 0.85));
+      beam.addColorStop(0.5 + core * 2.2, rgba(p.color, 0.18));
+      beam.addColorStop(1, rgba(p.color, 0));
+      g.fillStyle = beam;
+      if (vertical) g.fillRect(bbox.x, pos - reach, bbox.w, reach * 2);
+      else g.fillRect(pos - reach, bbox.y, reach * 2, bbox.h);
     }
     g.restore();
   },
