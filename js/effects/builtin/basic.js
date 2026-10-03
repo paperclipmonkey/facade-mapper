@@ -10,13 +10,32 @@ import { clamp, TAU, hexToRgb, hashString, frac, smoothstep } from '../../core/m
 import { mixLinear, srgbToLinear, linearToSrgb } from '../color.js';
 import { ensureField } from '../field.js';
 
-/** Applies a blur filter only where the browser supports it. */
-function softFilter(g, softness, world) {
-  if (softness > 0 && 'filter' in g) {
-    g.filter = `blur(${(softness * world.w) / 100}px)`;
-    return true;
-  }
-  return false;
+/**
+ * Softens a shape's edges with a blur, where the browser supports it, and
+ * keeps that blur to the neighbourhood of the shape.
+ *
+ * The clip is the point. A filtered draw is painted onto a scratch surface,
+ * blurred there and composited back, and the canvas sizes that surface by the
+ * clip rather than by what is being drawn — so an unclipped soft window was a
+ * blur of the entire frame, once per window. "Warm rooms" on five windows
+ * cost a quarter of a second a frame in a software-rendered tab, and every
+ * preset that lights its rooms had one. Clipped to the shape (grown by
+ * `grow`, for a negative inset) plus six blur radii, it is a few milliseconds
+ * and draws exactly the same thing: three radii is where a Gaussian has all
+ * but gone, and the other factor of two is for a preview drawn at half the
+ * world's size or less, where the same blur in pixels reaches further over
+ * the wall.
+ */
+function softFilter(g, softness, world, bbox, grow = 1) {
+  if (!(softness > 0) || !('filter' in g)) return false;
+  const blur = (softness * world.w) / 100;
+  const hw = (bbox.w * grow) / 2 + blur * 6;
+  const hh = (bbox.h * grow) / 2 + blur * 6;
+  g.beginPath();
+  g.rect(bbox.cx - hw, bbox.cy - hh, hw * 2, hh * 2);
+  g.clip();
+  g.filter = `blur(${blur}px)`;
+  return true;
 }
 
 /**
@@ -155,7 +174,7 @@ const fill = {
 
     g.save();
     g.globalAlpha *= Math.min(1, level);
-    softFilter(g, p.softness, world);
+    softFilter(g, p.softness, world, bbox, Math.max(1, 1 - p.inset));
 
     if (p.inset !== 0) {
       // Scaling about the centroid is a cheap stand-in for a true polygon offset;
@@ -425,7 +444,7 @@ const mask = {
     // still works when the mask sits above additive layers.
     g.globalCompositeOperation = 'destination-out';
     g.globalAlpha = clamp(p.strength, 0, 1);
-    softFilter(g, p.softness, world);
+    softFilter(g, p.softness, world, shape.bbox);
     g.fillStyle = '#000';
     g.fill(shape.path);
     g.restore();
