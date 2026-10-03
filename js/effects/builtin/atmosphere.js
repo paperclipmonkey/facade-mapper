@@ -11,7 +11,7 @@
  */
 
 import { rgba, clamp, TAU, frac, mixHex, hexToRgb } from '../../core/math.js';
-import { offscreen } from '../lib.js';
+import { offscreen, glow } from '../lib.js';
 import { blackbodyCss, mixLinear } from '../color.js';
 import { ensureField } from '../field.js';
 
@@ -157,13 +157,76 @@ const rain = {
   },
 };
 
+/* ------------------------------------------------------------------ *
+ * Searchlight
+ * ------------------------------------------------------------------ */
+
+/**
+ * The cones are drawn into a buffer a quarter of the size and blown up once.
+ *
+ * A beam in haze has no edge and no detail — it is scattered light, the
+ * softest thing in the picture — so drawing it at full resolution spends the
+ * budget on pixels nobody can see. One accumulator holds every cone; one
+ * scratch builds each cone before it is added, because a cone is two
+ * gradients multiplied together and the second one, applied with
+ * `destination-in`, would cut into any cone already there. Both are
+ * overwritten whole each time, so they carry nothing between frames.
+ */
+const BEAM_RESOLUTION = 0.25;
+const BEAM_BUFFER_MAX = 720;
+let beamSum = null;
+let beamOne = null;
+
+/** A buffer of at least `w × h`, grown rather than replaced, cleared over that much of it. */
+function beamScratch(canvas, w, h) {
+  const out = canvas || offscreen(w, h);
+  if (out.width < w || out.height < h) {
+    out.width = Math.max(out.width, w);
+    out.height = Math.max(out.height, h);
+  }
+  const b = out.getContext('2d');
+  b.setTransform(1, 0, 0, 1, 0, 0);
+  b.globalAlpha = 1;
+  b.globalCompositeOperation = 'copy';
+  b.fillStyle = 'rgba(0,0,0,0)';
+  b.fillRect(0, 0, w, h);
+  b.globalCompositeOperation = 'source-over';
+  return out;
+}
+
+/**
+ * How far a ray from (ox, oy) heading (dx, dy) runs before it leaves `bbox`,
+ * or 0 if it never enters it.
+ */
+function rayExit(ox, oy, dx, dy, bbox) {
+  let near = 0;
+  let far = Infinity;
+  if (Math.abs(dx) < 1e-9) {
+    if (ox < bbox.x || ox > bbox.x + bbox.w) return 0;
+  } else {
+    const a = (bbox.x - ox) / dx;
+    const b = (bbox.x + bbox.w - ox) / dx;
+    near = Math.max(near, Math.min(a, b));
+    far = Math.min(far, Math.max(a, b));
+  }
+  if (Math.abs(dy) < 1e-9) {
+    if (oy < bbox.y || oy > bbox.y + bbox.h) return 0;
+  } else {
+    const a = (bbox.y - oy) / dy;
+    const b = (bbox.y + bbox.h - oy) / dy;
+    near = Math.max(near, Math.min(a, b));
+    far = Math.min(far, Math.max(a, b));
+  }
+  return far > near ? far : 0;
+}
+
 const searchlight = {
   id: 'searchlight',
   name: 'Searchlight',
   category: 'atmosphere',
   scope: 'shape',
   description:
-    'A sweeping beam with a visible cone. Reads as a real light source raking across the front of the house.',
+    'A sweeping beam with a soft visible cone through the haze and a hot spot where it lands. Reads as a real light source raking across the front of the house.',
   params: [
     { key: 'color', type: 'color', label: 'Colour', default: '#dbe9ff' },
     { key: 'beams', type: 'range', label: 'Beams', default: 1, min: 1, max: 6, step: 1 },
@@ -173,68 +236,216 @@ const searchlight = {
     { key: 'originX', type: 'range', label: 'Origin X', default: 0.5, min: -0.5, max: 1.5, step: 0.005 },
     { key: 'originY', type: 'range', label: 'Origin Y', default: 1.15, min: -0.5, max: 2, step: 0.005 },
     { key: 'aim', type: 'range', label: 'Aim', default: -90, min: -180, max: 180, step: 1 },
+    /**
+     * Where the beam meets the wall, as a fraction of the way across the
+     * shape along the beam.
+     *
+     * A searchlight on the ground in front of a house throws its cone up
+     * through the air and stops dead on the brickwork, and in the picture the
+     * cone runs from the lamp to a bright footprint and no further. Where that
+     * footprint falls is a composition decision with no right answer — the
+     * middle of the wall, the roofline, past the top into the sky, which is
+     * the premiere-night look and has no spot at all — so it is a slider.
+     */
+    { key: 'throw', type: 'range', label: 'Lands at', default: 0.62, min: 0.1, max: 1.3, step: 0.01 },
     { key: 'intensity', type: 'range', label: 'Intensity', default: 0.55, min: 0, max: 2, step: 0.01 },
     { key: 'haze', type: 'range', label: 'Haze', default: 0.4, min: 0, max: 1, step: 0.01 },
     { key: 'flicker', type: 'range', label: 'Flicker', default: 0.08, min: 0, max: 1, step: 0.01 },
   ],
-  draw({ g, p, shape, t, noise }) {
+  draw({ g, p, shape, t, noise, world }) {
     const { bbox } = shape;
+    if (bbox.w <= 2 || bbox.h <= 2 || p.intensity <= 0) return;
     const ox = bbox.x + p.originX * bbox.w;
     const oy = bbox.y + p.originY * bbox.h;
-    const reach = Math.hypot(bbox.w, bbox.h) * 1.6;
-    const spread = (p.spread * Math.PI) / 180;
+    const half = Math.max(0.004, (p.spread * Math.PI) / 360);
     const arc = (p.arc * Math.PI) / 180;
     const aim = (p.aim * Math.PI) / 180;
+    const beams = Math.round(p.beams);
+
+    // Only the part of the shape a projector can show is worth a buffer.
+    const left = Math.max(bbox.x, -world.w * 0.1);
+    const right = Math.min(bbox.x + bbox.w, world.w * 1.1);
+    const high = Math.max(bbox.y, -world.h * 0.1);
+    const low = Math.min(bbox.y + bbox.h, world.h * 1.1);
+    if (right - left < 2 || low - high < 2) return;
+    const res = Math.min(BEAM_RESOLUTION, BEAM_BUFFER_MAX / (right - left), BEAM_BUFFER_MAX / (low - high));
+    const bw = Math.ceil((right - left) * res) + 2;
+    const bh = Math.ceil((low - high) * res) + 2;
+    beamSum = beamScratch(beamSum, bw, bh);
+    beamOne = beamScratch(beamOne, bw, bh);
+    const sum = beamSum.getContext('2d');
+    const one = beamOne.getContext('2d');
+    const hot = mixHex(p.color, '#ffffff', 0.65);
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
 
-    for (let b = 0; b < Math.round(p.beams); b++) {
-      const phase = t * p.speed + b / Math.max(1, p.beams);
-      // Triangle wave sweep: a beam that snaps back to the start looks broken.
-      const sweep = (Math.abs(frac(phase) * 2 - 1) - 0.5) * arc;
-      const centre = aim + sweep;
+    // The part of the buffer the cones actually reach, so only that is blown
+    // up: a single narrow beam is a sliver of the frame, and the blit is most
+    // of what the effect costs.
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+
+    for (let b = 0; b < beams; b++) {
+      /**
+       * The sweep, eased at the ends.
+       *
+       * A triangle wave reverses instantly, which no motor-driven lamp on a
+       * pedestal does; it slows into the end of its travel and comes away
+       * again. A sine has the same period and the same arc and does that.
+       */
+      const phase = t * p.speed + b / Math.max(1, beams);
+      const centre = aim + Math.sin(phase * TAU) * arc * 0.5;
       const wobble = p.flicker > 0 ? 1 - p.flicker * Math.abs(noise.noise2(t * 6 + b * 10, 0)) : 1;
       const level = clamp(p.intensity * wobble, 0, 3);
       if (level <= 0.002) continue;
 
-      const tipX = ox + Math.cos(centre) * reach;
-      const tipY = oy + Math.sin(centre) * reach;
+      const dx = Math.cos(centre);
+      const dy = Math.sin(centre);
+      // Where it lands: along the beam, the given fraction of the way to
+      // where the beam would leave the shape.
+      const exit = rayExit(ox, oy, dx, dy, bbox);
+      const reach = exit > 0 ? exit * p.throw : Math.hypot(bbox.w, bbox.h) * p.throw;
+      const lands = p.throw <= 1 && exit > 0;
+      if (reach <= 1) continue;
 
-      // The cone body: bright at the source, fading along its length.
-      const grad = g.createLinearGradient(ox, oy, tipX, tipY);
-      grad.addColorStop(0, rgba(p.color, 0.55 * level));
-      grad.addColorStop(0.35, rgba(p.color, 0.28 * level * (0.4 + p.haze)));
-      grad.addColorStop(1, rgba(p.color, 0));
-      g.fillStyle = grad;
+      /**
+       * The cone: light scattered out of the beam by the air, so it is a
+       * Gaussian across the beam — a conic gradient about the lamp, which is
+       * exactly a profile in angle — times a falloff with distance. Near the
+       * lamp the same light is squeezed into a narrow beam and the haze in it
+       * is brightest; further out it is spread across a wider one, so the
+       * cone dims as it goes, and it stops dead at the wall.
+       */
+      if (p.haze > 0) {
+        /**
+         * The cone's own corner of the buffer: the lamp and the three far
+         * points of the fan bound it, and every operation below — the clear,
+         * the multiply, the add — is confined to it, so a narrow beam costs a
+         * sliver of the buffer rather than all of it.
+         */
+        const span = half * 1.9;
+        const far = reach * 1.02;
+        let cx0 = ox;
+        let cx1 = ox;
+        let cy0 = oy;
+        let cy1 = oy;
+        for (let k = -1; k <= 1; k++) {
+          const fx = ox + Math.cos(centre + k * span) * far;
+          const fy = oy + Math.sin(centre + k * span) * far;
+          cx0 = Math.min(cx0, fx);
+          cx1 = Math.max(cx1, fx);
+          cy0 = Math.min(cy0, fy);
+          cy1 = Math.max(cy1, fy);
+        }
+        const bx0 = clamp(Math.floor((cx0 - left) * res), 0, bw);
+        const by0 = clamp(Math.floor((cy0 - high) * res), 0, bh);
+        const bx1 = clamp(Math.ceil((cx1 - left) * res) + 3, 0, bw);
+        const by1 = clamp(Math.ceil((cy1 - high) * res) + 3, 0, bh);
+        if (bx1 > bx0 && by1 > by0) {
+          one.setTransform(1, 0, 0, 1, 0, 0);
+          one.globalCompositeOperation = 'copy';
+          one.globalAlpha = 1;
+          one.fillStyle = 'rgba(0,0,0,0)';
+          one.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
+          one.setTransform(res, 0, 0, res, 1 - left * res, 1 - high * res);
+          one.globalCompositeOperation = 'source-over';
+          const cone = typeof one.createConicGradient === 'function'
+            ? one.createConicGradient(centre - span, ox, oy)
+            : null;
+          const strength = clamp(level * (0.6 + 1.2 * p.haze), 0, 1);
+          if (cone) {
+            // Nine stops across the cone, a Gaussian in angle that is under a
+            // third of its peak at the stated beam width and nothing at the
+            // edge of the fan.
+            for (let k = 0; k <= 8; k++) {
+              const a = (k / 8) * 2 - 1;
+              cone.addColorStop(((a + 1) * span) / TAU, rgba(p.color, strength * Math.exp(-1.25 * (a * 1.9) ** 2)));
+            }
+            cone.addColorStop(Math.min(1, (2 * span) / TAU + 1e-4), rgba(p.color, 0));
+            one.fillStyle = cone;
+          } else {
+            one.fillStyle = rgba(p.color, strength * 0.5);
+          }
+          one.beginPath();
+          one.moveTo(ox, oy);
+          one.arc(ox, oy, far, centre - span, centre + span);
+          one.closePath();
+          one.fill();
 
-      g.beginPath();
-      g.moveTo(ox, oy);
-      g.arc(ox, oy, reach, centre - spread / 2, centre + spread / 2);
-      g.closePath();
-      g.fill();
+          const fall = one.createRadialGradient(ox, oy, 0, ox, oy, far);
+          fall.addColorStop(0, 'rgba(255,255,255,0)');
+          fall.addColorStop(0.03, 'rgba(255,255,255,1)');
+          fall.addColorStop(0.25, 'rgba(255,255,255,0.75)');
+          fall.addColorStop(0.55, 'rgba(255,255,255,0.52)');
+          fall.addColorStop(0.92, 'rgba(255,255,255,0.4)');
+          fall.addColorStop(1, `rgba(255,255,255,${lands ? 0 : 0.25})`);
+          one.globalCompositeOperation = 'destination-in';
+          one.fillStyle = fall;
+          // Over the cone's corner only, in the world coordinates the
+          // gradient is in.
+          one.fillRect(left + (bx0 - 1) / res, high + (by0 - 1) / res, (bx1 - bx0) / res, (by1 - by0) / res);
 
-      // A tighter, brighter core inside the cone.
-      const coreGrad = g.createLinearGradient(ox, oy, tipX, tipY);
-      coreGrad.addColorStop(0, rgba(p.color, 0.7 * level));
-      coreGrad.addColorStop(1, rgba(p.color, 0));
-      g.fillStyle = coreGrad;
-      g.beginPath();
-      g.moveTo(ox, oy);
-      g.arc(ox, oy, reach, centre - spread / 6, centre + spread / 6);
-      g.closePath();
-      g.fill();
+          sum.globalCompositeOperation = 'lighter';
+          sum.drawImage(beamOne, bx0, by0, bx1 - bx0, by1 - by0, bx0, by0, bx1 - bx0, by1 - by0);
+          x0 = Math.min(x0, cx0);
+          x1 = Math.max(x1, cx1);
+          y0 = Math.min(y0, cy0);
+          y1 = Math.max(y1, cy1);
+        }
+      }
+
+      /**
+       * The footprint, where the beam meets the brickwork.
+       *
+       * The brightest thing a searchlight makes: the same light the haze only
+       * scatters a little of, all of it, on a surface facing it. The beam
+       * arrives slanting, so its circle is drawn out into an ellipse along the
+       * direction it came from, with a hot white middle and a soft edge that
+       * is the beam's own Gaussian, not a rim.
+       */
+      if (lands) {
+        const across = Math.max(4, reach * Math.tan(half) * 1.3);
+        const along = across * 1.45;
+        const sx = ox + dx * reach;
+        const sy = oy + dy * reach;
+        // The same light over a bigger footprint is dimmer: a wide beam lands
+        // as a broad glow, a narrow one as a hot spot.
+        const focus = clamp((0.12 / Math.max(0.02, Math.tan(half))) ** 0.6, 0.35, 1.2);
+        const spot = g.createRadialGradient(0, 0, 0, 0, 0, across);
+        spot.addColorStop(0, rgba(hot, clamp(level * 1.1 * focus, 0, 1)));
+        spot.addColorStop(0.18, rgba(hot, clamp(level * 0.85 * focus, 0, 1)));
+        spot.addColorStop(0.5, rgba(p.color, clamp(level * 0.36 * focus, 0, 1)));
+        spot.addColorStop(0.8, rgba(p.color, clamp(level * 0.08 * focus, 0, 1)));
+        spot.addColorStop(1, rgba(p.color, 0));
+        g.save();
+        g.translate(sx, sy);
+        g.rotate(centre);
+        g.scale(along / across, 1);
+        g.fillStyle = spot;
+        g.beginPath();
+        g.arc(0, 0, across, 0, TAU);
+        g.fill();
+        g.restore();
+      }
 
       // The lamp itself, if it happens to be inside the shape.
-      const lampR = Math.min(bbox.w, bbox.h) * 0.05;
-      const lamp = g.createRadialGradient(ox, oy, 0, ox, oy, lampR * 4);
-      lamp.addColorStop(0, rgba(p.color, level));
-      lamp.addColorStop(1, rgba(p.color, 0));
-      g.fillStyle = lamp;
-      g.beginPath();
-      g.arc(ox, oy, lampR * 4, 0, TAU);
-      g.fill();
+      glow(g, ox, oy, Math.min(bbox.w, bbox.h) * 0.12, hot, clamp(level, 0, 1));
+    }
+
+    if (x1 > x0 && y1 > y0) {
+      // In buffer pixels, a pixel of margin, clamped to the buffer.
+      const bx0 = clamp(Math.floor((x0 - left) * res), 0, bw);
+      const by0 = clamp(Math.floor((y0 - high) * res), 0, bh);
+      const bx1 = clamp(Math.ceil((x1 - left) * res) + 2, 0, bw);
+      const by1 = clamp(Math.ceil((y1 - high) * res) + 2, 0, bh);
+      if (bx1 > bx0 && by1 > by0) {
+        g.drawImage(beamSum, bx0, by0, bx1 - bx0, by1 - by0,
+          left - 1 / res + bx0 / res, high - 1 / res + by0 / res, (bx1 - bx0) / res, (by1 - by0) / res);
+      }
     }
     g.restore();
   },
