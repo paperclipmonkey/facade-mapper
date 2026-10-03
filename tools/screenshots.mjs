@@ -100,12 +100,22 @@ async function main() {
   // without this the bloom pass silently does nothing and every still comes out
   // flat. Slow, and it does not matter — this renders one frame of each show.
   //
+  // The 2D canvases are kept off it, though. With nothing said, Chromium
+  // accelerates canvas 2D too, which on SwiftShader means every one of the
+  // hundreds of frames the simulation draws to catch up to `t` is rasterised
+  // by a GPU emulated on the CPU — about seven times slower than Skia's own
+  // CPU path, for a picture that differs by under one level in 255 on average.
+  // Only the bloom and grade need WebGL.
+  //
   // Inside the try, so that the documented failure — Chromium not installed —
   // does not leave the helper server running after the process gives up.
   let browser = null;
   try {
     browser = await chromium.launch({
-      args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+      args: [
+        '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
+        '--disable-accelerated-2d-canvas',
+      ],
     });
 
     for (const shot of shots) {
