@@ -10,7 +10,7 @@
  * weather and depth that flat colour never will.
  */
 
-import { rgba, clamp, lerp, TAU, frac, mixHex, hexToRgb } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, frac, mixHex, hexToRgb, hashString } from '../../core/math.js';
 import { offscreen, glow } from '../lib.js';
 import { blackbodyCss, mixLinear } from '../color.js';
 import { ensureField } from '../field.js';
@@ -1105,18 +1105,122 @@ const embers = {
   },
 };
 
+/* ------------------------------------------------------------------ *
+ * Cracking glass
+ * ------------------------------------------------------------------ */
+
+/**
+ * How glass breaks, which is the whole of this effect.
+ *
+ * A pane struck at a point fails in two families of crack, and the pattern
+ * anybody recognises — the spider's web in a car windscreen — is the two
+ * together. First the radial cracks: the blow bends the pane, the far face
+ * stretches, and cracks race outward from the impact in every direction,
+ * nearly straight, kinking a little where they meet a flaw, now and then
+ * forking. Then the concentric ones: the sectors of glass between the radials
+ * bend as hinged flaps, and they fail in tension across their width, in rough
+ * chords from one radial to the next, a few of them at widening intervals.
+ * Right at the impact the glass is crushed to a frosted rosette of tiny
+ * cracks.
+ *
+ * Every crack is a thin bright line because a crack in glass is a mirror —
+ * two faces a hair apart, each catching the light — and where cracks cross
+ * the faces are tilted every way at once, so those are where it glints.
+ *
+ * The old version drew random branching walks from the impact: a bramble,
+ * with no rings, so it read as frost or lightning rather than as a broken
+ * window, and its hold faded out from the moment the cracks stopped growing,
+ * so most of the time there was nothing there at all.
+ */
+
+/** Scratch for the radial cracks: up to 24 of them, nine points each. */
+const RADIAL_POINTS = 9;
+const crackX = new Float64Array(24 * RADIAL_POINTS);
+const crackY = new Float64Array(24 * RADIAL_POINTS);
+const crackLength = new Float64Array(24);
+
+/**
+ * Three small seeded generators — the radials, the finer cracks, the glints —
+ * reseeded from the impact's index on every frame, so the same window breaks
+ * the same way in every tab and stays broken the same way while it is up.
+ * Separate streams so that moving Branching does not reshape the radials.
+ */
+const crackStreams = new Uint32Array(3);
+
+function seedCracks(stream, seed) {
+  crackStreams[stream] = (Math.imul(seed + 1, 2654435761) + 0x9e3779b9) >>> 0;
+}
+
+function crackRand(stream) {
+  const a = crackStreams[stream];
+  crackStreams[stream] = (Math.imul(a ^ (a >>> 15), 2246822519) + 0x9e3779b9) >>> 0;
+  return crackStreams[stream] / 4294967296;
+}
+
+/** Where radial `i` is at distance `r` from the impact, walking its own kinked path. */
+function alongCrack(i, r, out) {
+  const base = i * RADIAL_POINTS;
+  const step = crackLength[i] / (RADIAL_POINTS - 1);
+  const at = clamp(r / Math.max(1e-6, step), 0, RADIAL_POINTS - 1);
+  const k = Math.min(RADIAL_POINTS - 2, Math.floor(at));
+  const f = at - k;
+  out.x = crackX[base + k] + (crackX[base + k + 1] - crackX[base + k]) * f;
+  out.y = crackY[base + k] + (crackY[base + k + 1] - crackY[base + k]) * f;
+}
+const CRACK_A = { x: 0, y: 0 };
+const CRACK_B = { x: 0, y: 0 };
+
+/** A glint: a hot point with four fine rays, baked once per colour. */
+const glassGlints = new Map();
+
+function glassGlint(colour) {
+  let sprite = glassGlints.get(colour);
+  if (sprite) return sprite;
+  if (glassGlints.size > 16) glassGlints.clear();
+  const S = 48;
+  sprite = offscreen(S, S);
+  const g = sprite.getContext('2d');
+  const m = S / 2;
+  g.globalCompositeOperation = 'lighter';
+  const core = g.createRadialGradient(m, m, 0, m, m, m * 0.45);
+  core.addColorStop(0, rgba('#ffffff', 1));
+  core.addColorStop(0.18, rgba('#ffffff', 0.65));
+  core.addColorStop(0.5, rgba(colour, 0.18));
+  core.addColorStop(1, rgba(colour, 0));
+  g.fillStyle = core;
+  g.fillRect(0, 0, S, S);
+  for (const [w, h] of [[S, 2], [2, S]]) {
+    const ray = w > h ? g.createLinearGradient(0, 0, S, 0) : g.createLinearGradient(0, 0, 0, S);
+    ray.addColorStop(0, rgba(colour, 0));
+    ray.addColorStop(0.5, rgba('#ffffff', 0.8));
+    ray.addColorStop(1, rgba(colour, 0));
+    g.fillStyle = ray;
+    g.fillRect(m - w / 2, m - h / 2, w, h);
+  }
+  glassGlints.set(colour, sprite);
+  return sprite;
+}
+
 const shatter = {
   id: 'shatter',
   name: 'Cracking Glass',
   category: 'atmosphere',
   scope: 'shape',
   description:
-    'A crack spreading from an impact point, on a timer. Point it at a window and time it with a bang.',
+    'A pane breaking from an impact point, on a timer: radial cracks racing out, concentric ones between them, a crushed rosette at the strike and glints where the cracks cross. Point it at a window and time it with a bang.',
   params: [
     { key: 'color', type: 'color', label: 'Colour', default: '#dff0ff' },
     { key: 'interval', type: 'range', label: 'Every (s)', default: 25, min: 2, max: 600, step: 1 },
     { key: 'grow', type: 'range', label: 'Spread time (s)', default: 0.35, min: 0.05, max: 5, step: 0.01 },
-    { key: 'hold', type: 'range', label: 'Hold (s)', default: 4, min: 0, max: 60, step: 0.5 },
+    /**
+     * How long the broken pane stays, once it has broken.
+     *
+     * Glass does not heal, so this is really how long the show leaves it
+     * there. Fifteen of the twenty-five seconds by default: the old four
+     * meant the window was whole five times out of six, and a still taken at
+     * almost any moment showed nothing.
+     */
+    { key: 'hold', type: 'range', label: 'Hold (s)', default: 15, min: 0, max: 60, step: 0.5 },
     { key: 'branches', type: 'range', label: 'Main cracks', default: 9, min: 3, max: 24, step: 1 },
     { key: 'depth', type: 'range', label: 'Branching', default: 3, min: 0, max: 5, step: 1 },
     { key: 'width', type: 'range', label: 'Thickness', default: 2.4, min: 0.4, max: 12, step: 0.1 },
@@ -1124,71 +1228,190 @@ const shatter = {
     { key: 'impactY', type: 'range', label: 'Impact Y', default: 0.45, min: 0, max: 1, step: 0.01 },
     { key: 'flash', type: 'range', label: 'Impact flash', default: 0.7, min: 0, max: 1, step: 0.01 },
   ],
-  draw({ g, p, shape, t, rng }) {
+  draw({ g, p, shape, t }) {
     const { bbox } = shape;
-    const cycle = t % Math.max(1, p.interval);
+    if (bbox.w <= 1 || bbox.h <= 1) return;
+    const interval = Math.max(1, p.interval);
+    const cycle = t % interval;
     const total = p.grow + p.hold;
     if (cycle > total) return;
 
     const progress = clamp(cycle / Math.max(0.01, p.grow), 0, 1);
-    // Fade the whole thing out over the last second of the hold.
-    const fade = cycle > p.grow ? clamp(1 - (cycle - p.grow) / Math.max(0.01, p.hold), 0, 1) : 1;
+    // Out over the last second and a half of the hold, not across all of it.
+    const fade = clamp((total - cycle) / Math.min(1.5, Math.max(0.01, p.hold)), 0, 1);
+    // Cracks run fast and slow down: a crack front decelerates as the energy
+    // the blow put into the pane is spent.
     const eased = 1 - (1 - progress) ** 3;
 
     const cx = bbox.x + p.impactX * bbox.w;
     const cy = bbox.y + p.impactY * bbox.h;
-    const reach = Math.hypot(bbox.w, bbox.h) * 0.6;
+    const reach = Math.hypot(bbox.w, bbox.h) * 0.62;
+    // Each pane breaks its own way: seeded by which impact this is and by
+    // which shape, so four windows struck at once are four different breaks.
+    const impact = (Math.floor(t / interval) * 7919 + hashString(String(shape.id))) >>> 0;
+    seedCracks(0, impact);
+    const radials = clamp(Math.round(p.branches), 3, 24);
+    const width = Math.max(0.4, p.width);
 
-    // Seeded per impact so the same crack pattern persists while it is on
-    // screen, and a different one appears next time.
-    const impact = Math.floor(t / Math.max(1, p.interval));
-    const seeded = (() => {
-      let a = (impact * 2654435761) >>> 0;
-      return () => {
-        a = (Math.imul(a ^ (a >>> 15), 2246822519) + 0x9e3779b9) >>> 0;
-        return a / 4294967296;
-      };
-    })();
+    // The radial cracks, as kinked paths from the impact outwards.
+    for (let i = 0; i < radials; i++) {
+      const base = i * RADIAL_POINTS;
+      let angle = ((i + (crackRand(0) - 0.5) * 0.55) / radials) * TAU;
+      crackLength[i] = reach * (0.45 + crackRand(0) * 0.7);
+      const step = crackLength[i] / (RADIAL_POINTS - 1);
+      crackX[base] = cx;
+      crackY[base] = cy;
+      for (let k = 1; k < RADIAL_POINTS; k++) {
+        angle += (crackRand(0) - 0.5) * 0.13;
+        crackX[base + k] = crackX[base + k - 1] + Math.cos(angle) * step;
+        crackY[base + k] = crackY[base + k - 1] + Math.sin(angle) * step;
+      }
+    }
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
     g.lineCap = 'round';
-    g.globalAlpha = fade;
+    g.lineJoin = 'round';
 
-    const drawCrack = (x, y, angle, length, width, depth) => {
-      if (length < 4 || width < 0.15) return;
-      let px = x;
-      let py = y;
-      let a = angle;
-      const steps = 6;
-      g.strokeStyle = rgba(p.color, 0.85);
-      g.lineWidth = width;
+    /**
+     * Two paths — the radials, and everything finer: forks, rings and the
+     * crushed rosette — each stroked twice, a faint wide glow and a bright
+     * hairline. Four strokes for the whole pane.
+     */
+    const front = eased * reach;
+    for (const [wide, alpha] of [[3.4, 0.13], [1, 0.85]]) {
+      // Radials, each as far as the front has got.
+      g.strokeStyle = rgba(p.color, alpha * fade);
+      g.lineWidth = width * wide;
       g.beginPath();
-      g.moveTo(px, py);
-      for (let i = 1; i <= steps; i++) {
-        a += (seeded() - 0.5) * 0.5;
-        const seg = (length / steps) * eased;
-        px += Math.cos(a) * seg;
-        py += Math.sin(a) * seg;
-        g.lineTo(px, py);
-        if (depth > 0 && seeded() < 0.4) {
-          drawCrack(px, py, a + (seeded() - 0.5) * 1.8, length * 0.45, width * 0.55, depth - 1);
+      for (let i = 0; i < radials; i++) {
+        const base = i * RADIAL_POINTS;
+        const shown = Math.min(front, crackLength[i]);
+        if (shown <= 0) continue;
+        g.moveTo(crackX[base], crackY[base]);
+        const step = crackLength[i] / (RADIAL_POINTS - 1);
+        for (let k = 1; k < RADIAL_POINTS; k++) {
+          if (k * step <= shown) {
+            g.lineTo(crackX[base + k], crackY[base + k]);
+          } else {
+            alongCrack(i, shown, CRACK_A);
+            g.lineTo(CRACK_A.x, CRACK_A.y);
+            break;
+          }
         }
       }
       g.stroke();
-    };
 
-    for (let i = 0; i < Math.round(p.branches); i++) {
-      const angle = (i / p.branches) * TAU + seeded() * 0.4;
-      drawCrack(cx, cy, angle, reach * (0.5 + seeded() * 0.6), p.width, Math.round(p.depth));
+      // The finer cracks, from their own stream, restarted for each pass so
+      // the glow and the hairline trace the same cracks.
+      seedCracks(1, impact);
+      g.lineWidth = width * wide * 0.6;
+      g.strokeStyle = rgba(p.color, alpha * 0.85 * fade);
+      g.beginPath();
+      /**
+       * The concentric cracks: a few rings at widening radii, each a broken
+       * chain of chords from one radial to the next — nearly straight, each
+       * at its own distance out, many of them missing — because each is the
+       * hinge line of a flap of glass that bent away from the blow and failed
+       * where it was weakest. They form once the radial front has gone past.
+       * Drawn as continuous rings they make a cobweb, which is what the eye
+       * reads first and the one thing a broken window must not look like.
+       */
+      const rings = 2 + Math.round(p.depth * 0.6);
+      let radius = reach * (0.1 + crackRand(1) * 0.05);
+      for (let ring = 0; ring < rings; ring++) {
+        if (front > radius * 1.15) {
+          for (let i = 0; i < radials; i++) {
+            const j = (i + 1) % radials;
+            const keep = crackRand(1);
+            const r1 = radius * (0.85 + 0.3 * crackRand(1));
+            const r2 = radius * (0.85 + 0.3 * crackRand(1));
+            const kink = (crackRand(1) - 0.5) * 0.12;
+            if (keep > 0.5 - ring * 0.05 || crackLength[i] < r1 || crackLength[j] < r2) continue;
+            alongCrack(i, r1, CRACK_A);
+            alongCrack(j, r2, CRACK_B);
+            const mx = (CRACK_A.x + CRACK_B.x) / 2;
+            const my = (CRACK_A.y + CRACK_B.y) / 2;
+            g.moveTo(CRACK_A.x, CRACK_A.y);
+            g.lineTo(mx + (cx - mx) * kink, my + (cy - my) * kink);
+            g.lineTo(CRACK_B.x, CRACK_B.y);
+          }
+        }
+        radius *= 1.6 + crackRand(1) * 0.4;
+      }
+      /**
+       * Forks: a radial now and then splits, the branch leaving at a shallow
+       * angle and running a fraction of the way out. More of them, further
+       * out, the more Branching is turned up.
+       */
+      for (let i = 0; i < radials; i++) {
+        for (let f = 0; f < Math.round(p.depth); f++) {
+          if (crackRand(1) > 0.45) continue;
+          const at = crackLength[i] * (0.25 + crackRand(1) * 0.55);
+          if (front <= at) continue;
+          alongCrack(i, at, CRACK_A);
+          alongCrack(i, at + 4, CRACK_B);
+          const heading = Math.atan2(CRACK_B.y - CRACK_A.y, CRACK_B.x - CRACK_A.x) + (crackRand(1) < 0.5 ? -1 : 1) * (0.3 + crackRand(1) * 0.4);
+          const run = Math.min(front - at, crackLength[i] * (0.18 + crackRand(1) * 0.25));
+          let x = CRACK_A.x;
+          let y = CRACK_A.y;
+          let h = heading;
+          g.moveTo(x, y);
+          for (let k = 0; k < 4; k++) {
+            h += (crackRand(1) - 0.5) * 0.3;
+            x += Math.cos(h) * run * 0.25;
+            y += Math.sin(h) * run * 0.25;
+            g.lineTo(x, y);
+          }
+        }
+      }
+      // The crushed rosette at the strike: a tight star of short cracks.
+      const crush = reach * 0.045;
+      for (let k = 0; k < 14; k++) {
+        const a = crackRand(1) * TAU;
+        const r0 = crush * crackRand(1) * 0.4;
+        const r1 = crush * (0.6 + crackRand(1) * 0.8);
+        g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
+        g.lineTo(cx + Math.cos(a + 0.2) * r1, cy + Math.sin(a + 0.2) * r1);
+      }
+      g.stroke();
     }
 
+    /**
+     * Glints where the cracks cross, and the hot white heart of the strike.
+     * They come and go slowly as the light finds each facet, but every one
+     * is a fixed place on the pane, so the twinkle is in the brightness and
+     * never in the position.
+     */
+    const sprite = glassGlint(p.color);
+    seedCracks(2, impact);
+    let radius = reach * 0.13;
+    for (let ring = 0; ring < 3; ring++) {
+      for (let i = 0; i < radials; i++) {
+        const chance = crackRand(2);
+        const phase = crackRand(2) * TAU;
+        if (chance > 0.35 || crackLength[i] < radius || front < radius) continue;
+        alongCrack(i, radius, CRACK_A);
+        const twinkle = 0.55 + 0.45 * Math.sin(t * (1.3 + chance * 2) + phase);
+        const size = width * (7 + 7 * twinkle);
+        g.globalAlpha = clamp(0.9 * twinkle * fade, 0, 1);
+        g.drawImage(sprite, CRACK_A.x - size / 2, CRACK_A.y - size / 2, size, size);
+      }
+      radius *= 1.75;
+    }
+    const heart = width * 12;
+    g.globalAlpha = clamp(fade, 0, 1);
+    g.drawImage(sprite, cx - heart / 2, cy - heart / 2, heart, heart);
+    g.globalAlpha = 1;
+
+    // The flash of the blow itself, over in the first third of the spread.
     if (p.flash > 0 && progress < 0.3) {
       const punch = (1 - progress / 0.3) * p.flash;
       const r = reach * 0.5 * (0.3 + progress * 2);
       const grad = g.createRadialGradient(cx, cy, 0, cx, cy, r);
       grad.addColorStop(0, rgba('#ffffff', punch));
+      grad.addColorStop(0.3, rgba(p.color, punch * 0.35));
       grad.addColorStop(1, rgba(p.color, 0));
       g.fillStyle = grad;
       g.beginPath();
