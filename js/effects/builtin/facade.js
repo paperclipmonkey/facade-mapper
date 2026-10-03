@@ -17,7 +17,7 @@
  * own effects through `fx`.
  */
 
-import { rgba, clamp, lerp, TAU, mixHex } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, mixHex, hexToRgb } from '../../core/math.js';
 import { blackbodyBytes } from '../color.js';
 import {
   collectObstacles,
@@ -78,7 +78,7 @@ const bounce = {
     { key: 'color', type: 'color', label: 'Colour', default: '#ff9d3c' },
     { key: 'color2', type: 'color', label: 'Second colour', default: '#4cc2ff' },
     { key: 'count', type: 'range', label: 'Balls', default: 12, min: 1, max: 60, step: 1 },
-    { key: 'size', type: 'range', label: 'Radius', default: 14, min: 2, max: 90, step: 0.5 },
+    { key: 'size', type: 'range', label: 'Radius', default: 17, min: 2, max: 90, step: 0.5 },
     { key: 'speed', type: 'range', label: 'Speed', default: 260, min: 20, max: 1400, step: 10 },
     { key: 'gravity', type: 'range', label: 'Gravity', default: 0, min: 0, max: 2500, step: 10 },
     { key: 'restitution', type: 'range', label: 'Bounciness', default: 0.96, min: 0.3, max: 1, step: 0.01 },
@@ -88,11 +88,12 @@ const bounce = {
     { key: 'glow', type: 'range', label: 'Glow', default: 1.6, min: 0, max: 4, step: 0.05 },
   ],
   init() {
-    return { balls: [] };
+    return { balls: [], hits: [] };
   },
-  step({ p, shape, dt, rng, state, shapes }) {
+  step({ p, shape, t, dt, rng, state, shapes }) {
     const container = shape;
     if (container.bbox.w <= 2 || container.bbox.h <= 2) return;
+    if (!state.hits) state.hits = [];
 
     const obstacles = collectObstacles(shapes, p.obstacles, container.id);
     const radius = Math.max(1, p.size);
@@ -141,7 +142,9 @@ const bounce = {
         b.x += b.vx * h;
         b.y += b.vy * h;
 
-        deflect(container.points, b, radius, p.restitution, true);
+        const vx0 = b.vx;
+        const vy0 = b.vy;
+        let hit = deflect(container.points, b, radius, p.restitution, true);
         for (const o of obstacles) {
           const { bbox } = o;
           // Cheap rejection first: most balls are nowhere near most windows.
@@ -151,7 +154,30 @@ const bounce = {
             || b.y < bbox.y - radius
             || b.y > bbox.y + bbox.h + radius
           ) continue;
-          deflect(o.points, b, radius, p.restitution, false);
+          hit = deflect(o.points, b, radius, p.restitution, false) || hit;
+        }
+        /**
+         * Where it struck, and how hard.
+         *
+         * The surface normal is the direction the velocity was pushed in, so
+         * the contact is a radius back along it from the ball. Recorded here,
+         * in the simulation, so every tab flashes the same impacts; and only
+         * for a real blow, not for a ball resting on a sill with gravity
+         * pressing it down on every substep.
+         */
+        if (hit) {
+          const dvx = b.vx - vx0;
+          const dvy = b.vy - vy0;
+          const blow = Math.hypot(dvx, dvy);
+          if (blow > Math.max(40, p.speed * 0.25)) {
+            const nx = dvx / blow;
+            const ny = dvy / blow;
+            b.hitAt = t;
+            b.hitNx = nx;
+            b.hitNy = ny;
+            state.hits.push({ x: b.x - nx * radius, y: b.y - ny * radius, nx, ny, t, tint: b.tint, blow });
+            if (state.hits.length > 48) state.hits.shift();
+          }
         }
       }
 
@@ -175,52 +201,158 @@ const bounce = {
       b.trail.push(b.x, b.y);
       if (b.trail.length > trailLength * 2) b.trail.splice(0, b.trail.length - trailLength * 2);
     }
+    // A flash outlives its own drawing by a little, and no more.
+    while (state.hits.length && t - state.hits[0].t > 1) state.hits.shift();
   },
-  draw({ g, p, shape, state }) {
+  /**
+   * Balls of light, and what they do when they hit something.
+   *
+   * Each ball is an emitter: a bright sphere with a near-white highlight and,
+   * round it, a halo falling off as an inverse square — both baked once per
+   * tint and stamped, rather than two gradients built for every ball every
+   * frame. Behind it, its path as a tapering streak of the same light, which
+   * is what a bright thing moving fast looks like on a photograph and what a
+   * line of constant width did not.
+   *
+   * And every ricochet shows. The simulation records where and how hard each
+   * ball struck, and here that becomes a burst of light at the contact with a
+   * half-ring thrown off the surface, and the ball squashed against it for a
+   * moment. Without it a ball turning round beside a window frame looks like a
+   * ball that changed its mind; with it, it bounced *off the window*, which is
+   * the whole idea of the effect.
+   */
+  draw({ g, p, shape, t, state, stable }) {
     const container = shape;
     if (container.bbox.w <= 2 || container.bbox.h <= 2) return;
     const radius = Math.max(1, p.size);
+    const sprites = ballSprites(state, stable);
+    const alpha = g.globalAlpha;
+    const tintOf = (v) => sprites[Math.round(clamp(v, 0, 1) * (BALL_TINTS - 1))];
 
     g.save();
     g.clip(container.path);
     g.globalCompositeOperation = 'lighter';
 
-    for (const b of state.balls) {
-      const colour = mixHex(p.color, p.color2, b.tint);
-
-      if (p.trail > 0 && b.trail.length >= 4) {
-        g.strokeStyle = rgba(colour, 0.22 * p.trail);
-        g.lineWidth = radius * 0.9;
-        g.lineCap = 'round';
-        g.lineJoin = 'round';
-        g.beginPath();
-        g.moveTo(b.trail[0], b.trail[1]);
-        for (let i = 2; i < b.trail.length; i += 2) g.lineTo(b.trail[i], b.trail[i + 1]);
-        g.stroke();
-      }
-
-      if (p.glow > 0) glow(g, b.x, b.y, radius * (1.8 + p.glow * 2.2), colour, 0.55);
-
-      const core = g.createRadialGradient(
-        b.x - radius * 0.3,
-        b.y - radius * 0.3,
-        0,
-        b.x,
-        b.y,
-        radius
-      );
-      core.addColorStop(0, '#ffffff');
-      core.addColorStop(0.35, colour);
-      core.addColorStop(1, rgba(colour, 0.15));
-      g.fillStyle = core;
+    for (const hit of state.hits || []) {
+      const age = t - hit.t;
+      if (age < 0 || age > 0.4) continue;
+      const k = age / 0.4;
+      const strength = clamp(hit.blow / (Math.max(20, p.speed) * 1.4), 0.35, 1);
+      const sp = tintOf(hit.tint);
+      const fade = (1 - k) * (1 - k) * strength;
+      const cx = hit.x + hit.nx * radius * 0.4;
+      const cy = hit.y + hit.ny * radius * 0.4;
+      const burst = radius * (1.6 + 2.4 * k);
+      g.globalAlpha = alpha * fade;
+      g.drawImage(sp.halo, cx - burst, cy - burst, burst * 2, burst * 2);
+      const facing = Math.atan2(hit.ny, hit.nx);
+      g.strokeStyle = sp.ring;
+      g.lineWidth = Math.max(1.5, radius * 0.2 * (1 - k));
       g.beginPath();
-      g.arc(b.x, b.y, radius, 0, TAU);
-      g.fill();
+      g.arc(hit.x, hit.y, radius * (0.8 + 3.2 * k), facing - 1.25, facing + 1.25);
+      g.stroke();
     }
 
+    for (const b of state.balls) {
+      const sp = tintOf(b.tint);
+
+      // Every other point of the path: a stamp is wider than the gap between
+      // two, so the streak is still continuous, at half the fill.
+      if (p.trail > 0 && b.trail.length >= 4) {
+        const n = b.trail.length / 2;
+        for (let i = (n - 2) % 2; i < n - 1; i += 2) {
+          const k = (i + 1) / n;
+          const s = radius * (0.5 + 1.1 * k);
+          g.globalAlpha = alpha * clamp(p.trail * 0.85 * k ** 1.5, 0, 1);
+          g.drawImage(sp.halo, b.trail[i * 2] - s, b.trail[i * 2 + 1] - s, s * 2, s * 2);
+        }
+      }
+
+      // The halo stamped smaller than the old glow's radius for the same
+      // picture: an inverse square is all but gone by six tenths of the way
+      // out, and the rest of the square was paying for nothing.
+      if (p.glow > 0) {
+        const s = radius * (1.2 + p.glow * 1.5);
+        g.globalAlpha = alpha * Math.min(1, 0.55 + 0.12 * p.glow);
+        g.drawImage(sp.halo, b.x - s, b.y - s, s * 2, s * 2);
+      }
+
+      // Over its own light rather than added to it: added, the peak of the
+      // halo underneath took every ball to white, whatever its colour.
+      g.globalCompositeOperation = 'source-over';
+      g.globalAlpha = alpha;
+      const since = b.hitAt === undefined ? 1 : t - b.hitAt;
+      const squash = since >= 0 && since < 0.14 ? 0.3 * (1 - since / 0.14) : 0;
+      const r = radius * 1.08;
+      if (squash > 0) {
+        g.save();
+        g.translate(b.x, b.y);
+        g.rotate(Math.atan2(b.hitNy, b.hitNx));
+        g.scale(1 - squash, 1 + squash * 0.6);
+        g.drawImage(sp.ball, -r, -r, r * 2, r * 2);
+        g.restore();
+      } else {
+        g.drawImage(sp.ball, b.x - r, b.y - r, r * 2, r * 2);
+      }
+      g.globalCompositeOperation = 'lighter';
+    }
+
+    g.globalAlpha = alpha;
     g.restore();
   },
 };
+
+/** Tints baked along the two ball colours: enough that nobody sees the steps. */
+const BALL_TINTS = 8;
+
+/**
+ * Each tint's ball and halo, baked once per pair of colours.
+ *
+ * The halo is the inverse-square falloff every light in the library uses, so
+ * a ball, its streak and its flashes all come from one sprite. The ball is a
+ * lit sphere of light — a near-white highlight up and to the left, its own
+ * colour across the middle, a little deeper at the rim — so it is a ball and
+ * not a dot.
+ */
+function ballSprites(state, stable) {
+  const key = `${stable.color}|${stable.color2}`;
+  if (state.spriteKey === key && state.sprites) return state.sprites;
+  state.spriteKey = key;
+  const sprites = [];
+  for (let k = 0; k < BALL_TINTS; k++) {
+    const colour = mixHex(stable.color, stable.color2, k / (BALL_TINTS - 1));
+    const { r, g: gr, b } = hexToRgb(colour);
+
+    const halo = offscreen(128, 128);
+    {
+      const c = halo.getContext('2d');
+      const light = c.createRadialGradient(64, 64, 0, 64, 64, 64);
+      for (const [at, fall] of [[0, 1], [0.08, 0.807], [0.18, 0.446], [0.35, 0.163], [0.6, 0.046], [1, 0]]) {
+        light.addColorStop(at, `rgba(${r},${gr},${b},${fall})`);
+      }
+      c.fillStyle = light;
+      c.fillRect(0, 0, 128, 128);
+    }
+
+    const ball = offscreen(64, 64);
+    {
+      const c = ball.getContext('2d');
+      const body = c.createRadialGradient(22, 21, 0, 32, 32, 31);
+      body.addColorStop(0, '#ffffff');
+      body.addColorStop(0.22, mixHex(colour, '#ffffff', 0.6));
+      body.addColorStop(0.65, colour);
+      body.addColorStop(1, mixHex(colour, '#000000', 0.3));
+      c.fillStyle = body;
+      c.beginPath();
+      c.arc(32, 32, 31, 0, TAU);
+      c.fill();
+    }
+
+    sprites.push({ halo, ball, ring: rgba(mixHex(colour, '#ffffff', 0.35), 0.7) });
+  }
+  state.sprites = sprites;
+  return sprites;
+}
 
 /* ------------------------------------------------------------------ *
  * Serpent
@@ -499,8 +631,8 @@ const serpent = {
 
       if (p.glow > 0) {
         g.globalCompositeOperation = 'lighter';
-        g.strokeStyle = rgba(p.color, Math.min(1, 0.06 * p.glow));
-        g.lineWidth = half * 2 + half * p.glow * 1.4;
+        g.strokeStyle = rgba(p.color, Math.min(1, 0.07 * p.glow));
+        g.lineWidth = half * 2 + half * p.glow * 0.8;
         g.beginPath();
         g.moveTo(hx, hy);
         for (let i = 1; i < n; i++) g.lineTo(S.bx[i], S.by[i]);
@@ -610,18 +742,25 @@ const serpent = {
       if (p.eyes) {
         const at = Math.min(n - 1, Math.max(1, Math.round((hh * 0.85) / gap)));
         const r = Math.max(1.6, hh * 0.21);
+        const glint = Math.max(0.6, r * 0.32);
+        const ox = S.nx[at] * S.w[at] * 0.55;
+        const oy = S.ny[at] * S.w[at] * 0.55;
+        g.fillStyle = '#0b0a06';
+        g.beginPath();
+        g.moveTo(S.bx[at] + ox + r, S.by[at] + oy);
+        g.arc(S.bx[at] + ox, S.by[at] + oy, r, 0, TAU);
+        g.moveTo(S.bx[at] - ox + r, S.by[at] - oy);
+        g.arc(S.bx[at] - ox, S.by[at] - oy, r, 0, TAU);
+        g.fill();
+        g.fillStyle = rgba('#fffbe0', 0.85);
+        g.beginPath();
         for (const side of [1, -1]) {
-          const ex = S.bx[at] + S.nx[at] * S.w[at] * 0.55 * side;
-          const ey = S.by[at] + S.ny[at] * S.w[at] * 0.55 * side;
-          g.fillStyle = '#0b0a06';
-          g.beginPath();
-          g.arc(ex, ey, r, 0, TAU);
-          g.fill();
-          g.fillStyle = rgba('#fffbe0', 0.85);
-          g.beginPath();
-          g.arc(ex - r * 0.3, ey - r * 0.35, Math.max(0.6, r * 0.32), 0, TAU);
-          g.fill();
+          const gx = S.bx[at] + ox * side - r * 0.3;
+          const gy = S.by[at] + oy * side - r * 0.35;
+          g.moveTo(gx + glint, gy);
+          g.arc(gx, gy, glint, 0, TAU);
         }
+        g.fill();
       }
       g.globalAlpha = alpha;
     }
