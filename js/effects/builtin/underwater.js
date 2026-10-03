@@ -52,7 +52,7 @@
 import { rgba, clamp, lerp, TAU, mixHex, makeRng, smoothstep, pointInPolygon } from '../../core/math.js';
 import { waterAbsorb } from '../color.js';
 import { collectObstacles, deflect, surfaceNormal, nearestSurface, isClear, findFreeSpot } from '../obstacles.js';
-import { glow, curveThrough } from '../lib.js';
+import { glow, curveThrough, offscreen } from '../lib.js';
 
 /* ------------------------------------------------------------------ *
  * Depth
@@ -160,25 +160,65 @@ const G = 9.81;
  * metres, and the local slope, which is what a glint needs.
  */
 export function waveTrain(xm, t, amplitude, wavelength) {
-  // Harmonics of the primary, at the amplitude ratios a real wind sea carries:
-  // most of the energy in the swell, a third in the chop, a little in the ripple.
-  const parts = [
-    [1, 1],
-    [0.47, 2.7],
-    [0.21, 6.3],
-  ];
+  waveAt(xm, t, amplitude, wavelength);
+  return { height: WAVE.height, slope: WAVE.slope };
+}
+
+/**
+ * Harmonics of the primary, at the amplitude ratios a real wind sea carries:
+ * most of the energy in the swell, a third in the chop, a little in the ripple.
+ * As [amplitude, harmonic] pairs.
+ */
+const WAVE_PARTS = [
+  [1, 1],
+  [0.47, 2.7],
+  [0.21, 6.3],
+];
+
+/** Where `waveAt` leaves its answer, so a loop over a few thousand samples allocates nothing. */
+const WAVE = { height: 0, slope: 0, curvature: 0, outline: 0 };
+
+/**
+ * How much of each component survives into the *outline* of the surface seen
+ * edge-on, as opposed to its height at one point.
+ *
+ * A swell is long-crested — its crests run for tens of metres side by side —
+ * so seen along its length it lines up and the edge of the water rolls with
+ * it. Chop is shorter-crested and a ripple barely has a crest at all: seen
+ * edge-on across a metre of water, the ripples in front and behind are at
+ * every phase at once and average out. So the rim you can see is mostly swell,
+ * while the facets that make the glints are mostly ripple — and drawing the
+ * rim from the full height instead is what made it a nervous scribble.
+ */
+const OUTLINE_WEIGHTS = [1, 0.55, 0.12];
+
+/**
+ * `waveTrain`, written into `WAVE` instead of returned — the waterline asks it
+ * a couple of thousand times a frame — and with the curvature as well, which
+ * is what decides whether a stretch of surface focuses light or spreads it,
+ * and the edge-on outline described above.
+ */
+function waveAt(xm, t, amplitude, wavelength) {
   let height = 0;
   let slope = 0;
-  for (let i = 0; i < parts.length; i++) {
-    const [amp, harmonic] = parts[i];
-    const k = (TAU * harmonic) / Math.max(0.2, wavelength);
+  let curvature = 0;
+  let outline = 0;
+  for (let i = 0; i < WAVE_PARTS.length; i++) {
+    const amp = WAVE_PARTS[i][0];
+    const k = (TAU * WAVE_PARTS[i][1]) / Math.max(0.2, wavelength);
     const omega = Math.sqrt(G * k);
     // Offset in phase per component so the crests do not all start stacked.
     const phase = k * xm - omega * t + i * 1.7;
-    height += amplitude * amp * Math.sin(phase);
+    const s = Math.sin(phase);
+    height += amplitude * amp * s;
     slope += amplitude * amp * k * Math.cos(phase);
+    curvature -= amplitude * amp * k * k * s;
+    outline += amplitude * amp * OUTLINE_WEIGHTS[i] * s;
   }
-  return { height, slope };
+  WAVE.height = height;
+  WAVE.slope = slope;
+  WAVE.curvature = curvature;
+  WAVE.outline = outline;
 }
 
 /**
@@ -418,8 +458,173 @@ const godrays = {
  * The waterline
  * ------------------------------------------------------------------ */
 
-/** Horizontal samples across the surface. Enough for the shortest harmonic. */
-const SURFACE_SAMPLES = 96;
+/**
+ * The most samples the surface is ever traced with, and the scratch they live in.
+ *
+ * Module-level and reused: the surface is traced once for the rim and again
+ * for every row of the mirror band under it, which is a couple of thousand
+ * samples a frame, and a fresh set of arrays for each would be garbage on
+ * every one of them.
+ */
+const SURFACE_MAX = 480;
+const surfX = new Float64Array(SURFACE_MAX + 1);
+const surfY = new Float64Array(SURFACE_MAX + 1);
+const surfSlope = new Float64Array(SURFACE_MAX + 1);
+const surfBend = new Float64Array(SURFACE_MAX + 1);
+const rowY = new Float64Array(SURFACE_MAX + 1);
+const rowLight = new Float64Array(SURFACE_MAX + 1);
+
+/**
+ * The rows of the mirror band, nearest first.
+ *
+ * Seen from below, the underside of the surface is not a line but a sheet
+ * running away from you, and perspective packs it into a band under the rim:
+ * the nearest metre of it gets most of the height and the far side of the
+ * water is a hairline at the bottom. So the rows are spaced geometrically —
+ * each gap about two thirds of the one above — and each is a fresh look at
+ * the same wave train a little further back, which is why their highlights do
+ * not stack up vertically into stripes.
+ *
+ * `[offset, distance, perspective]` — how far down the band the row sits (0..1),
+ * how many metres behind the rim it is, and how much of the wave's height
+ * survives being seen that far off.
+ */
+const MIRROR_ROWS = (() => {
+  const rows = [];
+  const count = 5;
+  const ratio = 0.64;
+  const total = 1 - ratio ** count;
+  for (let k = 1; k <= count; k++) {
+    const offset = (1 - ratio ** k) / total;
+    rows.push([offset, 0.55 * 1.85 ** (k - 1), 1 - offset * 0.78]);
+  }
+  return rows;
+})();
+
+/**
+ * How squarely a facet of slope `s` throws light at the viewer, 0..1.
+ *
+ * A glint is a mirror pointing the right way: the surface has to be tilted at
+ * the one angle that sends the light into your eye, and a little either side
+ * of it is nothing. `aim` is that angle's slope. Narrow on purpose, because
+ * the narrowness is what makes the highlights sparkle — a broad lobe lights
+ * whole flanks at once and the surface reads as a glowing ribbon.
+ *
+ * Flat water has no facet at that angle anywhere, so it has no glints at all,
+ * which is correct and is also the thing the old window got wrong: it lit a
+ * level surface along its entire length.
+ */
+function facing(s, aim) {
+  const off = Math.abs(s - aim) * 6.5;
+  return off >= 1 ? 0 : 1 - off;
+}
+
+/**
+ * A soft fleck of light at the peak of every run of `light` along a row of the
+ * surface, as long as the run it stands for.
+ *
+ * One per run, not one per sample: a facet ten samples wide is one highlight,
+ * and ten overlapping ones are a bar. Flecks rather than strokes, because a
+ * stroke that switches on and off along its length has ends, and a band of
+ * ends reads as rows of dashes — rain, or morse — rather than as light on
+ * water. Alpha is `(light − offset) × gain` at the peak.
+ */
+function stampFlecks(g, sprite, ys, light, count, spacing, tall, peak, run, minWide, stretch, offset, gain) {
+  for (let i = 1; i < count - 1; i++) {
+    const here = light[i];
+    if (here < peak || here < light[i - 1] || here <= light[i + 1]) continue;
+    let back = 1;
+    while (back < 16 && i - back > 0 && light[i - back] > run) back++;
+    let ahead = 1;
+    while (ahead < 16 && i + ahead < count - 1 && light[i + ahead] > run) ahead++;
+    const wide = Math.max(minWide, (back + ahead) * spacing * stretch);
+    g.globalAlpha = clamp((here - offset) * gain, 0, 1);
+    g.drawImage(sprite, surfX[i] - wide / 2, ys[i] - tall / 2, wide, tall);
+  }
+  g.globalAlpha = 1;
+}
+
+/**
+ * A glint, baked once per colour.
+ *
+ * A hot white point with a soft skirt and a long thin streak either side of it
+ * — the streak is what sunlight broken up on moving water actually looks like,
+ * stretched along the surface because the facets are long in that direction
+ * and short across it. Stamped with `drawImage`, because there are dozens of
+ * them a frame and each would otherwise be a radial gradient built and thrown
+ * away.
+ */
+const GLINT_SIZE = 96;
+const glintSprites = new Map();
+
+function glintSprite(colour) {
+  let sprite = glintSprites.get(colour);
+  if (sprite) return sprite;
+  if (glintSprites.size > 64) glintSprites.clear();
+  sprite = offscreen(GLINT_SIZE, GLINT_SIZE);
+  const g = sprite.getContext('2d');
+  const m = GLINT_SIZE / 2;
+  g.globalCompositeOperation = 'lighter';
+
+  const halo = g.createRadialGradient(m, m, 0, m, m, m * 0.5);
+  halo.addColorStop(0, rgba('#ffffff', 1));
+  halo.addColorStop(0.12, rgba('#ffffff', 0.7));
+  halo.addColorStop(0.32, rgba(colour, 0.24));
+  halo.addColorStop(0.62, rgba(colour, 0.06));
+  halo.addColorStop(1, rgba(colour, 0));
+  g.fillStyle = halo;
+  g.fillRect(0, 0, GLINT_SIZE, GLINT_SIZE);
+
+  // The streak, tapering out to both ends: a horizontal gradient through a
+  // thin bar, and a fainter, shorter one across it so the core reads as a
+  // point of light rather than a dash.
+  const streak = g.createLinearGradient(0, 0, GLINT_SIZE, 0);
+  streak.addColorStop(0, rgba(colour, 0));
+  streak.addColorStop(0.3, rgba(colour, 0.18));
+  streak.addColorStop(0.5, rgba('#ffffff', 0.9));
+  streak.addColorStop(0.7, rgba(colour, 0.18));
+  streak.addColorStop(1, rgba(colour, 0));
+  g.fillStyle = streak;
+  g.fillRect(0, m - 1.5, GLINT_SIZE, 3);
+  const spike = g.createLinearGradient(0, m * 0.75, 0, m * 1.25);
+  spike.addColorStop(0, rgba(colour, 0));
+  spike.addColorStop(0.5, rgba('#ffffff', 0.35));
+  spike.addColorStop(1, rgba(colour, 0));
+  g.fillStyle = spike;
+  g.fillRect(m - 1, m * 0.75, 2, m * 0.5);
+
+  glintSprites.set(colour, sprite);
+  return sprite;
+}
+
+/**
+ * A soft round patch of light, baked once per colour and stamped stretched.
+ *
+ * Drawn much wider than it is tall it is a fleck of light on the underside of
+ * the surface: a facet a metre long and a hand's width deep, foreshortened.
+ * A Gaussian rather than a disc, so a run of them merges into a shimmer
+ * instead of into a string of beads.
+ */
+const PATCH_SIZE = 48;
+const patchSprites = new Map();
+
+function patchSprite(colour) {
+  let sprite = patchSprites.get(colour);
+  if (sprite) return sprite;
+  if (patchSprites.size > 64) patchSprites.clear();
+  sprite = offscreen(PATCH_SIZE, PATCH_SIZE);
+  const g = sprite.getContext('2d');
+  const m = PATCH_SIZE / 2;
+  const soft = g.createRadialGradient(m, m, 0, m, m, m);
+  for (let i = 0; i <= 6; i++) {
+    const u = i / 6;
+    soft.addColorStop(u, rgba(i === 0 ? mixHex(colour, '#ffffff', 0.5) : colour, Math.exp(-u * u * 4.5) * (1 - u)));
+  }
+  g.fillStyle = soft;
+  g.fillRect(0, 0, PATCH_SIZE, PATCH_SIZE);
+  patchSprites.set(colour, sprite);
+  return sprite;
+}
 
 const waterline = {
   id: 'waterline',
@@ -427,7 +632,7 @@ const waterline = {
   category: 'underwater',
   scope: 'shape',
   description:
-    'The surface of the water crossing the house, with everything under it absorbed towards blue and the light of the surface dancing on the wall above. Three wave components on the real dispersion relation, so it never repeats.',
+    'The surface of the water crossing the house, seen from underneath: a bright rim rolling on the swell, the mirror under it, glints running along the crests and the light it throws up the wall above. Three wave components on the real dispersion relation, so it never repeats.',
   params: [
     { key: 'color', type: 'color', label: 'Light on the water', default: '#dff2ff' },
     /**
@@ -457,6 +662,7 @@ const waterline = {
 
     const metresPerPixel = (p.metres || 14) / Math.max(1, world.h);
     const pixelsPerMetre = 1 / Math.max(1e-6, metresPerPixel);
+    const level = p.level;
 
     /**
      * The tide, which is the difference between a picture of water and water.
@@ -473,59 +679,172 @@ const waterline = {
     const water = fraction === p.surface ? p : { ...p, surface: fraction };
 
     const baseY = fraction * world.h + tide;
-    const amplitude = (p.wave / 100) * pixelsPerMetre;
+    const metresHigh = p.wave / 100;
+    const amplitude = metresHigh * pixelsPerMetre;
 
     const left = bbox.x;
     const right = bbox.x + bbox.w;
     const bottom = bbox.y + bbox.h;
 
-    // Sample the surface once and reuse it for the body, the meniscus, the
-    // glints and the spill — four passes that must agree about where the water
-    // is, and would drift apart if each computed its own.
-    const xs = new Array(SURFACE_SAMPLES + 1);
-    const ys = new Array(SURFACE_SAMPLES + 1);
-    const slopes = new Array(SURFACE_SAMPLES + 1);
-    for (let i = 0; i <= SURFACE_SAMPLES; i++) {
-      const u = i / SURFACE_SAMPLES;
-      const x = lerp(left, right, u);
-      const wave = waveTrain(x * metresPerPixel, t, p.wave / 100, p.wavelength);
-      xs[i] = x;
-      ys[i] = baseY + wave.height * pixelsPerMetre;
-      slopes[i] = wave.slope;
+    /**
+     * Sampled finely enough that the shortest ripple is a curve.
+     *
+     * The old trace took ninety-six samples whatever the wave was, which at
+     * the defaults put three and a half of them on each ripple — a ripple
+     * drawn as a triangle, and a surface drawn as a row of triangles is a
+     * mountain range, or lightning. Eight to a ripple, traced through with
+     * `curveThrough`, and the same numbers come out as a swell.
+     */
+    const ripplePx = (Math.max(0.2, p.wavelength) / WAVE_PARTS[WAVE_PARTS.length - 1][1]) * pixelsPerMetre;
+    const spacing = clamp(ripplePx / 8, 4, 14);
+    const count = Math.min(SURFACE_MAX, Math.max(24, Math.ceil(bbox.w / spacing))) + 1;
+    for (let i = 0; i < count; i++) {
+      const x = lerp(left, right, i / (count - 1));
+      waveAt(x * metresPerPixel, t, metresHigh, p.wavelength);
+      surfX[i] = x;
+      // The edge-on outline for where the rim goes, and the full slope and
+      // curvature for what it does with the light — see `OUTLINE_WEIGHTS`.
+      surfY[i] = baseY + WAVE.outline * pixelsPerMetre;
+      surfSlope[i] = WAVE.slope;
+      surfBend[i] = WAVE.curvature;
     }
+
+    /**
+     * How tall the mirror band under the rim is, in world pixels.
+     *
+     * The underside of the surface is a sheet seen nearly edge-on, so its
+     * height on the wall is a matter of how far below it you are standing —
+     * a few per cent of the picture — plus the swell itself, because a rough
+     * surface is a thicker sheet than a calm one.
+     */
+    const band = world.h * 0.035 + amplitude * 1.4;
+    const surfaceColour = waterAbsorb(p.color, 0, p.turbidity);
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
 
-    /* The body of the water, absorbed with depth. */
+    /**
+     * The body of the water, absorbed with depth, and dark just under the rim.
+     *
+     * Brightest a band's depth below the surface and falling away beneath:
+     * two separate things are happening and they pull the same way — the
+     * light has further to travel, and what is left of it has been scattered
+     * out of the line of sight. Both are exponential, and the `waterAbsorb`
+     * only accounts for the first, hence the falloff term. Without it the deep
+     * water is a saturated blue slab, which is what a gel looks like and not
+     * what water looks like.
+     *
+     * The dip right under the rim is total internal reflection. Seen from
+     * below at a grazing angle the underside of the surface is a perfect
+     * mirror, and what it mirrors is the water beneath — so the strip just
+     * under the line is not lit by the sky at all but holds a reflection of
+     * the deep. It is darker than the water a metre further down, and that
+     * darkness is what makes the rim above it read as a surface rather than as
+     * a line drawn across the wall.
+     */
     if (p.body > 0 && bottom > baseY - amplitude) {
       const gradTop = Math.max(bbox.y, baseY - amplitude * 2);
+      const span = Math.max(1, bottom - gradTop);
       const grad = g.createLinearGradient(0, gradTop, 0, bottom);
+      // Four stops through the band, where the shape of the curve is, and the
+      // rest spread over the long exponential tail below it.
+      const stops = [
+        [baseY - amplitude * 2, 0.62],
+        [baseY + band * 0.35, 0.5],
+        [baseY + band * 0.85, 0.9],
+        [baseY + band * 1.6, 1],
+      ];
+      let last = -1;
       for (let i = 0; i < 8; i++) {
-        const u = i / 7;
-        const y = lerp(gradTop, bottom, u);
-        const colour = waterAbsorb(p.color, depthAt(water, y, world), p.turbidity);
-        /**
-         * Brightest immediately under the surface and falling away below.
-         *
-         * Two separate things are happening and they pull the same way: the
-         * light has further to travel, and what is left of it has been
-         * scattered out of the line of sight. Both are exponential, and the
-         * `waterAbsorb` above only accounts for the first — hence the second
-         * term. Without it the deep water is a saturated blue slab, which is
-         * what a gel looks like and not what water looks like.
-         */
-        const falloff = Math.exp(-u * 1.6);
-        grad.addColorStop(u, rgba(colour, p.body * 0.5 * p.level * falloff));
+        let y;
+        let lift;
+        if (i < stops.length) {
+          [y, lift] = stops[i];
+        } else {
+          y = lerp(baseY + band * 1.6, bottom, (i - stops.length + 1) / (8 - stops.length));
+          lift = 1;
+        }
+        // Monotonic and inside the gradient, whatever the shape cuts off.
+        const offset = Math.max(last + 1e-4, clamp((y - gradTop) / span, 0, 1));
+        if (offset > 1) break;
+        last = offset;
+        const below = Math.max(0, gradTop + offset * span - baseY);
+        const falloff = Math.exp(-(below / span) * 1.6);
+        const colour = waterAbsorb(p.color, depthAt(water, gradTop + offset * span, world), p.turbidity);
+        grad.addColorStop(offset, rgba(colour, p.body * 0.5 * level * falloff * lift));
       }
       g.fillStyle = grad;
       g.beginPath();
       g.moveTo(left, bottom);
-      for (let i = 0; i <= SURFACE_SAMPLES; i++) g.lineTo(xs[i], ys[i]);
+      curveThrough(g, surfX, surfY, count);
       g.lineTo(right, bottom);
       g.closePath();
       g.fill();
+    }
+
+    /**
+     * The mirror band: the underside of the surface running away from you.
+     *
+     * First the sheen — the mirror itself, which is lit by the bright water
+     * just under the rim and fades out as the sheet it belongs to recedes.
+     * Flat water is still a mirror, just one with nothing sparkling in it.
+     *
+     * Then the rows. Each is the same wave train looked at a little further
+     * back, so its swell is flatter (perspective) and its phase has moved on
+     * (it is a different stretch of water), and each puts light only where a
+     * facet in it is tilted to send the light down to you: a soft fleck,
+     * stretched along the surface, at the peak of each run of facing water.
+     * Packed tighter and dimmer towards the bottom of the band, that is the
+     * shimmer on the ceiling of a swimming pool seen from the deep end.
+     *
+     * Flecks rather than the broken strokes this started as: a stroke that
+     * switches on and off along its length has ends, and a band of ends reads
+     * as rows of dashes — rain, or morse — rather than as light on water.
+     */
+    {
+      const sheen = g.createLinearGradient(0, baseY - amplitude, 0, baseY + band);
+      sheen.addColorStop(0, rgba(surfaceColour, clamp(0.16 * level, 0, 1)));
+      sheen.addColorStop(0.5, rgba(surfaceColour, clamp(0.07 * level, 0, 1)));
+      sheen.addColorStop(1, rgba(surfaceColour, 0));
+      g.fillStyle = sheen;
+      g.beginPath();
+      curveThrough(g, surfX, surfY, count, { move: true });
+      g.lineTo(right, baseY + band);
+      g.lineTo(left, baseY + band);
+      g.closePath();
+      g.fill();
+    }
+    for (let r = 0; r < MIRROR_ROWS.length; r++) {
+      const [offset, distance, perspective] = MIRROR_ROWS[r];
+      const drop = band * offset;
+      // Further back, the light has crossed more water to get here.
+      const rowColour = waterAbsorb(p.color, distance * 0.6, p.turbidity);
+      const aim = 0.15 + r * 0.03;
+      for (let i = 0; i < count; i++) {
+        waveAt(surfX[i] * metresPerPixel + distance * 0.8, t, metresHigh, p.wavelength);
+        rowY[i] = baseY + drop + WAVE.outline * pixelsPerMetre * perspective;
+        // Wider than the rim's window: these are reflections of reflections,
+        // softened by the water they have crossed.
+        rowLight[i] = facing(WAVE.slope * 0.75, aim * 0.75);
+      }
+      const fade = 1 - offset * 0.6;
+      const tall = Math.max(2, world.h * 0.011 * perspective);
+
+      // The wrinkle itself — soft, wide and faint, so it reads as a fold in a
+      // sheet of light rather than as a line ruled across it.
+      g.strokeStyle = rgba(rowColour, clamp(0.09 * fade * level, 0, 1));
+      g.lineWidth = tall * 0.7;
+      g.beginPath();
+      curveThrough(g, surfX, rowY, count, { move: true });
+      g.stroke();
+
+      if (p.glint > 0) {
+        stampFlecks(g, patchSprite(rowColour), rowY, rowLight, count, spacing, tall,
+          0.3, 0.1, tall * 6, 1.4, 0.15, 0.9 * fade * p.glint * level);
+      }
     }
 
     /**
@@ -535,95 +854,104 @@ const waterline = {
      * is about 2% face-on and effectively 100% at the horizon — so the line
      * where it meets the wall is the brightest thing in the picture by a long
      * way. Getting this too dim is the single commonest way an underwater look
-     * fails to read: without a bright meniscus there is no surface, and with no
+     * fails to read: without a bright rim there is no surface, and with no
      * surface there is no "under".
-     */
-    const surfaceColour = waterAbsorb(p.color, 0, p.turbidity);
-    g.strokeStyle = rgba(surfaceColour, clamp(0.7 * p.level, 0, 1));
-    g.lineWidth = Math.max(1.5, world.h * 0.003);
-    g.lineJoin = 'round';
-    g.beginPath();
-    g.moveTo(xs[0], ys[0]);
-    for (let i = 1; i <= SURFACE_SAMPLES; i++) g.lineTo(xs[i], ys[i]);
-    g.stroke();
-
-    /**
-     * The halo under the line — the part of the surface light that got through.
      *
-     * Three widening passes rather than one wide one. A single fat stroke has
-     * an edge of its own, and an edge under a waterline reads as a second
-     * waterline, which is the one thing there cannot be two of. Widening and
-     * fading gives a skirt that ends where the eye cannot find it.
+     * A tight glow and a hot core, and nothing wider. The old version hung
+     * three ever-wider strokes under the line and each had an edge of its own,
+     * so the surface came with a stack of contour lines beneath it — a wide
+     * halo that read as lightning's, not as water's. The bloom downstream does
+     * the spreading, and does it without edges.
      */
-    for (const [spread, alpha] of [[0.4, 0.1], [1, 0.06], [2.2, 0.035]]) {
-      g.strokeStyle = rgba(surfaceColour, clamp(alpha * p.level, 0, 1));
-      g.lineWidth = Math.max(4, world.h * 0.018 * spread);
-      const drop = g.lineWidth * 0.4;
+    for (const [width, alpha, white] of [[0.012, 0.12, 0], [0.0055, 0.3, 0.2], [0.0022, 0.75, 0.6]]) {
+      g.strokeStyle = rgba(mixHex(surfaceColour, '#ffffff', white), clamp(alpha * level, 0, 1));
+      g.lineWidth = Math.max(1.2, world.h * width);
       g.beginPath();
-      g.moveTo(xs[0], ys[0] + drop);
-      for (let i = 1; i <= SURFACE_SAMPLES; i++) g.lineTo(xs[i], ys[i] + drop);
+      curveThrough(g, surfX, surfY, count, { move: true });
       g.stroke();
     }
 
     /**
-     * Glints, on the faces that are pointing at the light.
+     * Glints, on the facets pointing at the light.
      *
      * A specular highlight is not "on the crest"; it is wherever the surface
-     * slope happens to satisfy the reflection, which is on the *flanks* and
-     * moves along the wave rather than with it. Driving them off the slope
-     * gives that for nothing, and it is the reason they sparkle in and out
-     * instead of marching sideways in a row.
+     * slope happens to satisfy the reflection, which is on the flanks just
+     * short of each crest, and it moves along the wave rather than with it.
+     * Driving them off the slope gives that for nothing, and it is the reason
+     * they sparkle in and out instead of marching sideways in a row.
+     *
+     * One per facet — at the peak of each run of light, not at every sample
+     * in it — or a facet ten samples wide is ten glints welded into a bar.
      */
     if (p.glint > 0) {
-      for (let i = 1; i < SURFACE_SAMPLES; i++) {
-        const facing = clamp(1 - Math.abs(slopes[i] * 3 - 0.55), 0, 1);
-        if (facing < 0.35) continue;
-        const strength = (facing - 0.35) / 0.65;
-        glow(
-          g,
-          xs[i],
-          ys[i],
-          world.h * 0.012 * (0.6 + strength),
-          surfaceColour,
-          clamp(strength * strength * 0.7 * p.glint * p.level, 0, 1)
-        );
+      const sprite = glintSprite(surfaceColour);
+      for (let i = 1; i < count - 1; i++) {
+        const here = facing(surfSlope[i], 0.16);
+        if (here < 0.55) continue;
+        if (here < facing(surfSlope[i - 1], 0.16) || here <= facing(surfSlope[i + 1], 0.16)) continue;
+        // Brighter where the facet is also curved towards you: a convex patch
+        // gathers the light it reflects into a smaller, hotter image.
+        const focus = clamp(0.6 + Math.abs(surfBend[i]) * 0.35, 0.6, 1.4);
+        const strength = (here - 0.55) / 0.45;
+        const size = world.h * (0.035 + 0.05 * strength) * focus;
+        g.globalAlpha = clamp(strength * 0.95 * p.glint * level, 0, 1);
+        g.drawImage(sprite, surfX[i] - size / 2, surfY[i] - size / 2, size, size);
       }
+      g.globalAlpha = 1;
     }
 
     /**
      * The light that gets past the surface and lands on the wall above it.
      *
      * The bit of a swimming pool everybody has actually looked at: bright
-     * ripples crawling up the wall above the water, brightest right at the line
-     * and gone within a metre or so. It is a caustic, it comes from the same
-     * wave train, and it is the cheapest possible confirmation that the wave is
-     * real rather than drawn — the two agree because they are the same numbers.
+     * ripples crawling up the wall above the water, brightest right at the
+     * line and gone within a metre or so. It is a caustic, it comes from the
+     * same wave train, and it is the cheapest possible confirmation that the
+     * wave is real rather than drawn — the two agree because they are the
+     * same numbers.
+     *
+     * Each band is a stretch of the surface thrown up the wall — the light
+     * landing higher came off water further out, so each is the same wave
+     * train sampled further back and stretched sideways by the angle it
+     * arrives at — and it is lit only where that water is curved the way
+     * that focuses light: a trough is a concave mirror and gathers what it
+     * reflects into a bright line, a crest spreads it out to nothing. That is
+     * why the real thing is dappled — bright flecks that swell and slide and
+     * go out — and why a band drawn all the way across reads as a contour
+     * line rather than as light. Drawn as soft flecks rather than as strokes
+     * for the same reason as the mirror band: a thin bright stroke with ends
+     * is a scratch, and a wall of them is a wall of scratches.
      */
     if (p.spill > 0 && baseY > bbox.y) {
-      /**
-       * Four broad bands, not seven thin ones.
-       *
-       * A caustic on a wall is a band of light with soft edges, and drawing it
-       * as a hairline traces the *outline* of one — which above a dark
-       * waterline reads as scribble rather than as light. Wide, few, and faint
-       * is the same amount of light in a shape the eye accepts.
-       */
       const reach = world.h * 0.12;
-      for (let band = 1; band <= 4; band++) {
-        const up = (band / 4) ** 1.5 * reach;
-        const fade = (1 - band / 5) ** 2;
-        g.lineWidth = Math.max(3, world.h * 0.012 * (0.6 + band * 0.5));
-        g.strokeStyle = rgba(surfaceColour, clamp(fade * 0.16 * p.spill * p.level, 0, 1));
-        g.beginPath();
-        for (let i = 0; i <= SURFACE_SAMPLES; i++) {
-          // The caustic above the line is the surface slope, magnified — where
-          // the water is steep the light is bent furthest up the wall.
-          const y = ys[i] - up * (0.6 + slopes[i] * 1.4);
-          if (i === 0) g.moveTo(xs[i], y);
-          else g.lineTo(xs[i], y);
+      const sprite = patchSprite(surfaceColour);
+      for (let b = 1; b <= 4; b++) {
+        const up = (b / 4) ** 1.3 * reach * 0.85;
+        const fade = (1 - b / 5) ** 1.5 * p.spill * level;
+        const stretch = 1 / (1 + b * 0.4);
+        for (let i = 0; i < count; i++) {
+          waveAt((surfX[i] * stretch) * metresPerPixel + b * 2.3, t, metresHigh, p.wavelength);
+          // The vertical swing is the surface's own, magnified a little by
+          // the throw: it is the same lens, further from what it lights.
+          rowY[i] = baseY - up + WAVE.outline * pixelsPerMetre * (1 + b * 0.3);
+          rowLight[i] = clamp(WAVE.curvature * 0.3, 0, 1);
         }
-        g.stroke();
+        // Further up the wall the light has spread: wider, taller, fainter.
+        const tall = world.h * (0.012 + b * 0.005);
+        stampFlecks(g, sprite, rowY, rowLight, count, spacing, tall, 0.12, 0.05, tall * 3.5, 1.1, 0, 1.3 * fade);
       }
+      // And a faint wash of all of it together, right at the line.
+      const wash = g.createLinearGradient(0, baseY - reach * 0.6, 0, baseY);
+      wash.addColorStop(0, rgba(surfaceColour, 0));
+      wash.addColorStop(1, rgba(surfaceColour, clamp(0.08 * p.spill * level, 0, 1)));
+      g.fillStyle = wash;
+      g.beginPath();
+      g.moveTo(left, baseY - reach * 0.6);
+      g.lineTo(right, baseY - reach * 0.6);
+      g.lineTo(surfX[count - 1], surfY[count - 1]);
+      for (let i = count - 2; i >= 0; i--) g.lineTo(surfX[i], surfY[i]);
+      g.closePath();
+      g.fill();
     }
 
     g.restore();
