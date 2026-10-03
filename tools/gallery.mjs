@@ -53,17 +53,61 @@ const TARGETS = {
  * gets eight seconds, which is enough for nearly anything to have got going.
  */
 const MOMENTS = {
-  'bat-burst': 1.2, shockwave: 0.7, 'spark-burst': 0.8, rocket: 3.1, 'confetti-cannon': 1.6,
+  'bat-burst': 1.2, shockwave: 0.7, 'spark-burst': 0.8, rocket: 1.35, 'confetti-cannon': 1.6,
   vine: 40, frost: 20, snow: 20, bonfire: 22, 'catherine-wheel': 4, icicles: 12, trace: 3,
   shatter: 6, santa: 4, bats: 6, web: 10, flowers: 12, kelp: 10, shoal: 12, dolphins: 9,
   jellyfish: 12, bees: 10, cake: 6, balloons: 11, brickwork: 6, breach: 14, lightning: 0,
+  'blood-drip': 14, meteors: 9,
 };
 
-/** Parameters a still needs that a show does not: a timer brought round, and so on. */
+/**
+ * Parameters a still needs that a show does not: a timer brought round, and a
+ * colour you can see.
+ *
+ * The starters' washes are the ambient dark a show sits in — a deep violet at a
+ * third of full, there to take the edge off a white wall — and on a tile on its
+ * own that is a picture of nothing. These are the same effect in a colour that
+ * shows what it does.
+ */
 const PARAMS = {
   santa: { interval: 30, crossing: 9 },
-  shatter: { interval: 6 },
+  wash: { color: '#4a2a8a', color2: '#0d4a6e', blend: 0.6, level: 0.75 },
 };
+
+/**
+ * Which starter's layer a tile is taken from, where the first one to use the
+ * effect is the wrong picture of it — or `null` for the defaults.
+ *
+ * Flowers' first appearance is Halloween's, dead in the pot, which is a fine
+ * thing for a starter to do with it and a poor introduction to it. Plasma's
+ * are all night skies, near black by design.
+ */
+const FROM = { flowers: 'birthday', plasma: null };
+
+/**
+ * Light a tile needs under its effect before it shows at all.
+ *
+ * A projector cannot add darkness, so an effect that draws dark shapes — bats,
+ * Mask, a figure cut out of the candlelight in a window — shows only against
+ * light that is already on the wall. In a show that light is another layer,
+ * and it is the same here: the bats get the Halloween brick they cross, the
+ * figure gets the candles it stands in, and Mask gets a lit wall to black the
+ * windows out of. Breach needs a wall to break, and takes its bricks from it.
+ */
+const UNDER = {
+  bats: ['brickwork'],
+  breach: ['brickwork'],
+  silhouette: ['candle'],
+  mask: [{ effect: 'wash', params: { color: '#4a2a8a', color2: '#0d4a6e', blend: 0.6, level: 0.75 } }],
+};
+
+/**
+ * The wall clock every tile is taken at: a minute and a quarter to midnight on
+ * New Year's Eve, so the countdown and the clock face say something worth
+ * reading — and say the same thing every time this runs, which a gallery that
+ * read today's date would not.
+ */
+const CLOCK = '2026-12-31T23:58:45';
 
 /** Needs a camera, a video, a depth scan or a pencil: nothing to photograph. */
 const SKIP = new Set(['media', 'camera-feed', 'live-draw', 'relight']);
@@ -71,12 +115,13 @@ const SKIP = new Set(['media', 'camera-feed', 'live-draw', 'relight']);
 const W = 960;
 const H = 540;
 
-/** The first preset layer, or demo one-shot, that uses each effect. */
+/** The first preset layer, or demo one-shot, that uses each effect — see `FROM`. */
 function presetLayers() {
   const found = new Map();
   for (const preset of PRESETS) {
     for (const layer of preset.build()) {
       if (found.has(layer.effect)) continue;
+      if (layer.effect in FROM && FROM[layer.effect] !== preset.id) continue;
       found.set(layer.effect, {
         tags: layer.targetTags, params: layer.params, opacity: layer.opacity,
         blend: layer.blend, softness: layer.softness, stagger: layer.stagger,
@@ -93,10 +138,13 @@ function presetLayers() {
 function jobFor(effect, used) {
   const pre = used.get(effect.id);
   const layers = [];
-  // Breach takes its bricks from the wall it is breaking, so it needs one.
-  if (effect.id === 'breach') {
-    const brick = used.get('brickwork');
-    layers.push({ effect: 'brickwork', tags: brick.tags, params: brick.params });
+  for (const under of UNDER[effect.id] || []) {
+    if (typeof under !== 'string') {
+      layers.push(under);
+      continue;
+    }
+    const layer = used.get(under);
+    layers.push({ effect: under, tags: layer.tags, params: layer.params, opacity: layer.opacity, blend: layer.blend });
   }
   layers.push({
     effect: effect.id,
@@ -167,6 +215,7 @@ async function main() {
       page.on('console', (msg) => {
         if (msg.type() === 'error') console.error(`  [console] ${msg.text()}`);
       });
+      await page.clock.setFixedTime(new Date(CLOCK));
       await page.goto(`${server.origin}/tools/review.html`, { waitUntil: 'load' });
       await page.waitForFunction(() => window.__ready, null, { timeout: 60000 });
       return page;
