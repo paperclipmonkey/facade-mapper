@@ -323,18 +323,44 @@ input[type="checkbox"] {
   background: #241a11;
 }
 
+/*
+ * The name is what you are scanning the list for, so it is the last thing to
+ * give way. The subtitle used to be unshrinkable — `nowrap` with the default
+ * `min-width: auto` — which made the title the only thing in the row allowed
+ * to shrink, and in a narrow panel it shrank to nothing: a layer list of
+ * "Full-frame Wash · whole frame" rows with the layer's own name, "Night
+ * wash", squeezed out of every one, and the reorder arrows pushed off the end.
+ * Now both ellipsise, the subtitle three times as fast, and the title keeps a
+ * floor.
+ */
 .list-item .item-title {
   flex: 1 1 auto;
+  min-width: 4.5em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .list-item .item-sub {
+  flex: 0 3 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--text-faint);
   font-size: 11px;
   white-space: nowrap;
 }
+
+/* A title over its subtitle, for rows with more to say than one line holds. */
+.list-item .item-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.list-item .item-text .item-title { flex: none; min-width: 0; }
 
 .list.compact .list-item { padding: 3px 7px; min-height: 24px; }
 

@@ -767,6 +767,7 @@ export function createStage({ canvas, wrap, app }) {
 
   function drawShapes(w, h) {
     const showNames = app.showShapeNames;
+    const labels = [];
     g.save();
     g.lineJoin = 'round';
     g.font = labelFont(11 * ui);
@@ -818,13 +819,94 @@ export function createStage({ canvas, wrap, app }) {
         }
       }
 
-      if (showNames) {
-        const bb = boundingBox(points);
-        g.fillStyle = selected ? '#ff7a18' : 'rgba(231,234,242,0.75)';
-        g.fillText(shape.name, bb.x, bb.y - 3 * ui);
-      }
+      if (showNames) labels.push({ shape, points, selected });
     }
+    if (labels.length) drawShapeLabels(labels, w, h);
     g.restore();
+  }
+
+  /**
+   * Shape names, placed so they do not land on each other.
+   *
+   * Every label used to sit just above the top-left corner of its shape, which
+   * is fine for one window and hopeless for a traced house: the wall, the
+   * roofline and the first window all share that corner, so "Roofline" and
+   * "Front wall" were printed on top of each other, and a name over a bright
+   * effect was unreadable. Each label now tries a few spots round its shape and
+   * takes the first one clear of the labels already placed — smallest shapes
+   * first, because a window's name has to be near the window and a wall's can
+   * go anywhere on the wall. A path is named at its middle rather than its
+   * bounding box, which for an arch is nowhere near the arch. Each sits on a
+   * dark backing so it reads over whatever is lit underneath.
+   */
+  function drawShapeLabels(labels, w, h) {
+    const pad = 3 * ui;
+    const lh = 15 * ui;
+    const gap = 3 * ui;
+    const placed = [];
+    const overlaps = (r) => placed.some((o) => r.x < o.x + o.w + gap && r.x + r.w + gap > o.x
+      && r.y < o.y + o.h + gap && r.y + r.h + gap > o.y);
+    const area = (l) => {
+      const bb = boundingBox(l.points);
+      return l.shape.closed ? bb.w * bb.h : 0;
+    };
+    labels.sort((a, b) => (b.selected - a.selected) || (area(a) - area(b)));
+
+    g.textBaseline = 'middle';
+    for (const label of labels) {
+      const text = label.shape.name;
+      const lw = g.measureText(text).width + pad * 2;
+      const bb = boundingBox(label.points);
+      let candidates;
+      if (label.shape.closed) {
+        candidates = [
+          [bb.x, bb.y - lh - 2 * ui],
+          [bb.x + 3 * ui, bb.y + 3 * ui],
+          [bb.x + bb.w - lw, bb.y - lh - 2 * ui],
+          [bb.x + bb.w - lw - 3 * ui, bb.y + 3 * ui],
+          [bb.x, bb.y + bb.h + 2 * ui],
+          [bb.x + 3 * ui, bb.y + bb.h - lh - 3 * ui],
+        ];
+      } else {
+        const mid = pathMidpoint(label.points);
+        candidates = [
+          [mid.x - lw / 2, mid.y - lh - 5 * ui],
+          [mid.x - lw / 2, mid.y + 5 * ui],
+          [label.points[0].x, label.points[0].y - lh - 4 * ui],
+        ];
+      }
+      const rects = candidates.map(([x, y]) => ({
+        x: Math.max(0, Math.min(w - lw, x)),
+        y: Math.max(0, Math.min(h - lh, y)),
+        w: lw,
+        h: lh,
+      }));
+      const spot = rects.find((r) => !overlaps(r)) || rects[0];
+      placed.push(spot);
+
+      g.fillStyle = 'rgba(8,10,15,0.72)';
+      g.beginPath();
+      g.roundRect(spot.x, spot.y, spot.w, spot.h, 4 * ui);
+      g.fill();
+      g.fillStyle = label.selected ? '#ff9a4d' : 'rgba(231,234,242,0.9)';
+      g.fillText(text, spot.x + pad, spot.y + lh / 2 + 0.5 * ui);
+    }
+  }
+
+  /** The point half-way along a polyline, by length. */
+  function pathMidpoint(points) {
+    let total = 0;
+    for (let i = 1; i < points.length; i++) total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+    let left = total / 2;
+    for (let i = 1; i < points.length; i++) {
+      const seg = Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+      if (seg >= left && seg > 0) {
+        const t = left / seg;
+        return { x: points[i - 1].x + (points[i].x - points[i - 1].x) * t, y: points[i - 1].y + (points[i].y - points[i - 1].y) * t };
+      }
+      left -= seg;
+    }
+    return points[0];
   }
 
   function drawDraft(w, h) {
