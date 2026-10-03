@@ -10,7 +10,8 @@
  * weather and depth that flat colour never will.
  */
 
-import { rgba, clamp, TAU, frac } from '../../core/math.js';
+import { rgba, clamp, TAU, frac, mixHex, hexToRgb } from '../../core/math.js';
+import { offscreen } from '../lib.js';
 import { blackbodyCss, mixLinear } from '../color.js';
 import { ensureField } from '../field.js';
 
@@ -239,13 +240,327 @@ const searchlight = {
   },
 };
 
+/* ------------------------------------------------------------------ *
+ * Water caustics
+ * ------------------------------------------------------------------ */
+
+/**
+ * What a caustic actually is, and how this one is made.
+ *
+ * Sunlight through a wavy surface is refracted by every bump in it, and each
+ * convex patch of water is a weak lens. Where those lenses bring the light to
+ * a focus on the floor — or on a wall — there is a *fold*: a curve along which
+ * the light piles up, very bright on the line and dark immediately beside it.
+ * Neighbouring lenses make neighbouring folds, so what lands on the wall is a
+ * web of bright filaments round dim, rounded cells. The filaments are wavy,
+ * never straight; they are thin and faint where the focus is poor and thick
+ * and hot where two of them converge, with a near-white knot where three
+ * meet; and some cells hold a soft pool of light of their own, where a broad
+ * lens has gathered the light without quite focusing it. The whole web crawls
+ * and re-forms as the surface moves. That is the thing everybody recognises
+ * from the bottom of a swimming pool.
+ *
+ * The old version evaluated ridged noise on a sixty-four-cell grid and
+ * stretched it over the wall: soft cyan noodles that never closed into cells,
+ * blurred by a twenty-fold magnification into something nearer smoke than
+ * light. The shape was wrong, and the resolution threw away the one property
+ * — sharpness — that makes a caustic a caustic.
+ *
+ * Now the web is a cellular field, computed per texel into a small tile that
+ * wraps at its edges: the distance to the nearest of a lattice of wandering
+ * points minus the distance to the second nearest (F2 − F1) is zero exactly on
+ * the boundaries between their territories, so a sharp falloff on it draws a
+ * web of filaments, and F3 − F1 is zero where three territories meet, which is
+ * where the knots go. Two things make it light through water rather than
+ * cracked mud. The domain is warped by smooth waves before the lookup, which
+ * bends every boundary into a curve and rounds every cell; and the falloff's
+ * width and brightness each wander on a noise of their own, so a filament
+ * thins to a thread in one place and swells and burns in another.
+ *
+ * The tile is drawn at a few dozen moments round a loop, each the first time
+ * it is needed and never again. Each frame cross-fades the two nearest
+ * moments and stamps the result over the shape: two layers of it, at
+ * different scales and drifting apart, because the light under real water is
+ * two webs — the swell makes the big cells and the chop on it a finer, fainter
+ * mesh — and because two tiles that repeat at sizes which never line up hide
+ * each other's repetition. Two stamps of a small tile a frame is about what
+ * the old version's one blit cost.
+ */
+
+/** Cells across one tile, and moments round the loop. */
+const TILE_CELLS = 4;
+const CAUSTIC_FRAMES = 24;
+const SITES = TILE_CELLS * TILE_CELLS;
+
+/** A stable 0..1 for lattice site `s`, so a point keeps its character all the way round the loop. */
+function siteHash(s, salt) {
+  let h = Math.imul(s + 1, 374761393) ^ Math.imul(salt, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
+/**
+ * The smooth waves the tile is built from, as `[a, b, q, c]`: `a` and `b`
+ * whole cycles across the tile in each direction, `q` whole turns round the
+ * loop, `c` a phase. Whole numbers are what make the tile wrap and the loop
+ * close. The first three bend the domain sideways, the next three up and
+ * down, then two that set how wide the filaments are and two how bright.
+ */
+const CAUSTIC_WAVES = [
+  [1, 2, 1, 0.3], [3, -1, -1, 1.7], [2, 3, 2, 4.1],
+  [2, -1, -1, 2.2], [-1, 3, 1, 0.9], [3, 2, -2, 5.3],
+  [2, 1, 1, 0.5], [-1, 3, -1, 2.6],
+  [1, -2, -1, 1.1], [3, 1, 1, 3.7],
+];
+const WAVE_COUNT = CAUSTIC_WAVES.length;
+
+/** `exp(−x)` for `x` in 0..16, from a table: the bake asks for three of them per texel. */
+const FALLOFF_STEPS = 64;
+const FALLOFF = new Float32Array(FALLOFF_STEPS * 16 + 2);
+for (let i = 0; i < FALLOFF.length; i++) FALLOFF[i] = Math.exp(-i / FALLOFF_STEPS);
+const falloff = (x) => (x >= 16 ? 0 : FALLOFF[(x * FALLOFF_STEPS) | 0]);
+
+/** Scratch for one bake: the points, the candidates per cell and the wave tables. */
+const siteX = new Float64Array(SITES);
+const siteY = new Float64Array(SITES);
+const sitePool = new Float64Array(SITES);
+const NEAR = TILE_CELLS + 2;
+const nearX = new Float64Array(NEAR * NEAR * 9);
+const nearY = new Float64Array(NEAR * NEAR * 9);
+const nearSite = new Int32Array(NEAR * NEAR * 9);
+let waveSize = 0;
+let colSin = null;
+let colCos = null;
+let rowSin = null;
+let rowCos = null;
+
+/**
+ * Bake the web at `phase` (0..1 round the loop) into `out`, an RGBA tile
+ * `size` texels square that wraps at its edges.
+ *
+ * The lattice is periodic — the site in cell (i, j) is the site in cell
+ * (i mod 4, j mod 4), moved by a whole tile — and every point goes once round
+ * its own small loop as the phase goes from 0 to 1, which is what closes the
+ * animation. Each wave term is split into a part that depends only on the
+ * column and a part that depends only on the row, so a texel costs a few
+ * multiplies instead of ten sines.
+ */
+function bakeCausticTile(out, size, phase, sharpness, rgb, hot) {
+  const cell = size / TILE_CELLS;
+  const turn = phase * TAU;
+  for (let s = 0; s < SITES; s++) {
+    const i = s % TILE_CELLS;
+    const j = (s / TILE_CELLS) | 0;
+    const dir = siteHash(s, 7) < 0.5 ? -1 : 1;
+    siteX[s] = (i + 0.5 + (siteHash(s, 1) - 0.5) * 0.5 + Math.sin(turn * dir + siteHash(s, 5) * TAU) * 0.13) * cell;
+    siteY[s] = (j + 0.5 + (siteHash(s, 2) - 0.5) * 0.5 + Math.cos(turn * dir + siteHash(s, 6) * TAU) * 0.13) * cell;
+    // About half the cells hold a pool of light, breathing round the loop.
+    const p = siteHash(s, 9);
+    sitePool[s] = p > 0.45 ? ((p - 0.45) / 0.55) * (0.75 + 0.25 * Math.sin(turn + siteHash(s, 10) * TAU)) : 0;
+  }
+  // The nine candidate points for every cell a warped texel can land in.
+  for (let cy = -1; cy < NEAR - 1; cy++) {
+    for (let cx = -1; cx < NEAR - 1; cx++) {
+      let n = ((cy + 1) * NEAR + (cx + 1)) * 9;
+      for (let dj = -1; dj <= 1; dj++) {
+        const wrapY = Math.floor((cy + dj) / TILE_CELLS);
+        const sj = cy + dj - wrapY * TILE_CELLS;
+        for (let di = -1; di <= 1; di++) {
+          const wrapX = Math.floor((cx + di) / TILE_CELLS);
+          const s = sj * TILE_CELLS + (cx + di - wrapX * TILE_CELLS);
+          nearX[n] = siteX[s] + wrapX * size;
+          nearY[n] = siteY[s] + wrapY * size;
+          nearSite[n] = s;
+          n++;
+        }
+      }
+    }
+  }
+  if (waveSize !== size) {
+    waveSize = size;
+    colSin = new Float64Array(WAVE_COUNT * size);
+    colCos = new Float64Array(WAVE_COUNT * size);
+    rowSin = new Float64Array(WAVE_COUNT * size);
+    rowCos = new Float64Array(WAVE_COUNT * size);
+  }
+  for (let k = 0; k < WAVE_COUNT; k++) {
+    const [a, b, q, c] = CAUSTIC_WAVES[k];
+    for (let x = 0; x < size; x++) {
+      const u = ((x + 0.5) / size) * TAU;
+      colSin[k * size + x] = Math.sin(u * a);
+      colCos[k * size + x] = Math.cos(u * a);
+      rowSin[k * size + x] = Math.sin(u * b + q * turn + c);
+      rowCos[k * size + x] = Math.cos(u * b + q * turn + c);
+    }
+  }
+
+  const bend = cell * 0.09;
+  // Sharpness narrows the filaments.
+  const width = cell * 0.05 * Math.pow(3.5 / clamp(sharpness, 1, 10), 0.6);
+  const nearScale = 1 / (cell * 0.18);
+  const poolScale = 1 / (cell * 0.5);
+  for (let y = 0; y < size; y++) {
+    // The row halves of the ten terms, hoisted out of the inner loop.
+    const c0 = rowCos[y], s0 = rowSin[y], c1 = rowCos[size + y], s1w = rowSin[size + y];
+    const c2 = rowCos[2 * size + y], s2 = rowSin[2 * size + y], c3 = rowCos[3 * size + y], s3 = rowSin[3 * size + y];
+    const c4 = rowCos[4 * size + y], s4 = rowSin[4 * size + y], c5 = rowCos[5 * size + y], s5 = rowSin[5 * size + y];
+    const c6 = rowCos[6 * size + y], s6 = rowSin[6 * size + y], c7 = rowCos[7 * size + y], s7 = rowSin[7 * size + y];
+    const c8 = rowCos[8 * size + y], s8 = rowSin[8 * size + y], c9 = rowCos[9 * size + y], s9 = rowSin[9 * size + y];
+    for (let x = 0; x < size; x++) {
+      // sin(u + v) = sin u cos v + cos u sin v, for each of the ten waves.
+      const px = x + 0.5 + bend * (colSin[x] * c0 + colCos[x] * s0
+        + colSin[size + x] * c1 + colCos[size + x] * s1w
+        + colSin[2 * size + x] * c2 + colCos[2 * size + x] * s2);
+      const py = y + 0.5 + bend * (colSin[3 * size + x] * c3 + colCos[3 * size + x] * s3
+        + colSin[4 * size + x] * c4 + colCos[4 * size + x] * s4
+        + colSin[5 * size + x] * c5 + colCos[5 * size + x] * s5);
+      const thick = 0.5 + 0.25 * (colSin[6 * size + x] * c6 + colCos[6 * size + x] * s6
+        + colSin[7 * size + x] * c7 + colCos[7 * size + x] * s7);
+      const bright = 0.5 + 0.25 * (colSin[8 * size + x] * c8 + colCos[8 * size + x] * s8
+        + colSin[9 * size + x] * c9 + colCos[9 * size + x] * s9);
+      const cx = clamp(Math.floor(px / cell), -1, NEAR - 2);
+      const cy = clamp(Math.floor(py / cell), -1, NEAR - 2);
+      const base = ((cy + 1) * NEAR + (cx + 1)) * 9;
+      let d1 = Infinity;
+      let d2 = Infinity;
+      let d3 = Infinity;
+      let s1 = 0;
+      for (let n = base; n < base + 9; n++) {
+        const dx = px - nearX[n];
+        const dy = py - nearY[n];
+        const d = dx * dx + dy * dy;
+        if (d < d1) { d3 = d2; d2 = d1; d1 = d; s1 = nearSite[n]; } else if (d < d2) { d3 = d2; d2 = d; } else if (d < d3) d3 = d;
+      }
+      const f1 = Math.sqrt(d1);
+      const gap = Math.sqrt(d3) - f1;
+      // How close this is to a junction, where filaments converge and swell.
+      const near = falloff(gap * nearScale);
+      // Never much under a texel: thinner than that and a filament breaks into dots.
+      const w = Math.max(1.1, width * (0.4 + 1.2 * thick) * (1 + 1.4 * near));
+      const e = (Math.sqrt(d2) - f1) / w;
+      const k = gap / (w * 1.5);
+      const r = f1 * poolScale;
+      const light = falloff(e * e) * (0.3 + bright) * (1 + 0.7 * near)
+        + falloff(k * k) * 0.8
+        + sitePool[s1] * falloff(r * r) * 0.3;
+      // Past full alpha the extra light goes into whiteness: the hottest knots burn white.
+      const white = clamp((light - 0.75) / 0.85, 0, 1);
+      const o = (y * size + x) * 4;
+      out[o] = rgb.r + (hot.r - rgb.r) * white;
+      out[o + 1] = rgb.g + (hot.g - rgb.g) * white;
+      out[o + 2] = rgb.b + (hot.b - rgb.b) * white;
+      out[o + 3] = (light > 1 ? 1 : light) * 255;
+    }
+  }
+}
+
+/**
+ * The loop of tiles for one colour, sharpness and resolution, shared by every
+ * layer and shape that asks for the same.
+ *
+ * All of its canvases are made on first use, so a warm layer never allocates;
+ * each moment is *baked* only the first time the show reaches it, a few
+ * milliseconds a time over the first trip round rather than a stall of a few
+ * hundred at the start. What a moment looks like depends on nothing but the
+ * key and its index, so it does not matter which tab baked it when.
+ *
+ * Keyed on `stable`, never on `p`: Sharpness bound to the microphone would
+ * otherwise throw the loop away every frame.
+ */
+const causticLoops = new Map();
+
+function causticLoop(colour, sharpness, size) {
+  const key = `${colour}|${sharpness}|${size}`;
+  let loop = causticLoops.get(key);
+  if (loop) return loop;
+  // Two looks in memory at once is plenty: each is a couple of megabytes.
+  if (causticLoops.size >= 2) causticLoops.delete(causticLoops.keys().next().value);
+  const frames = [];
+  for (let f = 0; f < CAUSTIC_FRAMES; f++) frames.push(offscreen(size, size));
+  const rgb = hexToRgb(colour);
+  loop = {
+    size,
+    sharpness,
+    frames,
+    baked: new Uint8Array(CAUSTIC_FRAMES),
+    image: frames[0].getContext('2d').createImageData(size, size),
+    rgb,
+    hot: hexToRgb(mixHex(colour, '#ffffff', 0.85)),
+  };
+  causticLoops.set(key, loop);
+  return loop;
+}
+
+/** Moment `f` of `loop`, baked if this is the first time anybody has asked. */
+function causticMoment(loop, f) {
+  const tile = loop.frames[f];
+  if (!loop.baked[f]) {
+    bakeCausticTile(loop.image.data, loop.size, f / CAUSTIC_FRAMES, loop.sharpness, loop.rgb, loop.hot);
+    tile.getContext('2d').putImageData(loop.image, 0, 0);
+    loop.baked[f] = 1;
+  }
+  return tile;
+}
+
+/**
+ * Two scratch tiles, one per layer, each the cross-fade of two moments of the
+ * loop. Overwritten whole every time they are used, so they carry nothing from
+ * one frame to the next.
+ */
+const blendTiles = [null, null];
+
+function blendedTile(slot, loop, position) {
+  let tile = blendTiles[slot];
+  if (!tile) {
+    tile = offscreen(loop.size, loop.size);
+    blendTiles[slot] = tile;
+  }
+  if (tile.width !== loop.size) {
+    tile.width = loop.size;
+    tile.height = loop.size;
+  }
+  const g = tile.getContext('2d');
+  const at = ((position % CAUSTIC_FRAMES) + CAUSTIC_FRAMES) % CAUSTIC_FRAMES;
+  const f0 = Math.floor(at) % CAUSTIC_FRAMES;
+  const mix = at - Math.floor(at);
+  g.globalCompositeOperation = 'copy';
+  g.globalAlpha = 1 - mix;
+  g.drawImage(causticMoment(loop, f0), 0, 0);
+  g.globalCompositeOperation = 'lighter';
+  g.globalAlpha = mix;
+  g.drawImage(causticMoment(loop, (f0 + 1) % CAUSTIC_FRAMES), 0, 0);
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = 'source-over';
+  return tile;
+}
+
+/**
+ * Cover `bbox` with `tile` repeated at `scale` world pixels per texel, slid by
+ * `ox, oy`.
+ *
+ * Stamped as a grid of `drawImage`s rather than filled with a repeating
+ * pattern, which would be the obvious way to write it: measured on the demo
+ * wall the stamps cost about three fifths of the pattern fill for the same
+ * pixels, and the tile wraps cleanly enough that the joins cannot be found.
+ */
+function fillTiled(g, tile, bbox, scale, ox, oy) {
+  const span = tile.width * scale;
+  if (!(span > 1)) return;
+  const x0 = ox + Math.floor((bbox.x - ox) / span) * span;
+  const y0 = oy + Math.floor((bbox.y - oy) / span) * span;
+  for (let y = y0; y < bbox.y + bbox.h; y += span) {
+    for (let x = x0; x < bbox.x + bbox.w; x += span) g.drawImage(tile, x, y, span, span);
+  }
+}
+
 const caustics = {
   id: 'caustics',
   name: 'Water Caustics',
   category: 'atmosphere',
   scope: 'shape',
   description:
-    'Rippling light like sun through water. Slow it right down and it becomes a very good "something is wrong" wash.',
+    'The web of light that sun through moving water throws on whatever is under it: thin sharp folds closing into cells, brightest where they meet, re-forming as the surface moves. Slow it right down and it becomes a very good "something is wrong" wash.',
   params: [
     { key: 'color', type: 'color', label: 'Colour', default: '#7fe8ff' },
     { key: 'color2', type: 'color', label: 'Deep colour', default: '#04203a' },
@@ -255,48 +570,61 @@ const caustics = {
     { key: 'level', type: 'range', label: 'Brightness', default: 0.8, min: 0, max: 2, step: 0.01 },
     { key: 'resolution', type: 'range', label: 'Detail', default: 56, min: 12, max: 130, step: 2 },
   ],
-  draw({ g, p, shape, t, state, noise }) {
+  draw({ g, p, stable, shape, t }) {
     const { bbox } = shape;
-    if (bbox.w <= 2 || bbox.h <= 2) return;
+    if (bbox.w <= 2 || bbox.h <= 2 || p.level <= 0) return;
 
-    // A field rather than thousands of fillRects: one draw call, and the
-    // browser's bilinear filtering turns the cells into continuous ripples.
-    const cols = Math.max(8, Math.round(p.resolution));
-    const rows = Math.max(8, Math.round((cols * bbox.h) / bbox.w));
-    const field = ensureField(state, 'field', cols, rows);
-    field.clear();
+    /**
+     * Detail is how finely the tile is drawn: crisper filaments for more
+     * memory and a longer bake. A hundred and ninety-two texels at the
+     * Sunken preset's 64, which puts a texel at about two world pixels on the
+     * demo wall — as fine as a projector at that distance resolves.
+     */
+    const size = clamp(Math.round((stable.resolution * 3) / 16) * 16, 96, 320);
+    const loop = causticLoop(stable.color, stable.sharpness, size);
 
-    // Precompute the colour ramp once per frame instead of per cell — building
-    // a CSS string 5000 times a frame is what made the old version expensive.
-    const RAMP_STEPS = 24;
-    const ramp = [];
-    for (let i = 0; i < RAMP_STEPS; i++) {
-      const hex = mixLinear(p.color2, p.color, i / (RAMP_STEPS - 1)).replace('#', '');
-      const n = parseInt(hex, 16) || 0;
-      ramp.push([(n >> 16) & 255, (n >> 8) & 255, n & 255]);
-    }
+    /**
+     * How big a cell is on the wall: Scale of them across the shape, roughly,
+     * and the fine web a little under half that, at a ratio that keeps the
+     * two tiles from ever repeating in step.
+     */
+    const span = (bbox.w + bbox.h) / 2;
+    const cell = Math.max(8, span / Math.max(0.5, p.scale * 2.2));
+    const coarse = (cell * TILE_CELLS) / size;
+    const fine = coarse * 0.453;
 
-    for (let y = 0; y < rows; y++) {
-      const v = (y + 0.5) / rows;
-      for (let x = 0; x < cols; x++) {
-        const u = (x + 0.5) / cols;
-        // Two counter-drifting noise fields; ridged so the bright veins are
-        // thin and the dark areas broad, which is what caustics actually do.
-        const a = noise.noise3(u * p.scale, v * p.scale, t * p.speed);
-        const b = noise.noise3(u * p.scale * 1.7 + 4.2, v * p.scale * 1.7 - 2.1, t * p.speed * 0.7);
-        const ridge = 1 - Math.abs(a + b) * 0.5;
-        const value = Math.pow(clamp(ridge, 0, 1), p.sharpness);
-        if (value < 0.02) continue;
-
-        const [r, gg, bb] = ramp[Math.min(RAMP_STEPS - 1, (value * RAMP_STEPS) | 0)];
-        field.set(x, y, r, gg, bb, clamp(value * p.level, 0, 1));
-      }
-    }
+    // Round the loop at a rate the Speed slider sets, the fine web faster
+    // because chop is quicker than swell; and drifting, the two webs in
+    // different directions, because the surface is going somewhere.
+    const clock = t * p.speed;
+    const slide = clock * cell * 0.22;
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
-    field.blit(g, bbox.x, bbox.y, bbox.w, bbox.h);
+
+    /**
+     * The water between the folds: not black — the light that was not
+     * gathered into a fold is still arriving, spread thin — but dim and the
+     * deep colour, so the web has something to be brighter than.
+     */
+    g.fillStyle = rgba(p.color2, clamp(0.6 * p.level, 0, 1));
+    g.fillRect(bbox.x, bbox.y, bbox.w, bbox.h);
+
+    /**
+     * Brightness above one is a second stamp of the same web, because the
+     * tile's hot core is already at full alpha and `globalAlpha` stops at one:
+     * clamping instead would leave the top half of the slider doing nothing.
+     */
+    const near = blendedTile(0, loop, clock * 2.6);
+    const far = blendedTile(1, loop, clock * 3.7 + CAUSTIC_FRAMES * 0.37);
+    for (let level = p.level; level > 0.004; level -= 1) {
+      g.globalAlpha = clamp(level, 0, 1);
+      fillTiled(g, near, bbox, coarse, bbox.x + slide * 0.88, bbox.y + slide * 0.47);
+      g.globalAlpha = clamp(level * 0.5, 0, 1);
+      fillTiled(g, far, bbox, fine, bbox.x - slide * 0.61 + cell * 0.31, bbox.y + slide * 0.35 + cell * 0.77);
+    }
+    g.globalAlpha = 1;
     g.restore();
   },
 };
