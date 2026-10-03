@@ -15,6 +15,9 @@ import {
   settle,
   shedSlabs,
   advanceSlabs,
+  driftProfile,
+  traceDriftTop,
+  DRIFT_MIN,
 } from '../collide.js';
 
 /**
@@ -105,82 +108,11 @@ function ensureFlakeSprites(state, colour) {
  * ledge, stay bare. Then it is blurred along the ledge (never across a step to
  * a different ledge) and tapered into a rounded nose at each end. The
  * simulation is untouched — this is only how its state is painted.
+ *
+ * The profile itself lives in collide.js, `driftProfile` and `traceDriftTop`,
+ * because `fx.drawDrift` paints from it too: a custom effect that lands
+ * things on the house gets drifts rather than dashes.
  * ------------------------------------------------------------------ */
-
-/** Columns either side the display profile is blurred over. */
-const DRIFT_REACH = 4;
-/** The widest gap, in columns, that is the luck of the flakes rather than shelter. */
-const DRIFT_BRIDGE = 7;
-/** Shallower than this, in pixels, and there is no snow to draw. */
-const DRIFT_MIN = 0.45;
-
-function driftProfile(drift, field, out, filled) {
-  const { depth } = drift;
-  const { surface, cols, colW } = field;
-  const cliff = colW * 2.5;
-  let c = 0;
-  while (c < cols) {
-    if (!Number.isFinite(surface[c])) {
-      out[c] = 0;
-      c++;
-      continue;
-    }
-    let end = c;
-    while (end + 1 < cols && Number.isFinite(surface[end + 1])
-      && Math.abs(surface[end + 1] - surface[end]) < cliff) end++;
-
-    // Bridge short gaps: a bare column with loaded ones close on both sides
-    // takes the interpolation between them.
-    let last = -1;
-    for (let i = c; i <= end; i++) {
-      filled[i] = depth[i];
-      if (depth[i] > 0.2) {
-        if (last >= 0 && i - last > 1 && i - last <= DRIFT_BRIDGE + 1) {
-          for (let j = last + 1; j < i; j++) {
-            filled[j] = lerp(depth[last], depth[i], (j - last) / (i - last));
-          }
-        }
-        last = i;
-      }
-    }
-
-    for (let i = c; i <= end; i++) {
-      let s = 0;
-      let w = 0;
-      for (let k = -DRIFT_REACH; k <= DRIFT_REACH; k++) {
-        const j = i + k;
-        if (j < c || j > end) continue;
-        const wt = DRIFT_REACH + 1 - Math.abs(k);
-        s += filled[j] * wt;
-        w += wt;
-      }
-      // Rounded at the ends of the ledge: a square root of a ramp is a
-      // bullnose, not a wedge.
-      const fromEnd = Math.min(i - c, end - i) + 0.5;
-      out[i] = (s / w) * Math.sqrt(Math.min(1, fromEnd / 2.4));
-    }
-    c = end + 1;
-  }
-}
-
-/** The top of a run of drift, left to right, into the current path. */
-function traceDriftTop(g, surface, prof, colW, c, end, start) {
-  const xAt = (i) => (i + 0.5) * colW;
-  const topAt = (i) => surface[i] - prof[i];
-  const x0 = xAt(c) - colW * 0.5;
-  if (start) g.moveTo(x0, surface[c]);
-  else g.lineTo(x0, surface[c]);
-  // Up over a rounded nose at the left end...
-  g.quadraticCurveTo(x0, topAt(c), xAt(c), topAt(c));
-  // ...along the top through the midpoints, which rounds the profile...
-  for (let i = c; i < end; i++) {
-    g.quadraticCurveTo(xAt(i), topAt(i), (xAt(i) + xAt(i + 1)) / 2, (topAt(i) + topAt(i + 1)) / 2);
-  }
-  // ...and down over the nose at the right.
-  const x1 = xAt(end) + colW * 0.5;
-  g.quadraticCurveTo(xAt(end), topAt(end), x1, topAt(end));
-  g.quadraticCurveTo(x1 + colW * 0.15, (topAt(end) + surface[end]) / 2, x1, surface[end]);
-}
 
 /**
  * Paint every ledge's snow: a cool shadowed body sitting on the ledge, a lit
