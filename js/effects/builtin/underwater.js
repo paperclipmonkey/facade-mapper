@@ -708,7 +708,7 @@ const waterline = {
     { key: 'spill', type: 'range', label: 'Light above the line', default: 0.7, min: 0, max: 2, step: 0.01 },
     { key: 'level', type: 'range', label: 'Brightness', default: 1, min: 0, max: 3, step: 0.05 },
   ],
-  draw({ g, p, shape, t, world }) {
+  draw({ g, p, stable, shape, t, world }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2 || p.level <= 0) return;
 
@@ -894,7 +894,10 @@ const waterline = {
       g.stroke();
 
       if (p.glint > 0) {
-        stampFlecks(g, patchSprite(rowColour), rowY, rowLight, count, spacing, tall,
+        // The sprite's tint from `stable`: a baked sprite is a cache, and a
+        // murkiness bound to an LFO would otherwise bake a new one a frame.
+        const flecks = patchSprite(waterAbsorb(stable.color, distance * 0.6, stable.turbidity));
+        stampFlecks(g, flecks, rowY, rowLight, count, spacing, tall,
           0.3, 0.1, tall * 6, 1.4, 0.15, 0.9 * fade * p.glint * level);
       }
     }
@@ -1996,7 +1999,7 @@ const bubbles = {
     // frame allocating an hour of bubbles it is about to throw away.
     if (state.bubbles.length > 900) state.bubbles.splice(0, state.bubbles.length - 900);
   },
-  draw({ g, p, shape, state, world }) {
+  draw({ g, p, stable, shape, state, world }) {
     if (!state.bubbles?.length || p.level <= 0) return;
 
     g.save();
@@ -2007,9 +2010,13 @@ const bubbles = {
 
     for (const b of state.bubbles) {
       const metres = depthAt(p, b.y, world);
-      // Quantised to half a metre so the sprites can be shared: a bubble is
-      // the same colour as its neighbour a hand's width below it.
-      const colour = waterAbsorb(p.color, Math.round(metres * 0.7) / 2, p.turbidity);
+      /**
+       * The tint, quantised to a third of a metre of water (the bubble's
+       * light only crosses a third of its depth) so a few dozen sprites cover
+       * every depth, and taken from `stable`: the sprites are a cache, and a
+       * murkiness bound to an LFO would otherwise bake a ladder a frame.
+       */
+      const colour = waterAbsorb(stable.color, Math.round(metres) * 0.35, stable.turbidity);
       // Fades in off the vent and out at the surface, so nothing appears or
       // vanishes on a frame boundary.
       const fade = clamp(b.life * 4, 0, 1)

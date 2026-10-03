@@ -752,12 +752,27 @@ function bakeCausticTile(out, size, phase, sharpness, rgb, hot) {
  */
 const causticLoops = new Map();
 
+/**
+ * How many looks are kept at once. Each is three or four megabytes at the
+ * usual Detail, and a show has one or two; but the limit has to be well above
+ * that, because a show with one more look than the limit would evict a loop
+ * every frame and rebuild it the next — twenty-four canvases a frame, which
+ * is the one thing a cache must never do. Least recently used goes first.
+ */
+const CAUSTIC_LOOKS = 6;
+
 function causticLoop(colour, sharpness, size) {
   const key = `${colour}|${sharpness}|${size}`;
   let loop = causticLoops.get(key);
-  if (loop) return loop;
-  // Two looks in memory at once is plenty: each is a couple of megabytes.
-  if (causticLoops.size >= 2) causticLoops.delete(causticLoops.keys().next().value);
+  if (loop) {
+    // To the back of the queue: most recently used.
+    if (causticLoops.size > 1) {
+      causticLoops.delete(key);
+      causticLoops.set(key, loop);
+    }
+    return loop;
+  }
+  if (causticLoops.size >= CAUSTIC_LOOKS) causticLoops.delete(causticLoops.keys().next().value);
   const frames = [];
   for (let f = 0; f < CAUSTIC_FRAMES; f++) frames.push(offscreen(size, size));
   const rgb = hexToRgb(colour);
@@ -1478,11 +1493,13 @@ const plasma = {
     { key: 'resolution', type: 'range', label: 'Detail', default: 40, min: 8, max: 100, step: 2 },
     { key: 'contrast', type: 'range', label: 'Contrast', default: 1.3, min: 0.2, max: 4, step: 0.05 },
   ],
-  draw({ g, p, shape, t, state, noise }) {
+  draw({ g, p, stable, shape, t, state, noise }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2) return;
 
-    const cols = Math.max(6, Math.round(p.resolution));
+    // The field's size from `stable`: it is a cache, and Detail bound to the
+    // microphone rebuilt the canvas behind it every frame.
+    const cols = Math.max(6, Math.round(stable.resolution));
     const rows = Math.max(6, Math.round((cols * bbox.h) / bbox.w));
     const field = ensureField(state, 'field', cols, rows);
     field.clear();
