@@ -603,11 +603,17 @@ const BONFIRE_NIGHT = () => [
   layer('catherine-wheel', {
     name: 'Wheels on the windows',
     tags: ['window'],
-    stagger: 3.5,
+    // Three seconds apart and three seconds dark between burns: with four
+    // windows that is nearly always one winding up, one going full tilt and
+    // one dying, which is the picture. The stagger only started doing anything
+    // when the wheel learnt to take it off its own clock — before that every
+    // window lit at the same instant, and the twelve-second gap these values
+    // replaced was chosen against a stagger that was not there.
+    stagger: 3,
     params: {
       radius: 0.42, nozzles: 2, hotTemp: 3000, coolTemp: 1100, tint: '#ffe9b0',
       sparks: 150, speed: 520, life: 0.7, gravity: 520, spin: 3.2, spinUp: 1.4,
-      duration: 9, repeat: 12, size: 3.2,
+      duration: 9, repeat: 3, size: 3.2,
     },
   }),
   layer('sparkler', {

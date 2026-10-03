@@ -514,11 +514,13 @@ than anything clever, and it wants changing once a year.
 | **Catherine Wheel** | A wheel that spins up, throws sparks and burns out. Relights on a timer, or once when triggered. |
 | **Sparkler** | A sparkler head running round a path, throwing forked iron sparks and leaving the after-image you get writing your name with one. |
 
-The wheel is the one to look closely at. Sparks leave it **tangentially** — a
-spark on the rim is travelling along the rim at ωR, and when the casing lets go
-it carries straight on at ninety degrees to the spoke. Sparks that fly outwards
-along the spoke give you a sea urchin; tangential ones give you the curved,
-lopsided wheel everybody has actually stood in front of. There is a test for it.
+The wheel is the one to look closely at. Sparks leave it **tangentially** —
+each nozzle points along the rim and the sparks are its exhaust, blown out
+behind it at ninety degrees to the spoke, which is what drives the wheel round.
+Every spark flies straight, but the nozzle has moved on by the time the next one
+leaves, so the jets curl into spiral arms. Sparks that fly outwards along the
+spoke give you a sea urchin; tangential ones give you the curved, lopsided wheel
+everybody has actually stood in front of. There is a test for it.
 
 The sparkler's forks are not decoration either: the wire is coated in iron
 filings, each filing burns from the outside in, and when the molten shell fails
