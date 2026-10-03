@@ -26,7 +26,7 @@ import {
   findFreeSpot,
   nearestSurface,
 } from '../obstacles.js';
-import { glow, offscreen } from '../lib.js';
+import { glow, offscreen, curveThrough } from '../lib.js';
 
 /** Where the obstacle list is spelled out. Shared so the wording stays consistent. */
 const OBSTACLE_PARAM = {
@@ -244,6 +244,64 @@ function rayClearance(container, obstacles, x, y, angle, look, steps = 5) {
   return 1;
 }
 
+/**
+ * One snake's body this frame: points along it from the snout, their normals,
+ * widths and distances. Module scratch rather than state — it is rebuilt from
+ * nothing every frame and remembers nothing — grown when a longer snake needs
+ * it.
+ */
+const SNAKE = { cap: 0 };
+function snakeScratch(n) {
+  if (SNAKE.cap < n) {
+    const cap = Math.max(128, n * 2);
+    SNAKE.cap = cap;
+    for (const k of ['bx', 'by', 'nx', 'ny', 'w', 's', 'xs', 'ys']) SNAKE[k] = new Float64Array(cap);
+  }
+  return SNAKE;
+}
+
+/**
+ * How wide a snake is, `s` along it from the snout, in pixels.
+ *
+ * A head, a neck and a body. The head is its own bulge — round at the snout,
+ * widest a little behind the eyes and wider than the neck behind it — because
+ * a snake whose front end is the same width as the rest of it is a hose with
+ * one end cut off, which is what this was. The body holds its girth for nearly
+ * half its length and then thins over the rest to a fine tail. Proportioned
+ * off the body's own length as well as its thickness, so a short fat snake
+ * still has a head rather than being all head.
+ */
+function snakeWidth(s, L, half) {
+  const hh = Math.min(half, L / 7);
+  const head = s < hh * 2.8 ? 1.28 * hh * Math.sin(Math.PI * (s / (hh * 2.8))) ** 0.62 : 0;
+  const u = s / Math.max(1, L);
+  const tail = u < 0.45 ? 1 : Math.max(0.04, (1 - (u - 0.45) / 0.55) ** 1.15);
+  const body = half * clamp((s - hh * 1.4) / (hh * 3), 0, 1) ** 0.5 * tail;
+  return Math.max(head, body);
+}
+
+/**
+ * The outline between two points on the body, at a fraction of its width:
+ * down one flank and back up the other, as curves through the points rather
+ * than straight segments between them, so at two metres across a wall it is a
+ * body and not a polygon.
+ */
+function traceSnake(g, S, i0, i1, f, ox = 0, oy = 0) {
+  let k = 0;
+  for (let i = i0; i <= i1; i++, k++) {
+    S.xs[k] = S.bx[i] + S.nx[i] * S.w[i] * f + ox;
+    S.ys[k] = S.by[i] + S.ny[i] * S.w[i] * f + oy;
+  }
+  curveThrough(g, S.xs, S.ys, k, { move: true });
+  k = 0;
+  for (let i = i1; i >= i0; i--, k++) {
+    S.xs[k] = S.bx[i] - S.nx[i] * S.w[i] * f + ox;
+    S.ys[k] = S.by[i] - S.ny[i] * S.w[i] * f + oy;
+  }
+  curveThrough(g, S.xs, S.ys, k);
+  g.closePath();
+}
+
 const serpent = {
   id: 'serpent',
   name: 'Serpent',
@@ -252,8 +310,8 @@ const serpent = {
   description:
     'A snake that explores the wall, steering around the windows and doors rather than crossing them. Long and slow reads as a python; short and quick as something scuttling.',
   params: [
-    { key: 'color', type: 'color', label: 'Head', default: '#7bf58a' },
-    { key: 'color2', type: 'color', label: 'Tail', default: '#0b3a1c' },
+    { key: 'color', type: 'color', label: 'Head', default: '#a9c95b' },
+    { key: 'color2', type: 'color', label: 'Tail', default: '#4b5a26' },
     { key: 'count', type: 'range', label: 'Snakes', default: 2, min: 1, max: 8, step: 1 },
     { key: 'length', type: 'range', label: 'Length', default: 380, min: 60, max: 1600, step: 10 },
     { key: 'thickness', type: 'range', label: 'Thickness', default: 22, min: 2, max: 90, step: 0.5 },
@@ -346,90 +404,237 @@ const serpent = {
       }
     }
   },
+  /**
+   * A snake, seen from above on the wall.
+   *
+   * The body is laid out afresh each frame at fixed distances back from the
+   * *live* head, along the path the head has taken. Drawing the recorded path
+   * itself moved the whole snake forward in jumps of one sample every time a
+   * sample was recorded; laid out from the head, every point of it slides
+   * along continuously — and a mark a fixed distance behind the snout is the
+   * same scale of the same snake from one frame to the next, so the markings
+   * travel with the body instead of sliding along it.
+   *
+   * Then it is drawn the way the tentacles are, as fills of one outline at
+   * fractions of its width: a shadow on the wall, a dark edge, the body in its
+   * colours from head to tail, dark saddles across the back, a paler ridge down
+   * the spine and a sheen on the side towards the light. Then the head: eyes
+   * with a glint in them, and a forked tongue that flicks out every few
+   * seconds, which is the one gesture nothing but a snake makes. The glow, if
+   * any, is a soft halo in the head colour — enough to lift it off a dark wall,
+   * not so much that it reads as a lit tube.
+   */
   draw({ g, p, shape, t, state }) {
     const container = shape;
     if (container.bbox.w <= 2 || container.bbox.h <= 2) return;
     const half = Math.max(1, p.thickness) / 2;
+    const want = Math.max(10, p.length);
+    // Points a fraction of the width apart: close enough that the curves
+    // through them are smooth at any thickness, and no more.
+    const gap = Math.max(2.5, half * 0.5);
 
     g.save();
     g.clip(container.path);
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    const alpha = g.globalAlpha;
 
     for (const s of state.snakes) {
-      const body = s.hist;
-      if (body.length < 3) continue;
-      const n = body.length;
+      const hist = s.hist;
+      if (!hist.length) continue;
+      const S = snakeScratch(Math.ceil(want / gap) + 2);
 
-      const outline = [];
-      const back = [];
-      for (let i = 0; i < n; i++) {
-        const a = body[Math.max(0, i - 1)];
-        const b = body[Math.min(n - 1, i + 1)];
-        const tx = b.x - a.x;
-        const ty = b.y - a.y;
-        const len = Math.hypot(tx, ty) || 1;
-        const nx = -ty / len;
-        const ny = tx / len;
-        const u = i / (n - 1);
-        // Elliptical taper: full at the head, to a point at the tail.
-        const w = half * Math.sqrt(Math.max(0, 1 - u * u));
-        outline.push({ x: body[i].x + nx * w, y: body[i].y + ny * w });
-        back.push({ x: body[i].x - nx * w, y: body[i].y - ny * w });
+      // Walk back along the path from the live head, a point every `gap`.
+      let n = 0;
+      let px = s.x;
+      let py = s.y;
+      let carried = 0;
+      S.bx[0] = px;
+      S.by[0] = py;
+      S.s[0] = 0;
+      n = 1;
+      for (let i = 0; i < hist.length && n < S.cap; i++) {
+        const qx = hist[i].x;
+        const qy = hist[i].y;
+        let seg = Math.hypot(qx - px, qy - py);
+        while (seg > 0 && carried + seg >= gap && n < S.cap) {
+          const f = (gap - carried) / seg;
+          px += (qx - px) * f;
+          py += (qy - py) * f;
+          seg -= gap - carried;
+          carried = 0;
+          S.bx[n] = px;
+          S.by[n] = py;
+          S.s[n] = S.s[n - 1] + gap;
+          n++;
+          if (S.s[n - 1] >= want) break;
+        }
+        if (S.s[n - 1] >= want) break;
+        carried += seg;
+        px = qx;
+        py = qy;
       }
+      if (n < 4) continue;
+      const L = S.s[n - 1];
+      for (let i = 0; i < n; i++) {
+        const a = Math.max(0, i - 1);
+        const b = Math.min(n - 1, i + 1);
+        const tx = S.bx[b] - S.bx[a];
+        const ty = S.by[b] - S.by[a];
+        const len = Math.hypot(tx, ty) || 1;
+        S.nx[i] = -ty / len;
+        S.ny[i] = tx / len;
+        S.w[i] = snakeWidth(S.s[i], L, half);
+      }
+      const hx = S.bx[0];
+      const hy = S.by[0];
+      const tx = S.bx[n - 1];
+      const ty = S.by[n - 1];
 
-      const path = new Path2D();
-      path.moveTo(outline[0].x, outline[0].y);
-      for (let i = 1; i < outline.length; i++) path.lineTo(outline[i].x, outline[i].y);
-      for (let i = back.length - 1; i >= 0; i--) path.lineTo(back[i].x, back[i].y);
-      path.closePath();
-
-      const tail = body[n - 1];
-      const skin = g.createLinearGradient(body[0].x, body[0].y, tail.x, tail.y);
-      skin.addColorStop(0, p.color);
-      skin.addColorStop(1, p.color2);
+      // Its shadow on the wall, down and to the right of the light.
+      g.fillStyle = 'rgba(0,0,0,0.32)';
+      g.beginPath();
+      traceSnake(g, S, 0, n - 1, 1, half * 0.3, half * 0.5);
+      g.fill();
 
       if (p.glow > 0) {
-        g.save();
         g.globalCompositeOperation = 'lighter';
-        g.strokeStyle = rgba(p.color, 0.1 * p.glow);
-        g.lineWidth = half * 2 + p.thickness * p.glow * 0.5;
-        g.lineJoin = 'round';
-        g.lineCap = 'round';
+        g.strokeStyle = rgba(p.color, Math.min(1, 0.06 * p.glow));
+        g.lineWidth = half * 2 + half * p.glow * 1.4;
         g.beginPath();
-        g.moveTo(body[0].x, body[0].y);
-        for (let i = 1; i < n; i++) g.lineTo(body[i].x, body[i].y);
+        g.moveTo(hx, hy);
+        for (let i = 1; i < n; i++) g.lineTo(S.bx[i], S.by[i]);
         g.stroke();
-        g.restore();
+        g.globalCompositeOperation = 'source-over';
       }
 
+      g.fillStyle = mixHex(mixHex(p.color, p.color2, 0.5), '#000000', 0.72);
+      g.beginPath();
+      traceSnake(g, S, 0, n - 1, 1);
+      g.fill();
+
+      const skin = g.createLinearGradient(hx, hy, tx, ty);
+      skin.addColorStop(0, mixHex(p.color, '#000000', 0.12));
+      skin.addColorStop(0.4, mixHex(p.color, p.color2, 0.35));
+      skin.addColorStop(1, p.color2);
       g.fillStyle = skin;
-      g.fill(path);
+      g.beginPath();
+      traceSnake(g, S, 0, n - 1, 0.84);
+      g.fill();
+
+      /**
+       * Saddles across the back, a little over a body-width apart and each
+       * its own length, from just behind the head to most of the way down
+       * the tail. Placed by distance from the snout, so each one stays on its
+       * own stretch of the snake as it slides along its path.
+       */
+      {
+        const hh = Math.min(half, L / 7);
+        g.beginPath();
+        let at = hh * 3.6;
+        let k = 0;
+        while (at < L * 0.92) {
+          const long = half * (0.85 + 0.5 * marking(k, s.seed));
+          const mid = at + long / 2;
+          // A saddle rather than a band: longest down the spine and shorter
+          // towards the flanks, as two overlapping stretches of the outline.
+          // Square-ended bands right across made a barber's pole.
+          for (const [reach, f] of [[0.66, 0.3], [0.5, 0.58], [0.3, 0.82]]) {
+            const i0 = Math.max(1, Math.round((mid - long * reach) / gap));
+            const i1 = Math.min(n - 2, Math.round((mid + long * reach) / gap));
+            if (i1 > i0) traceSnake(g, S, i0, i1, f);
+          }
+          at += long + half * (1.1 + 0.6 * marking(k + 11, s.seed));
+          k++;
+        }
+        g.fillStyle = rgba(mixHex(p.color2, '#000000', 0.5), 0.72);
+        g.fill();
+      }
+
+      const ridge = g.createLinearGradient(hx, hy, tx, ty);
+      ridge.addColorStop(0, rgba(mixHex(p.color, '#fffbe6', 0.35), 0.4));
+      ridge.addColorStop(1, rgba(mixHex(p.color2, '#fffbe6', 0.2), 0.2));
+      g.fillStyle = ridge;
+      g.beginPath();
+      traceSnake(g, S, 0, n - 1, 0.3);
+      g.fill();
+
+      // A sheen, on whichever flank faces the light more squarely.
+      g.beginPath();
+      const stop = Math.floor(n * 0.82);
+      for (let i = 2; i < stop; i++) {
+        const off = S.w[i] * 0.42 * (S.nx[i] * -0.53 + S.ny[i] * -0.85);
+        const x = S.bx[i] + S.nx[i] * off;
+        const y = S.by[i] + S.ny[i] * off;
+        if (i === 2) g.moveTo(x, y);
+        else g.lineTo(x, y);
+      }
+      g.strokeStyle = rgba('#fbfff0', 0.3);
+      g.lineWidth = Math.max(1.2, half * 0.16);
+      g.stroke();
+
+      // The head: forwards is from the second point to the snout.
+      const fx0 = hx - S.bx[1];
+      const fy0 = hy - S.by[1];
+      const flen = Math.hypot(fx0, fy0) || 1;
+      const fx = fx0 / flen;
+      const fy = fy0 / flen;
+      const hh = Math.min(half, L / 7);
+
+      /**
+       * The tongue: out for a third of a second every two or three, as a pure
+       * function of the clock so every tab flicks it together, forked at the
+       * end. Thin, but not under the projector floor.
+       */
+      const period = 2.2 + 1.3 * marking(3, s.seed);
+      const phase = (t + s.seed * 0.37) % period;
+      if (phase < 0.34) {
+        const out = Math.sin((phase / 0.34) * Math.PI);
+        const len = hh * 1.9 * out;
+        const ex = hx + fx * len;
+        const ey = hy + fy * len;
+        const flick = Math.sin(t * 40 + s.seed) * 0.25;
+        g.strokeStyle = '#c8203c';
+        g.lineWidth = Math.max(1.6, hh * 0.12);
+        g.beginPath();
+        g.moveTo(hx, hy);
+        g.lineTo(ex, ey);
+        for (const side of [1, -1]) {
+          const a = Math.atan2(fy, fx) + side * 0.45 + flick;
+          g.moveTo(ex, ey);
+          g.lineTo(ex + Math.cos(a) * hh * 0.45 * out, ey + Math.sin(a) * hh * 0.45 * out);
+        }
+        g.stroke();
+      }
 
       if (p.eyes) {
-        const a = body[0];
-        const b = body[Math.min(n - 1, 2)];
-        const len = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-        const fx = (a.x - b.x) / len;
-        const fy = (a.y - b.y) / len;
-        const ex = -fy;
-        const ey = fx;
-        g.fillStyle = '#0b0006';
-        for (const sideSign of [1, -1]) {
+        const at = Math.min(n - 1, Math.max(1, Math.round((hh * 0.85) / gap)));
+        const r = Math.max(1.6, hh * 0.21);
+        for (const side of [1, -1]) {
+          const ex = S.bx[at] + S.nx[at] * S.w[at] * 0.55 * side;
+          const ey = S.by[at] + S.ny[at] * S.w[at] * 0.55 * side;
+          g.fillStyle = '#0b0a06';
           g.beginPath();
-          g.arc(
-            a.x + fx * half * 0.15 + ex * half * 0.42 * sideSign,
-            a.y + fy * half * 0.15 + ey * half * 0.42 * sideSign,
-            Math.max(0.8, half * 0.17),
-            0,
-            TAU
-          );
+          g.arc(ex, ey, r, 0, TAU);
+          g.fill();
+          g.fillStyle = rgba('#fffbe0', 0.85);
+          g.beginPath();
+          g.arc(ex - r * 0.3, ey - r * 0.35, Math.max(0.6, r * 0.32), 0, TAU);
           g.fill();
         }
       }
+      g.globalAlpha = alpha;
     }
 
     g.restore();
   },
 };
+
+/** A draw in [0, 1] for the k-th marking on the snake seeded `seed`. */
+function marking(k, seed) {
+  const v = Math.sin(k * 12.9898 + seed * 78.233) * 43758.5453;
+  return v - Math.floor(v);
+}
 
 /* ------------------------------------------------------------------ *
  * Creeping vine
