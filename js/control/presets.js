@@ -246,7 +246,10 @@ const CHRISTMAS = () => [
     name: 'Warm rooms',
     tags: ['window'],
     blend: 'lighter',
-    opacity: 0.45,
+    // Fuller than the other starters' rooms, because this one has frost and a
+    // string of lights over it: at the level they use, the glass behind the
+    // frost read as grey rather than as somebody's front room.
+    opacity: 0.65,
     stagger: 0.9,
     params: { color: '#ffcf8a', color2: '#5a2a00', gradient: 'radial', level: 0.8, softness: 0.4 },
     // A slow, gentle breath so the rooms feel occupied rather than lit by a lamp.
@@ -1160,8 +1163,11 @@ export const DEMO_BURSTS = [
     tags: ['door'],
     hold: 3.2,
     params: {
+      // Each bat is cut out of its own patch of backlight, so it is the glow
+      // that makes it visible at all on a dark wall; bigger bats with a little
+      // less of it read as bats rather than as a cloud of violet.
       color: '#140a16', count: 46, duration: 2.8, speed: 950, spread: 0.62, aim: -90,
-      size: 44, flap: 9, rise: -240, wander: 0.55, glow: 0.6, glowColor: '#8b00ff',
+      size: 56, flap: 9, rise: -240, wander: 0.55, glow: 0.5, glowColor: '#8b00ff',
     },
   },
   {
@@ -1286,7 +1292,7 @@ const PRESET_BURSTS = {
       hold: 2.4,
       params: {
         color: '#05d9e8', color2: '#ff2a6d', rings: 4, duration: 2,
-        reach: 2000, width: 22, flash: 1.6, gap: 0.09,
+        reach: 1300, width: 22, flash: 1.6, gap: 0.09,
       },
     },
     {
@@ -1349,8 +1355,10 @@ const PRESET_BURSTS = {
       tags: ['roof'],
       hold: 4,
       params: {
+        // Reach is how far the rings get in their lifetime. At 2600 they left
+        // the house in half a second and spent the rest of it off the frame.
         color: '#a8f0ff', color2: '#0b4a72', rings: 3, duration: 3.4,
-        reach: 2600, width: 60, flash: 0.5, gap: 0.22,
+        reach: 1300, width: 60, flash: 0.5, gap: 0.22,
       },
     },
   ],
