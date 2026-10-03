@@ -1049,9 +1049,9 @@ function angleDelta(from, to) {
  * every one of them was lit up like a strip light while it happened.
  */
 const SPECIES = {
-  sardine: { depth: 0.28, fork: 1, dorsal: 0.5, cruise: 1, bars: 0, radius: 2.2 },
-  reef: { depth: 0.46, fork: 0.5, dorsal: 0.8, cruise: 0.82, bars: 0.55, radius: 1.3 },
-  angelfish: { depth: 0.78, fork: 0.05, dorsal: 1.1, cruise: 0.62, bars: 0.9, radius: 0.8 },
+  sardine: { depth: 0.28, fork: 1, dorsal: 0.5, cruise: 1, radius: 2.2 },
+  reef: { depth: 0.46, fork: 0.5, dorsal: 0.8, cruise: 0.82, radius: 1.3 },
+  angelfish: { depth: 0.78, fork: 0.05, dorsal: 1.1, cruise: 0.62, radius: 0.8 },
 };
 const SPECIES_NAMES = Object.keys(SPECIES);
 
@@ -1515,27 +1515,28 @@ const shoal = {
   draw({ g, p, shape, state, world }) {
     if (!state.fish?.length) return;
     const size = Math.max(3, p.size);
-    // Constant for every fish, so built once rather than forty times a frame.
-    const eyeInk = rgba('#04121b', 0.85);
 
     g.save();
     g.clip(shape.path);
+    g.globalCompositeOperation = 'lighter';
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
 
     for (const f of state.fish) {
       const kind = speciesFor(p.species, f.tint);
       const len = size * f.scale;
       const half = len * 0.5;
-      const body = len * kind.depth;
       /**
-       * How deep the drawn outline actually is.
+       * How deep the fish is either side of its midline, at its deepest.
        *
-       * `body` is the control point of the curve that makes the flank, and a
-       * quadratic passes nowhere near its control point — the silhouette peaks
-       * at a little over half of it. Anything that has to sit *on* the fish
-       * rather than stick out of it needs this number, and using `body` puts
-       * bars and fins in the water beside the animal.
+       * Everything that has to sit *on* the fish — the fins, the stripe —
+       * is measured from this, and the outline reaches it exactly: the flank
+       * is drawn with cubics whose shoulder is an end point rather than a
+       * control point, so there is no guessing how far short of its control
+       * point a curve falls. Getting that wrong is what used to hang the fins
+       * in the water beside the animal.
        */
-      const rim = body * 0.5;
+      const rim = len * kind.depth * 0.5;
       const angle = Math.atan2(f.vy, f.vx);
       const metres = depthAt(p, f.y, world);
 
@@ -1559,62 +1560,80 @@ const shoal = {
       g.save();
       g.translate(f.x, f.y);
       g.rotate(angle);
-
-      // The tail leads the body: a fish is pushed by its tail, so the beat has
-      // to be visibly *ahead* of where the body is going or it reads as a lure
-      // being pulled through the water.
-      const beat = Math.sin(f.beat);
-      const bend = beat * 0.35;
-
-      g.globalCompositeOperation = 'lighter';
+      /**
+       * Back up, whichever way it is swimming.
+       *
+       * Rotating a fish to its heading turns it upside down the moment it
+       * swims left, and a fish is counter-shaded — dark back, bright belly —
+       * precisely because the light comes from above. Upside down it is lit
+       * from below, which reads instantly as wrong even when nobody can say
+       * why. So a fish heading left is mirrored rather than rolled.
+       */
+      if (Math.cos(angle) < 0) g.scale(1, -1);
 
       /**
-       * Tail fin, hinged at the peduncle, forked as deeply as the body plan
+       * The tail, hinged at the peduncle and forked as deeply as the body plan
        * says. The fork is the aspect ratio: a deep one is a long thin foil
        * that sheds little energy sideways and drives a cruiser; a rounded
        * paddle is a low-aspect-ratio blade that is inefficient and can throw a
        * lot of water in one stroke, which is how a reef fish leaves.
-       */
-      g.fillStyle = rgba(back, 0.75);
-      g.beginPath();
-      g.moveTo(-half * 0.55, 0);
-      g.lineTo(-half * 1.15, -body * (0.75 - bend));
-      g.lineTo(-half * (0.95 - 0.28 * (1 - kind.fork)), 0);
-      g.lineTo(-half * 1.15, body * (0.75 + bend));
-      g.closePath();
-      g.fill();
-
-      // Body: nose to peduncle, curved along the beat.
-      const grad = g.createLinearGradient(0, -body, 0, body);
-      grad.addColorStop(0, rgba(back, 0.9));
-      grad.addColorStop(0.45, rgba(flank, 0.55 + shine * 0.35));
-      grad.addColorStop(1, rgba(back, 0.9));
-      g.fillStyle = grad;
-      /**
-       * The shoulder goes forward of the middle.
        *
-       * Both control points sat at x = 0, which puts the deepest part of the
-       * fish exactly half way along it and makes the head and the tail taper
-       * identically — a leaf, and it read as one. An actual fish carries its
-       * depth about a third back from the nose and then tapers a long way to
-       * the peduncle, so moving the controls forward buys a fuller head and a
-       * longer run to the tail from the same four path commands.
+       * Seen from the side a tail beats across the line of sight, so what the
+       * eye gets is not a fin swinging up and down but one turning edge-on
+       * and back: it narrows and flares with every stroke, which is the
+       * flicker that says a fish is swimming rather than gliding.
        */
-      const shoulder = half * 0.22;
+      const beat = Math.sin(f.beat);
+      const flare = 0.55 + 0.45 * Math.abs(Math.cos(f.beat));
+      const ped = rim * (0.16 + 0.12 * (1 - kind.fork));
+      const tailX = -half * 0.64;
+      const span = Math.max(rim * 0.95, len * 0.13);
+      const reach = half * (0.42 + 0.12 * kind.fork) * flare;
+      const notch = reach * (0.2 + 0.62 * kind.fork);
+      const lift = beat * span * 0.12;
+      g.fillStyle = rgba(mixHex(back, flank, 0.35), 0.7);
       g.beginPath();
-      g.moveTo(half, 0);
-      g.quadraticCurveTo(shoulder, -body * (1 + bend * 0.4), -half * 0.6, -body * 0.25);
-      g.lineTo(-half * 0.6, body * 0.25);
-      g.quadraticCurveTo(shoulder, body * (1 - bend * 0.4), half, 0);
+      g.moveTo(tailX + half * 0.04, -ped);
+      g.quadraticCurveTo(tailX - reach * 0.45, -span * 0.55 + lift, tailX - reach, -span + lift);
+      g.quadraticCurveTo(tailX - reach * 0.8, -span * 0.35 + lift, tailX - notch, lift * 0.5);
+      g.quadraticCurveTo(tailX - reach * 0.8, span * 0.35 + lift, tailX - reach, span + lift);
+      g.quadraticCurveTo(tailX - reach * 0.45, span * 0.55 + lift, tailX + half * 0.04, ped);
       g.closePath();
       g.fill();
 
-      // Dorsal, and a pectoral that sculls opposite the tail.
-      g.fillStyle = rgba(back, 0.55);
+      /**
+       * The body: fusiform, deepest a third of the way back, tapering a long
+       * way to a narrow peduncle, with a blunt rounded snout — and
+       * counter-shaded, which on a wall of light means a dim back and a bright
+       * belly. The gradient runs across the fish rather than along it, from the
+       * back's colour at a third of the brightness to the silver of the belly,
+       * because that is the one detail that turns a lozenge into a fish at the
+       * size these are seen from the pavement.
+       */
+      const shoulder = half * 0.2;
+      const belly = rim * 1.04;
+      const skin = g.createLinearGradient(0, -rim, 0, belly);
+      skin.addColorStop(0, rgba(back, 0.3));
+      skin.addColorStop(0.38, rgba(mixHex(back, flank, 0.45), 0.5));
+      skin.addColorStop(0.62, rgba(flank, 0.82));
+      skin.addColorStop(1, rgba(flank, 0.68));
+      g.fillStyle = skin;
       g.beginPath();
-      g.moveTo(half * 0.3, -rim * 0.85);
-      g.lineTo(-half * 0.15, -(rim + half * 0.22 * kind.dorsal));
-      g.lineTo(-half * 0.55, -rim * 0.7);
+      g.moveTo(half, rim * 0.08);
+      g.bezierCurveTo(half, -rim * 0.55, shoulder + half * 0.42, -rim, shoulder, -rim);
+      g.bezierCurveTo(shoulder - half * 0.4, -rim, tailX + half * 0.3, -ped * 1.3, tailX, -ped);
+      g.lineTo(tailX, ped);
+      g.bezierCurveTo(tailX + half * 0.3, ped * 1.3, shoulder - half * 0.4, belly, shoulder, belly);
+      g.bezierCurveTo(shoulder + half * 0.42, belly, half, rim * 0.6, half, rim * 0.08);
+      g.closePath();
+      g.fill();
+
+      // Dorsal, swept back, on the deepest part of the back.
+      g.fillStyle = rgba(back, 0.5);
+      g.beginPath();
+      g.moveTo(half * 0.32, -rim * 0.92);
+      g.quadraticCurveTo(half * 0.05, -(rim + half * 0.24 * kind.dorsal), -half * 0.18, -(rim + half * 0.2 * kind.dorsal));
+      g.quadraticCurveTo(-half * 0.25, -rim * 0.9, -half * 0.42, -rim * 0.72);
       g.closePath();
       g.fill();
       /**
@@ -1625,81 +1644,82 @@ const shoal = {
        * points on it, which is the thing anybody recognises as a reef fish.
        */
       if (kind.dorsal > 0.7) {
+        g.fillStyle = rgba(mixHex(back, flank, 0.5), 0.5);
         g.beginPath();
-        g.moveTo(half * 0.05, rim * 0.85);
-        g.lineTo(-half * 0.28, rim + half * 0.15 * kind.dorsal);
-        g.lineTo(-half * 0.55, rim * 0.7);
+        g.moveTo(-half * 0.02, rim * 0.95);
+        g.quadraticCurveTo(-half * 0.2, rim + half * 0.17 * kind.dorsal, -half * 0.4, rim + half * 0.12 * kind.dorsal);
+        g.quadraticCurveTo(-half * 0.42, rim * 0.85, -half * 0.5, rim * 0.6);
         g.closePath();
         g.fill();
       }
+
       /**
-       * The pectoral, which was in the water beside the fish rather than on it.
+       * The silver line along the flank, and the gill behind the head.
        *
-       * `rim`, not `body` — the exact mistake `rim` is defined three dozen
-       * lines above to prevent. `body` is the *control point* of the curve that
-       * makes the flank and the silhouette peaks at about half of it, so a fin
-       * hung at nine tenths of `body` starts outside the animal and reaches
-       * nearly a whole body-depth past it. On a deep-bodied fish that is a
-       * spike as long as the fish is tall, sticking out below it at an angle,
-       * and it is why a shoal at any size worth looking at read as a drift of
-       * leaves with thorns on rather than as fish.
+       * A sardine's flank is a mirror and the brightest thing on it is the
+       * stripe where the mirror is flattest; the gill cover is a second,
+       * curved one. Neither is visible from across the road on its own, but
+       * together they are what stops a slim fish reading as a leaf.
+       *
+       * Not on the deep-bodied ones, and there are no bars on them either,
+       * though a reef fish has them. Bars are *dark* bands, and on a wall of
+       * light the only way to draw something dark is to leave it out; drawn
+       * as light instead, bars and a stripe across a disc read as the ribs of
+       * an X-rayed fish. A reef fish here is its silhouette — the disc, the
+       * paired fins, the paddle tail — which is what anybody recognises it by.
        */
+      const slim = kind.depth < 0.4;
+      g.strokeStyle = rgba(mixHex(flank, '#ffffff', 0.5), slim ? 0.5 : 0.3);
+      g.lineWidth = Math.max(0.7, rim * (slim ? 0.14 : 0.08));
       g.beginPath();
-      g.moveTo(half * 0.05, rim * 0.5);
-      g.lineTo(-half * 0.3, rim * (1.15 - bend * 0.3));
-      g.lineTo(-half * 0.15, rim * 0.35);
+      if (slim) {
+        g.moveTo(half * 0.5, -rim * 0.12);
+        g.quadraticCurveTo(0, -rim * 0.2, tailX + half * 0.05, -ped * 0.2);
+      }
+      g.moveTo(half * 0.5, -rim * 0.55);
+      g.quadraticCurveTo(half * 0.4, 0, half * 0.5, rim * 0.6);
+      g.stroke();
+
+      // The pectoral, sculling against the tail.
+      g.fillStyle = rgba(flank, 0.45);
+      g.beginPath();
+      g.moveTo(half * 0.36, rim * 0.28);
+      g.quadraticCurveTo(half * 0.12, rim * (0.55 + beat * 0.12), half * 0.02, rim * (0.72 + beat * 0.15));
+      g.quadraticCurveTo(half * 0.2, rim * 0.4, half * 0.36, rim * 0.28);
       g.closePath();
       g.fill();
 
-      // The specular itself: a hard line down the flank, not a general
-      // brightening. A mirror gives you an image of the source, and the source
-      // here is a band of sky seen through a rough surface.
+      /**
+       * The flash, which is the whole flank rather than a line on it.
+       *
+       * A fish is a mirror with a fish-shaped outline, and when it rolls its
+       * flank up to the light the mirror throws the whole of the sky at you:
+       * for a moment the fish *is* a white fish. Drawn as the flank itself,
+       * filled white at the strength of the bank, and inside the outline, so a
+       * flashing fish is still a fish rather than a glowing capsule with fins
+       * stuck on it.
+       */
       if (shine > 0.02) {
-        g.strokeStyle = rgba('#ffffff', shine * 0.7);
-        // A line down the flank, not a bar through the fish. At three tenths of
-        // the body — and round-capped — the highlight was wider than the gap
-        // between the dorsal and the belly and longer than the animal, so a
-        // flashing fish was a glowing capsule with fins attached to it.
-        g.lineWidth = Math.max(0.8, body * 0.16);
-        g.lineCap = 'round';
+        g.fillStyle = rgba(mixHex(flank, '#ffffff', 0.7), shine * 0.85);
         g.beginPath();
-        g.moveTo(half * 0.55, -body * 0.05);
-        g.lineTo(-half * 0.4, body * 0.05);
-        g.stroke();
+        g.moveTo(half * 0.62, -rim * 0.1);
+        g.quadraticCurveTo(0, -rim * 0.95, tailX + half * 0.08, -ped * 0.5);
+        g.quadraticCurveTo(0, rim * 0.85, half * 0.62, -rim * 0.1);
+        g.closePath();
+        g.fill();
       }
 
       /**
-       * Bars, on the deep-bodied ones only.
-       *
-       * Vertical banding is disruptive camouflage and it is a reef pattern for
-       * a reason: it works against a background of vertical structure, and it
-       * breaks up a shape that is otherwise a large conspicuous disc. Open
-       * water has no vertical structure to hide against, which is why a
-       * sardine is a plain mirror instead.
+       * The eye: the one bright point on the head, which is what a fish eye
+       * is in reflected light — a silvered ring round a black pupil. On a
+       * wall of light the pupil is just where no light goes, so it is a small
+       * bright ring, and at the size of these mostly a catchlight.
        */
-      if (kind.bars > 0) {
-        g.fillStyle = rgba(back, kind.bars * 0.45);
-        const wide = half * 0.05;
-        for (let b = -1; b <= 1; b++) {
-          const at = half * (0.05 + b * 0.3);
-          // Kept inside the outline by the body's own profile, so a bar on a
-          // disc is a band across it rather than a stick through it.
-          const tall = rim * 0.92 * Math.min(1, (half - at) / (half * 0.6));
-          g.beginPath();
-          g.moveTo(at - wide, -tall);
-          g.lineTo(at + wide, -tall);
-          g.lineTo(at + wide - half * 0.05, tall);
-          g.lineTo(at - wide - half * 0.05, tall);
-          g.closePath();
-          g.fill();
-        }
-      }
-
-      // Eye. One dot, and the fish stops being a leaf.
-      g.fillStyle = eyeInk;
+      g.strokeStyle = rgba(mixHex(flank, '#ffffff', 0.6), 0.75);
+      g.lineWidth = Math.max(0.6, rim * 0.1);
       g.beginPath();
-      g.arc(half * 0.55, -body * 0.22, Math.max(0.6, body * 0.16), 0, TAU);
-      g.fill();
+      g.arc(half * 0.66, -rim * 0.22, Math.max(0.6, rim * 0.17), 0, TAU);
+      g.stroke();
 
       g.restore();
     }
