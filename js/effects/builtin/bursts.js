@@ -820,7 +820,16 @@ const SHELL_KINDS = {
   crossette: { drag: 1.7, droop: 0.5, burn: 0.7, tail: 0.12 },
 };
 
-/** Willow and palm burn charcoal and iron, not a salt: gold, at about this temperature. */
+/**
+ * Willow and palm strands are charcoal and iron, not a salt: gold, at about
+ * this temperature.
+ *
+ * The salt the Star setting picks is still in them. It is the star at the head
+ * of each strand, burning in its own colour with the gold it sheds trailing
+ * behind it — a red willow is red stars drawing long gold strands — so the
+ * setting goes on meaning what it always meant, the colour the stars burn, on
+ * every kind of shell.
+ */
 const CHARCOAL_K = 1900;
 
 /** This frame's climb: how long it takes, and where it starts and ends. */
@@ -1081,7 +1090,7 @@ const rocket = {
         addStar(apexX, apexY, Math.cos(a), Math.sin(a), speed, burst, life, kind.tail,
           gold, size * 3, 1.15, rng() * 977);
       }
-      drawStars(g, base, grav, k, fadeOut, blackbodyCss(1300), true, 24);
+      drawStars(g, base, grav, k, fadeOut, blackbodyCss(1300), true, 24, salt);
     } else if (shellKind === 'crossette') {
       /**
        * Crossette stars fly out together, then each splits once into four that
@@ -1146,7 +1155,7 @@ const rocket = {
         addStar(apexX, apexY, Math.cos(phi), Math.sin(phi), speed, burst, life, kind.tail,
           colour, size * (charcoal ? 0.75 : 1), charcoal ? 0.95 : saltLevel, rng() * TAU);
       }
-      drawStars(g, base, grav, k, fadeOut, blackbodyCss(charcoal ? 1250 : 1150), charcoal, 0);
+      drawStars(g, base, grav, k, fadeOut, blackbodyCss(charcoal ? 1250 : 1150), charcoal, 0, charcoal ? salt : null);
     }
 
     g.restore();
@@ -1211,7 +1220,14 @@ function addStar(ax, ay, dx, dy, speed, t, life, tail, salt, width, level, glitt
  *
  * The colour is the salt while the star burns and goes down the blackbody
  * curve as the composition runs out, so the last of a red shell is a deep
- * ember and the last of a gold one a dull orange.
+ * ember and the last of a gold one a dull orange. A long star given a `tip`
+ * is a coloured star dragging charcoal: the long faint strand stays the
+ * stars' own charcoal gold, and the star itself — its head and the front
+ * stretch of its path, and a palm's comet heads' halos — burns in the tip
+ * colour, the head whitened less than a short star's so the colour survives
+ * being that small. A coloured head alone on a gold strand was tried and
+ * reads, from any distance, as a slightly redder gold rather than as a red
+ * willow.
  *
  * Painted in batches, not star by star. A shell is a hundred-odd stars that
  * all left at the same instant, so at any moment they are nearly all the same
@@ -1221,7 +1237,7 @@ function addStar(ax, ay, dx, dy, speed, t, life, tail, salt, width, level, glitt
  * the faintest passes (the halos, a willow's full strands) as one fill for the
  * whole shell, the rest as at most a score of fills, whatever the star count.
  */
-function drawStars(g, base, grav, k, fade, ember, long, sparkle) {
+function drawStars(g, base, grav, k, fade, ember, long, sparkle, tip = null) {
   let total = 0;
   let alive = 0;
   let fresh = 0;
@@ -1263,9 +1279,15 @@ function drawStars(g, base, grav, k, fade, ember, long, sparkle) {
       streak(g, TAIL.x, TAIL.y, MID.x, MID.y, HEAD.x, HEAD.y, Math.max(0.8, ST_W[i] * 0.6));
     }
     g.fill();
-  } else {
-    // The halos, two steps of falloff, one path each for the whole shell.
-    g.fillStyle = salt;
+  }
+  if (!long || (tip && sparkle)) {
+    // The halos, two steps of falloff, one path each for the whole shell: the
+    // light a short star throws, and the coloured glow round a palm's comet
+    // heads, which are few and big enough to light the wall round them. Not
+    // round a willow's: its hundred-odd stars are points whose colour the
+    // front stretch already carries, and haloing every one of them added a
+    // fifth to the cost of the dearest shell there is.
+    g.fillStyle = long ? tip : salt;
     for (let h = 0; h < HALO_STEPS.length; h += 2) {
       const reach = HALO_STEPS[h];
       g.globalAlpha = base * clamp(HALO_STEPS[h + 1] * mean, 0, 1);
@@ -1290,7 +1312,8 @@ function drawStars(g, base, grav, k, fade, ember, long, sparkle) {
     if (!BUCKET_COUNT[step]) continue;
     const burn = Math.floor(step / BRIGHT_STEPS) / (BURN_STEPS - 1);
     const level = (((step % BRIGHT_STEPS) + 0.5) / BRIGHT_STEPS) * BRIGHT_TOP;
-    const colour = burn > 0 ? tint(salt, ember, burn) : salt;
+    const own = tip || salt;
+    const colour = burn > 0 ? tint(own, ember, burn) : own;
     g.fillStyle = colour;
     g.globalAlpha = base * clamp((long ? 0.62 : 0.7) * level, 0, 1);
     g.beginPath();
@@ -1300,7 +1323,7 @@ function drawStars(g, base, grav, k, fade, ember, long, sparkle) {
       streak(g, TAIL.x, TAIL.y, MID.x, MID.y, HEAD.x, HEAD.y, Math.max(long ? 0.9 : 0.5, ST_W[i] * body));
     }
     g.fill();
-    g.fillStyle = tint(colour, '#ffffff', 0.45 + 0.45 * fresh);
+    g.fillStyle = tint(colour, '#ffffff', (tip ? 0.3 : 0.45) + 0.45 * fresh);
     g.globalAlpha = base * clamp((long ? 0.9 : 1) * level, 0, 1);
     g.beginPath();
     for (let i = 0; i < starCount; i++) {
