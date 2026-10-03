@@ -181,16 +181,21 @@ const CHRISTMAS = () => [
   // gutter, and the bulbs need to read as sitting in front of them.
   layer('icicles', {
     name: 'Icicles',
-    tags: ['roof', 'trim'],
+    // The gutter, and only the gutter. `trim` also takes in the arch over the
+    // door, which is where MERRY CHRISTMAS is written, and ice hanging off a
+    // curve of lettering hangs straight through the letters.
+    tags: ['roof'],
     opacity: 0.8,
-    // Width 3, not 4: the slider stops at 3, `resolveParams` clamps to it, and
-    // 3 is therefore what this preset has always actually drawn. Storing 4 only
-    // meant a number nothing could produce and a slider pinned at its end.
-    params: { color: '#bfe9ff', tip: '#ffffff', count: 26, length: 0.1, variation: 0.65, width: 3, grow: 0, glint: 0.45 },
+    // More of them and thinner, now that they are drawn as ice: a few long
+    // ones among a lot of stubs is what a gutter grows, and at the old width
+    // each one was a fat white wedge.
+    params: { color: '#bfe9ff', tip: '#ffffff', count: 40, length: 0.12, variation: 0.7, width: 1.6, grow: 0, glint: 0.45 },
   }),
   layer('fairy-lights', {
     name: 'Roofline lights',
-    tags: ['roof', 'trim'],
+    // The gutter only, for the same reason as the icicles: a string of bulbs
+    // laid along the arch is laid along the lettering on it.
+    tags: ['roof'],
     // 'cycle' keeps every bulb lit and rotates the colours. A chase looks
     // livelier close up but leaves most of the roofline dark from the street.
     params: { pattern: 'cycle', palette: 'multi', spacing: 44, size: 11, glow: 2.6, speed: 0.35, level: 1, wire: 0.12 },
@@ -255,6 +260,13 @@ const CHRISTMAS = () => [
     params: {
       color: '#ffffff', count: 420, speed: 80, wind: 24, gust: 0.6, size: 5, depth: 0.75,
       blur: 0.7, flutter: 0.6, collide: true, buildUp: 2.2, maxDepth: 20, shed: 0.35,
+      // The things on a house snow actually lies on. Left to settle on every
+      // traced shape it drew a white line round the garden path and lay along
+      // the tops of the feature panel and the planter - rectangles nobody can
+      // see, so the snow on them floated on the wall. Not `trim` either: that
+      // takes in the arch over the door, and a drift along the top of the arch
+      // is a line struck through MERRY CHRISTMAS.
+      colliderTag: 'roof, wall, chimney, window, door',
     },
   }),
   /**
