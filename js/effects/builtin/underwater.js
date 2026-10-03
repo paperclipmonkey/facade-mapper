@@ -2485,6 +2485,21 @@ const jellyfish = {
 
     g.save();
     g.clip(shape.path);
+    /**
+     * Nothing above the surface. The jellyfish wrap round the frame, and when
+     * the surface is inside it — as in the starter, where it is the thing that
+     * makes the look land — the top of that wrap is air, and a medusa hanging
+     * its tentacles over the waterline is a medusa out of the water. So the
+     * water ends where the waterline is drawn, and each animal fades out as
+     * its bell comes up into the glare under the surface, rather than being
+     * cut off by it.
+     */
+    const ceiling = surfaceY(p, world);
+    if (ceiling > bbox.y) {
+      g.beginPath();
+      g.rect(bbox.x, ceiling, bbox.w, bbox.y + bbox.h - ceiling);
+      g.clip();
+    }
     g.globalCompositeOperation = 'lighter';
     g.lineCap = 'round';
     g.lineJoin = 'round';
@@ -2530,7 +2545,9 @@ const jellyfish = {
       // Contracted: narrower and taller. Relaxed: a flatter dome.
       const bellW = R * (1.18 - 0.34 * now.c);
       const bellH = R * (0.62 + 0.36 * now.c);
-      const level = p.level;
+      // Fading over the last three bell-heights below the surface.
+      const level = p.level * clamp((now.y - bellH - ceiling) / (R * 3), 0, 1);
+      if (level <= 0.002) continue;
 
       /**
        * The margin lights up on the recoil, not on the squeeze.
