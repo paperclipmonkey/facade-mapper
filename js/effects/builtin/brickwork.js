@@ -1500,6 +1500,18 @@ const breach = {
 };
 
 /**
+ * A surface of colour `hex` under a light of colour `light`: the product of the
+ * two, scaled by `gain`, plus a little of the surface's own colour for the
+ * light that is not coming from that source.
+ */
+function litBy(hex, light, gain, ambient) {
+  const s = hexToRgb(hex);
+  const l = hexToRgb(light);
+  const ch = (a, b) => Math.round(clamp(a * (b / 255) * gain + a * ambient, 0, 255)).toString(16).padStart(2, '0');
+  return `#${ch(s.r, l.r)}${ch(s.g, l.g)}${ch(s.b, l.b)}`;
+}
+
+/**
  * Breathing rather than blinking: two slow sines a third of the way apart, so
  * the light in a hole swells and settles without ever going out.
  */
@@ -1539,9 +1551,13 @@ function drawOpening(g, p, hole, t, w, h, gap, bite, rim, alpha) {
 
   g.globalAlpha = alpha * solidity;
   const lit = g.createRadialGradient(hole.cx, hole.cy, reach * 0.25, hole.cx, hole.cy, reach + bite + rim);
-  lit.addColorStop(0, mixHex(mixHex(edge, '#fff2df', 0.4), p.innerGlow, 0.6 * lift));
-  lit.addColorStop(0.6, mixHex(mixHex(edge, '#fff2df', 0.1), p.innerGlow, 0.32 * lift));
-  lit.addColorStop(1, mixHex(mixHex(edge, '#000000', 0.35), p.innerGlow, 0.14 * lift));
+  // Brick *lit by* the light inside, which is the brick's colour multiplied
+  // by the light's: mixing the two instead gave a pale khaki that read as a
+  // painted outline rather than as broken faces catching the glow.
+  lit.addColorStop(0, litBy(edge, p.innerGlow, 1.4 * lift, 0.4));
+  lit.addColorStop(0.5, litBy(edge, p.innerGlow, 0.9 * lift, 0.45));
+  lit.addColorStop(0.85, litBy(edge, p.innerGlow, 0.4 * lift, 0.55));
+  lit.addColorStop(1, mixHex(edge, '#000000', 0.4));
   g.fillStyle = lit;
   g.beginPath();
   holeOutline(g, hole, w, h, gap, bite, rim);
