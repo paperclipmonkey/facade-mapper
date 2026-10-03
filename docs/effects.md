@@ -91,6 +91,15 @@ The one that catches everybody is the fourth: a layer aimed at `#window` before
 any window has been tagged looks completely normal in the list, because it *is*
 completely normal. It just has nothing to draw into.
 
+And one the list cannot see, because nothing is wrong with the layer: a **Shadow
+in the Window** at Light level 0. At zero it brings no room of its own — the
+figure is cut out of whatever light is already in the glass, which is how you
+put somebody in front of Candle Flicker. So it needs light under it, and it
+needs to be *directly* on top of that light at full opacity, with blend left at
+`source-over` and no softness. Any of those sends a layer through a buffer of
+its own, where there is nothing to cut, and the figure vanishes. The Halloween
+starter stacks the two exactly that way.
+
 ## Effects that know where the windows are
 
 Most effects are handed a shape and fill it. The **facade** category is given a
