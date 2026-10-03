@@ -106,7 +106,13 @@
 
         const dt = 1 / FPS;
         const started = performance.now();
-        for (let t = 0; t <= seconds + 1e-6; t += dt) {
+        // The frames step at 1/FPS, and the last one lands on `seconds` exactly
+        // — a strike of lightning lasts a few hundredths of a second, and "the
+        // nearest twelfth" misses it.
+        const times = [];
+        for (let k = 0; k * dt < seconds - 1e-6; k++) times.push(k * dt);
+        times.push(seconds);
+        for (const t of times) {
           renderer.render(worldCtx, {
             project,
             time: { t, dt, beat: t * 2, beatPhase: (t * 2) % 1, bpm: 120 },

@@ -123,14 +123,14 @@ function jobFor(effect, used) {
 
 /**
  * Lightning is only worth a picture during a strike, so its moment is found
- * rather than chosen: the first stroke the effect itself announces, plus the
- * few frames it takes the return stroke to arrive.
+ * rather than chosen: the first return stroke the effect itself announces, a
+ * hundredth of a second in, while it is at its brightest.
  */
 async function lightningMoment(params) {
   const { getEffect } = await import('../js/effects/registry.js');
   const effect = getEffect('lightning');
   const cues = effect?.cues?.(params, 2, 120) || [];
-  return cues.length ? cues[0].at + 0.08 : 8;
+  return cues.length ? cues[0].at + 0.012 : 8;
 }
 
 async function main() {
