@@ -518,6 +518,22 @@ const MIRROR_ROWS = (() => {
 })();
 
 /**
+ * The rim, as three strokes from the outside in: `[width as a fraction of the
+ * frame height, alpha, how far towards white]`. A tight glow, a narrow
+ * shoulder and a hot core, and nothing wider — the bloom does the spreading.
+ */
+const RIM_PASSES = [[0.012, 0.12, 0], [0.0055, 0.3, 0.2], [0.0022, 0.75, 0.6]];
+
+/**
+ * The top of the water body, as stops `[crests, bands, brightness]`: where
+ * each sits, in wave heights above the mean surface and mirror-band depths
+ * below it, and how bright the water is there against the water below. The
+ * dip to a half just under the line is the mirror of total internal
+ * reflection; see the drawing.
+ */
+const BODY_BAND = [[-2, 0, 0.62], [0, 0.35, 0.5], [0, 0.85, 0.9], [0, 1.6, 1]];
+
+/**
  * How squarely a facet of slope `s` throws light at the viewer, 0..1.
  *
  * A glint is a mirror pointing the right way: the surface has to be tilted at
@@ -530,7 +546,7 @@ const MIRROR_ROWS = (() => {
  * which is correct and is also the thing the old window got wrong: it lit a
  * level surface along its entire length.
  */
-function facing(s, aim) {
+function facetLight(s, aim) {
   const off = Math.abs(s - aim) * 6.5;
   return off >= 1 ? 0 : 1 - off;
 }
@@ -780,20 +796,17 @@ const waterline = {
       const grad = g.createLinearGradient(0, gradTop, 0, bottom);
       // Four stops through the band, where the shape of the curve is, and the
       // rest spread over the long exponential tail below it.
-      const stops = [
-        [baseY - amplitude * 2, 0.62],
-        [baseY + band * 0.35, 0.5],
-        [baseY + band * 0.85, 0.9],
-        [baseY + band * 1.6, 1],
-      ];
+      const banded = BODY_BAND.length;
       let last = -1;
       for (let i = 0; i < 8; i++) {
         let y;
         let lift;
-        if (i < stops.length) {
-          [y, lift] = stops[i];
+        if (i < banded) {
+          const [crest, depth, dip] = BODY_BAND[i];
+          y = baseY + crest * amplitude + depth * band;
+          lift = dip;
         } else {
-          y = lerp(baseY + band * 1.6, bottom, (i - stops.length + 1) / (8 - stops.length));
+          y = lerp(baseY + band * 1.6, bottom, (i - banded + 1) / (8 - banded));
           lift = 1;
         }
         // Monotonic and inside the gradient, whatever the shape cuts off.
@@ -857,7 +870,7 @@ const waterline = {
         rowY[i] = baseY + drop + WAVE.outline * pixelsPerMetre * perspective;
         // Wider than the rim's window: these are reflections of reflections,
         // softened by the water they have crossed.
-        rowLight[i] = facing(WAVE.slope * 0.75, aim * 0.75);
+        rowLight[i] = facetLight(WAVE.slope * 0.75, aim * 0.75);
       }
       const fade = 1 - offset * 0.6;
       const tall = Math.max(2, world.h * 0.011 * perspective);
@@ -892,7 +905,7 @@ const waterline = {
      * halo that read as lightning's, not as water's. The bloom downstream does
      * the spreading, and does it without edges.
      */
-    for (const [width, alpha, white] of [[0.012, 0.12, 0], [0.0055, 0.3, 0.2], [0.0022, 0.75, 0.6]]) {
+    for (const [width, alpha, white] of RIM_PASSES) {
       g.strokeStyle = rgba(mixHex(surfaceColour, '#ffffff', white), clamp(alpha * level, 0, 1));
       g.lineWidth = Math.max(1.2, world.h * width);
       g.beginPath();
@@ -915,9 +928,9 @@ const waterline = {
     if (p.glint > 0) {
       const sprite = sprites.glint;
       for (let i = 1; i < count - 1; i++) {
-        const here = facing(surfSlope[i], 0.16);
+        const here = facetLight(surfSlope[i], 0.16);
         if (here < 0.55) continue;
-        if (here < facing(surfSlope[i - 1], 0.16) || here <= facing(surfSlope[i + 1], 0.16)) continue;
+        if (here < facetLight(surfSlope[i - 1], 0.16) || here <= facetLight(surfSlope[i + 1], 0.16)) continue;
         // Brighter where the facet is also curved towards you: a convex patch
         // gathers the light it reflects into a smaller, hotter image.
         const focus = clamp(0.6 + Math.abs(surfBend[i]) * 0.35, 0.6, 1.4);
@@ -2319,6 +2332,13 @@ const strandX = new Float64Array(32 * 13);
 const strandY = new Float64Array(32 * 13);
 
 /**
+ * A strand and the edge of the bell are each stroked twice, a wide faint glow
+ * and a fine bright core: `[width as a fraction of the bell's radius, alpha]`.
+ */
+const STRAND_PASSES = [[0.12, 0.1], [0.035, 0.55]];
+const EDGE_PASSES = [[0.14, 0.18], [0.045, 0.7]];
+
+/**
  * Trace the `count` gathered points from `start` as one smooth strand — the
  * same curve `curveThrough` makes, read from an offset into the scratch so
  * that no strand needs an array of its own.
@@ -2598,7 +2618,7 @@ const jellyfish = {
         const lobes = g.createLinearGradient(0, anchorY, 0, anchorY + p.trail * hang * 0.6);
         lobes.addColorStop(0, rgba(bell, 1));
         lobes.addColorStop(1, rgba(bell, 0.1));
-        for (const [width, alpha] of [[0.12, 0.1], [0.035, 0.55]]) {
+        for (const [width, alpha] of STRAND_PASSES) {
           for (let s = 0; s < strands; s++) {
             const isArm = s % 3 === 0;
             g.strokeStyle = isArm ? lobes : fringe;
@@ -2683,7 +2703,7 @@ const jellyfish = {
       g.fill();
 
       // The edge, in two passes: a soft glow and a bright line.
-      for (const [width, alpha] of [[0.14, 0.18], [0.045, 0.7]]) {
+      for (const [width, alpha] of EDGE_PASSES) {
         g.strokeStyle = rgba(mixHex(bell, '#ffffff', 0.25), clamp(alpha * level, 0, 1));
         g.lineWidth = Math.max(0.8, R * width);
         g.beginPath();

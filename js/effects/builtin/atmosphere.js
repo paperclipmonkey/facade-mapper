@@ -29,6 +29,9 @@ const RAIN_DEPTHS = 4;
 /** How long a splash lives, in seconds. */
 const SPLASH_LIFE = 0.42;
 
+/** A streak is stroked twice: `[width multiple, alpha]` — a soft glow, then the core. */
+const STREAK_PASSES = [[3.2, 0.16], [1, 1]];
+
 const rain = {
   id: 'rain',
   name: 'Rain',
@@ -152,7 +155,7 @@ const rain = {
       const z = 1 - p.depth * (1 - (lo + hi) / 2);
       const colour = mixHex(p.color, near, (lo + hi) / 2);
       const bright = p.opacity * (0.45 + 1.1 * ((lo + hi) / 2) ** 1.5);
-      for (const [wide, alpha] of [[3.2, 0.16], [1, 1]]) {
+      for (const [wide, alpha] of STREAK_PASSES) {
         g.strokeStyle = rgba(colour, clamp(bright * alpha, 0, 1));
         g.lineWidth = Math.max(0.5, p.width * (0.45 + 0.75 * z) * wide);
         g.beginPath();
@@ -1116,6 +1119,9 @@ function alongCrack(i, r, out) {
 const CRACK_A = { x: 0, y: 0 };
 const CRACK_B = { x: 0, y: 0 };
 
+/** Every crack is stroked twice: `[width multiple, alpha]` — a faint glow, then the hairline. */
+const CRACK_PASSES = [[3.4, 0.13], [1, 0.85]];
+
 /** A glint: a hot point with four fine rays, baked once per colour into the layer's state. */
 function glassGlint(state, colour) {
   if (state.glintKey === colour) return state.glint;
@@ -1223,7 +1229,7 @@ const shatter = {
      * hairline. Four strokes for the whole pane.
      */
     const front = eased * reach;
-    for (const [wide, alpha] of [[3.4, 0.13], [1, 0.85]]) {
+    for (const [wide, alpha] of CRACK_PASSES) {
       // Radials, each as far as the front has got.
       g.strokeStyle = rgba(p.color, alpha * fade);
       g.lineWidth = width * wide;
