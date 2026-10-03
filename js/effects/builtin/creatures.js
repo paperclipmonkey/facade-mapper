@@ -166,30 +166,36 @@ const bats = {
  * `up` is how far the wing is raised (-1 down, 1 up) and `fold` how far it is
  * closed: on the upstroke a bat folds its wing half shut to slip it back
  * through the air, which is the other half of why the flight looks like a bat.
+ * A wing raised or lowered hard is also seen nearly edge-on, so its membrane
+ * is shallower then than when it is spread flat towards the street — which
+ * keeps the downstroke a pair of slim drooping blades rather than a heavy arch.
+ * Slim throughout, in fact: a bat's wing is long and narrow, a sixth or so of
+ * its span from front to back, and a stubby one reads as a moth.
  * Drawn for the right-hand wing; the caller mirrors it.
  */
 function traceWing(g, s, up, fold) {
   const reach = s * (0.5 - 0.17 * fold);
   const lift = up * s * 0.3;
+  const deep = s * (0.55 + 0.45 * (1 - Math.abs(up)));
   const sx = s * 0.05;
   const sy = -s * 0.03;
   const wx = reach * 0.42;
   const wy = -s * 0.1 - lift * 0.55;
   const tip = { x: reach, y: -lift * 1.05 + s * 0.02 };
-  const f2 = { x: reach * 0.83, y: s * 0.17 - lift * 0.72 };
-  const f3 = { x: reach * 0.58, y: s * 0.23 - lift * 0.45 };
-  const hip = { x: s * 0.07, y: s * 0.13 };
+  const f2 = { x: reach * 0.8, y: deep * 0.1 - lift * 0.74 };
+  const f3 = { x: reach * 0.56, y: deep * 0.15 - lift * 0.48 };
+  const hip = { x: s * 0.07, y: deep * 0.11 };
 
   g.moveTo(sx, sy);
   // Leading edge: forearm out to the wrist, a slight bump for the thumb, then
   // the long finger out to the tip.
-  g.quadraticCurveTo(wx * 0.5, wy - s * 0.035, wx, wy);
-  g.lineTo(wx + s * 0.012, wy - s * 0.03);
-  g.quadraticCurveTo(lerp(wx, tip.x, 0.55), lerp(wy, tip.y, 0.55) - s * 0.035, tip.x, tip.y);
+  g.quadraticCurveTo(wx * 0.5, wy - s * 0.03, wx, wy);
+  g.lineTo(wx + s * 0.012, wy - s * 0.028);
+  g.quadraticCurveTo(lerp(wx, tip.x, 0.55), lerp(wy, tip.y, 0.55) - s * 0.03, tip.x, tip.y);
   // The scallops, each sagging in towards the body between two fingertips.
-  g.quadraticCurveTo(lerp(tip.x, f2.x, 0.5) - s * 0.06, lerp(tip.y, f2.y, 0.5) - s * 0.01, f2.x, f2.y);
-  g.quadraticCurveTo(lerp(f2.x, f3.x, 0.5) - s * 0.03, lerp(f2.y, f3.y, 0.5) - s * 0.075, f3.x, f3.y);
-  g.quadraticCurveTo(lerp(f3.x, hip.x, 0.5) + s * 0.01, lerp(f3.y, hip.y, 0.5) - s * 0.075, hip.x, hip.y);
+  g.quadraticCurveTo(lerp(tip.x, f2.x, 0.5) - s * 0.05, lerp(tip.y, f2.y, 0.5) - deep * 0.01, f2.x, f2.y);
+  g.quadraticCurveTo(lerp(f2.x, f3.x, 0.5) - s * 0.02, lerp(f2.y, f3.y, 0.5) - deep * 0.06, f3.x, f3.y);
+  g.quadraticCurveTo(lerp(f3.x, hip.x, 0.5) + s * 0.01, lerp(f3.y, hip.y, 0.5) - deep * 0.06, hip.x, hip.y);
   g.closePath();
 }
 
@@ -209,7 +215,7 @@ function drawBat(g, x, y, span, phase, dir, bank, alpha) {
   g.rotate(bank);
   g.scale(dir, 1);
 
-  const smear = [[-0.42, 0.28], [0.42, 0.28], [0, 1]];
+  const smear = [[-0.42, 0.2], [0.42, 0.2], [0, 1]];
   for (const [shift, a] of smear) {
     const ph = phase + shift;
     const up = Math.sin(ph);
