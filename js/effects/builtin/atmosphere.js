@@ -10,7 +10,7 @@
  * weather and depth that flat colour never will.
  */
 
-import { rgba, clamp, TAU, frac, mixHex, hexToRgb } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, frac, mixHex, hexToRgb } from '../../core/math.js';
 import { offscreen, glow } from '../lib.js';
 import { blackbodyCss, mixLinear } from '../color.js';
 import { ensureField } from '../field.js';
@@ -911,9 +911,64 @@ const caustics = {
   },
 };
 
-/** Temperature falls fast at first, then levels off — Newtonian cooling. */
+/* ------------------------------------------------------------------ *
+ * Drifting embers
+ * ------------------------------------------------------------------ */
+
+/**
+ * Temperature falls fast at first, then levels off — Newtonian cooling — over
+ * an ember's life, `f` from 0 to 1. Two time constants in a lifetime: by the
+ * end it has lost most of its heat, but it is still glowing for most of the
+ * climb, which is what makes a column of them read as a fire somewhere below.
+ */
 function lerpTemp(hot, cool, f) {
-  return cool + (hot - cool) * Math.exp(-3.2 * f);
+  return cool + (hot - cool) * Math.exp(-2 * f);
+}
+
+/**
+ * The sprite ladder: one baked ember per step of temperature.
+ *
+ * An ember is a point of incandescence with a glow round it, and both take
+ * their colour from how hot it is — so the sprite is a white-hot pinpoint
+ * fading through the blackbody colour of its temperature to nothing, and a
+ * cooling ember is stamped from a cooler rung of the ladder. Twelve rungs
+ * between the layer's hot and cooled temperatures is finer than the eye can
+ * tell apart, and it means a show of a few hundred embers is a few hundred
+ * `drawImage`s rather than a few hundred gradients built and thrown away
+ * every frame.
+ */
+const EMBER_RUNGS = 12;
+const EMBER_SPRITE = 64;
+const emberLadders = new Map();
+
+function emberLadder(hot, cool) {
+  const key = `${hot}|${cool}`;
+  let ladder = emberLadders.get(key);
+  if (ladder) return ladder;
+  if (emberLadders.size > 8) emberLadders.clear();
+  ladder = [];
+  for (let r = 0; r < EMBER_RUNGS; r++) {
+    const kelvin = lerp(cool, hot, r / (EMBER_RUNGS - 1));
+    const colour = blackbodyCss(kelvin);
+    // The core goes whiter the hotter the ember: the same blackbody,
+    // overexposed, which is what a camera and an eye both make of it.
+    const core = mixHex(colour, '#ffffff', 0.25 + 0.5 * (r / (EMBER_RUNGS - 1)));
+    const sprite = offscreen(EMBER_SPRITE, EMBER_SPRITE);
+    const g = sprite.getContext('2d');
+    const m = EMBER_SPRITE / 2;
+    const grad = g.createRadialGradient(m, m, 0, m, m, m);
+    grad.addColorStop(0, rgba(core, 1));
+    grad.addColorStop(0.13, rgba(core, 0.92));
+    grad.addColorStop(0.28, rgba(colour, 0.6));
+    grad.addColorStop(0.52, rgba(colour, 0.18));
+    grad.addColorStop(0.78, rgba(colour, 0.04));
+    grad.addColorStop(1, rgba(colour, 0));
+    g.fillStyle = grad;
+    g.fillRect(0, 0, EMBER_SPRITE, EMBER_SPRITE);
+    ladder.push(sprite);
+  }
+  emberLadders.set(key, ladder);
+  return ladder;
 }
 
 const embers = {
@@ -922,7 +977,7 @@ const embers = {
   category: 'atmosphere',
   scope: 'shape',
   description:
-    'Slow motes rising through the frame with turbulence. Costs almost nothing and adds enormous depth behind other effects.',
+    'Hot motes rising on the air and tumbling as they go, white-gold when they leave and cooling to a dull red as they climb. Costs almost nothing and adds enormous depth behind other effects.',
   params: [
     { key: 'hotTemp', type: 'range', label: 'Hot temperature (K)', default: 2000, min: 900, max: 3500, step: 25 },
     { key: 'coolTemp', type: 'range', label: 'Cooled temperature (K)', default: 1050, min: 800, max: 2500, step: 25 },
@@ -942,13 +997,32 @@ const embers = {
     if (bbox.w <= 0 || bbox.h <= 0) return;
     const target = Math.round(p.count);
 
+    /**
+     * Where an ember starts, and how long it has.
+     *
+     * Most come up from below, where the fire is; a third flare up in mid-air,
+     * because an ember that has been smouldering dark in the smoke catches a
+     * breath of air and lights again. And each lives long enough to climb a
+     * good part of the shape: the old lifetime of four to twelve seconds, at
+     * the thirty pixels a second the presets rise at, meant no ember ever got
+     * out of the bottom third of the house.
+     */
     const spawn = (mote = {}, fresh = false) => {
+      const flare = !fresh || rng() < 0.35;
       mote.x = bbox.x + rng() * bbox.w;
-      mote.y = fresh ? bbox.y + bbox.h + rng() * bbox.h * 0.1 : bbox.y + rng() * bbox.h;
+      mote.y = flare
+        ? bbox.y + bbox.h * (0.25 + rng() * 0.8)
+        : bbox.y + bbox.h + rng() * bbox.h * 0.1;
       mote.seed = rng() * 100;
       mote.scale = 0.4 + rng() * 1.1;
       mote.life = 0;
-      mote.span = 4 + rng() * 8;
+      const climb = bbox.h / Math.max(8, Math.abs(p.rise));
+      mote.span = clamp(climb * (0.45 + rng() * 0.75), 3, 60);
+      // Some burn hotter than others: a spark off a resinous knot is not a
+      // flake of ash.
+      mote.heat = 0.55 + rng() * 0.45;
+      mote.vx = 0;
+      mote.vy = -p.rise;
       return mote;
     };
 
@@ -958,42 +1032,75 @@ const embers = {
     for (const mote of state.motes) {
       mote.life += dt;
       const turb = noise.noise3(mote.x * 0.003, mote.y * 0.003, t * 0.25 + mote.seed);
-      mote.x += (p.drift + turb * p.turbulence) * dt;
-      mote.y -= p.rise * dt;
+      mote.vx = p.drift + turb * p.turbulence;
+      mote.vy = -p.rise;
+      mote.x += mote.vx * dt;
+      mote.y += mote.vy * dt;
 
       if (mote.y < bbox.y - bbox.h * 0.1 || mote.y > bbox.y + bbox.h * 1.1 || mote.life > mote.span) {
         spawn(mote, true);
       }
     }
   },
-  draw({ g, p, shape, t, state }) {
+  draw({ g, p, shape, t, state, stable }) {
     const { bbox } = shape;
-    if (bbox.w <= 0 || bbox.h <= 0) return;
+    if (bbox.w <= 0 || bbox.h <= 0 || !state.motes?.length) return;
+    const ladder = emberLadder(stable.hotTemp, stable.coolTemp);
+    const span = Math.max(1, p.hotTemp - p.coolTemp);
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
 
     for (const mote of state.motes) {
-      // Fade in and out over the mote's life so nothing pops.
-      const f = clamp(mote.life / mote.span, 0, 1);
-      let alpha = Math.sin(f * Math.PI) * p.opacity;
-      if (p.twinkle > 0) alpha *= 1 - p.twinkle * (0.5 + 0.5 * Math.sin(t * 5 + mote.seed * 3));
+      const f = clamp(mote.life / Math.max(0.01, mote.span), 0, 1);
+      /**
+       * Hot, then cooling: the colour is a temperature, and so is the
+       * brightness. A blackbody's output climbs as the fourth power of its
+       * temperature, so an ember at twice the temperature is sixteen times
+       * as bright — which is why a fresh spark is a point of white-gold and a
+       * dying one is a dull red. Drawn far gentler than the fourth power,
+       * because the eye is logarithmic, the projector has a ceiling and a
+       * dull red ember still has to be seen from the pavement; but drawn
+       * rising with the heat: the old embers kept one brightness from birth
+       * to death and every one of them was a dim red dot.
+       */
+      const kelvin = lerpTemp(p.hotTemp * mote.heat + p.coolTemp * (1 - mote.heat), p.coolTemp, f);
+      const warmth = clamp((kelvin - p.coolTemp) / span, 0, 1);
+      // In and out over the first and last moments of its life, so nothing pops.
+      let alpha = p.opacity * clamp(f * 12, 0, 1) * clamp((1 - f) * 6, 0, 1) * (0.8 + 0.5 * warmth ** 1.3);
+      /**
+       * The twinkle is the ember tumbling: a flake hot on one face and cooled
+       * on the other shows each in turn, several times a second, and no two
+       * at the same rate.
+       */
+      if (p.twinkle > 0) {
+        const spin = 7 + (mote.seed % 7);
+        alpha *= 1 - p.twinkle * 0.55 * (0.5 + 0.5 * Math.sin(t * spin + mote.seed * 3)) ** 2;
+      }
       if (alpha <= 0.01) continue;
 
-      const r = p.size * mote.scale;
-      // An ember cools as it travels, so its colour is a temperature rather
-      // than a fade between two chosen hexes. That is what makes a dying one go
-      // deep red instead of merely dim.
-      const colour = blackbodyCss(lerpTemp(p.hotTemp, p.coolTemp, clamp(f, 0, 1)));
-      const grad = g.createRadialGradient(mote.x, mote.y, 0, mote.x, mote.y, r * 3);
-      grad.addColorStop(0, rgba(colour, alpha));
-      grad.addColorStop(1, rgba(colour, 0));
-      g.fillStyle = grad;
-      g.beginPath();
-      g.arc(mote.x, mote.y, r * 3, 0, TAU);
-      g.fill();
+      const sprite = ladder[Math.round(warmth * (EMBER_RUNGS - 1))];
+      const r = p.size * mote.scale * (0.8 + 0.5 * warmth);
+      const size = r * 8.5;
+      g.globalAlpha = clamp(alpha, 0, 1);
+      g.drawImage(sprite, mote.x - size / 2, mote.y - size / 2, size, size);
+
+      /**
+       * And a fainter, smaller echo a little way back along its path, the way
+       * it is drawn by an eye following the fire rather than the ember, so a
+       * hot mote reads as a moving spark rather than as a point.
+       */
+      const speed = Math.hypot(mote.vx, mote.vy);
+      if (speed > 1 && warmth > 0.15) {
+        const back = Math.min(r * 3, speed * 0.12);
+        const shrink = size * 0.7;
+        g.globalAlpha = clamp(alpha * 0.4, 0, 1);
+        g.drawImage(sprite, mote.x - (mote.vx / speed) * back - shrink / 2,
+          mote.y - (mote.vy / speed) * back - shrink / 2, shrink, shrink);
+      }
     }
+    g.globalAlpha = 1;
     g.restore();
   },
 };
