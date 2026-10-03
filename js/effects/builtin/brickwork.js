@@ -120,10 +120,10 @@ function layCourses(bbox, w, h, gap, origin = { x: 0, y: 0 }) {
  * Everything about how a brick looks is drawn from this rather than from one
  * generator run down the wall in laying order, and that is what lets two layers
  * agree about a single brick. In laying order, the colour of the brick at a
- * given course and column depended on how many bricks had been laid before it
- * — which depends on where the shape's bounding box starts — so Breach could
- * not know what colour the brick it was taking out had been, and retracing the
- * wall a pixel reshuffled every brick on it. Hashed from (row, col), a brick is
+ * given course and column would depend on how many bricks had been laid before
+ * it — which depends on where the shape's bounding box starts — so Breach could
+ * not know the colour of the brick it takes out, and retracing the wall by a
+ * pixel would reshuffle every brick on it. Hashed from (row, col), a brick is
  * the same brick whichever layer asks and however the shape was traced.
  */
 function brickHash(seed, row, col) {
@@ -165,13 +165,14 @@ const PALE = '#c4916d';
  *
  * Three things vary, at three scales. Each brick takes its own mix of the two
  * colours, its own lean in hue and its own lightness — that is the difference
- * between masonry and graph paper. Patches of the wall lean one way together (`batchAt`). And a few
- * in a hundred are the odd ones out: over-burnt bricks, which go nearly black
- * and are the single most recognisable thing about an old brick wall seen from
- * across a road, and the occasional soft pale one.
+ * between masonry and graph paper. Patches of the wall lean one way together
+ * (`batchAt`), as a delivery from one firing does. And a few in a hundred are
+ * the odd ones out: over-burnt bricks, which go nearly black and are the
+ * single most recognisable thing about an old brick wall seen from across a
+ * road, and the occasional soft pale one.
  *
  * Variation scales all of it, so at nought every brick is exactly `color` and
- * the wall is the tidy diagram it used to be.
+ * the wall is a tidy diagram of one.
  */
 function brickLook(p, row, col) {
   const v = clamp(Number(p.variation) || 0, 0, 1);
@@ -1461,7 +1462,7 @@ const breach = {
     // No glow is spread over the bricks round the hole: the light inside is
     // bright enough for the bloom downstream to spill it onto them, which is
     // where spill on a wall comes from anyway — and a gradient two holes wide
-    // was the dearest thing this layer drew.
+    // would be the dearest thing this layer drew.
 
     /**
      * What is falling: whole bricks, and the pieces that came with them.
@@ -1552,8 +1553,8 @@ function drawOpening(g, p, hole, t, w, h, gap, bite, rim, alpha) {
   g.globalAlpha = alpha * solidity;
   const lit = g.createRadialGradient(hole.cx, hole.cy, reach * 0.25, hole.cx, hole.cy, reach + bite + rim);
   // Brick *lit by* the light inside, which is the brick's colour multiplied
-  // by the light's: mixing the two instead gave a pale khaki that read as a
-  // painted outline rather than as broken faces catching the glow.
+  // by the light's. Mixing the two gives a pale khaki that reads as a line
+  // painted round the hole rather than as broken faces catching the glow.
   lit.addColorStop(0, litBy(edge, p.innerGlow, 1.4 * lift, 0.4));
   lit.addColorStop(0.5, litBy(edge, p.innerGlow, 0.9 * lift, 0.45));
   lit.addColorStop(0.85, litBy(edge, p.innerGlow, 0.4 * lift, 0.55));

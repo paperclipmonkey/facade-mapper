@@ -268,9 +268,9 @@ const bounce = {
         }
       }
 
-      // The halo stamped smaller than the old glow's radius for the same
-      // picture: an inverse square is all but gone by six tenths of the way
-      // out, and the rest of the square was paying for nothing.
+      // The halo is an inverse square, all but gone six tenths of the way out
+      // across its sprite, so it is stamped only as wide as the light it
+      // carries: any wider and the rest of the square pays for nothing.
       if (p.glow > 0) {
         const s = radius * (1.2 + p.glow * 1.5);
         g.globalAlpha = alpha * Math.min(1, 0.55 + 0.12 * p.glow);
@@ -398,10 +398,10 @@ function snakeScratch(n) {
  * A head, a neck and a body. The head is its own bulge — round at the snout,
  * widest a little behind the eyes and wider than the neck behind it — because
  * a snake whose front end is the same width as the rest of it is a hose with
- * one end cut off, which is what this was. The body holds its girth for nearly
- * half its length and then thins over the rest to a fine tail. Proportioned
- * off the body's own length as well as its thickness, so a short fat snake
- * still has a head rather than being all head.
+ * one end cut off. The body holds its girth for nearly half its length and
+ * then thins over the rest to a fine tail. Proportioned off the body's own
+ * length as well as its thickness, so a short fat snake still has a head
+ * rather than being all head.
  */
 function snakeWidth(s, L, half) {
   const hh = Math.min(half, L / 7);
@@ -1019,10 +1019,10 @@ function bakeIvy(color, tip) {
  * one drawImage, which is the only reason this can run alongside everything
  * else in a show.
  *
- * What it accumulates is a plant, not a line drawing of one. It used to be a
- * thin green stroke with the odd green oval beside it, which at house scale is
- * scribble: nothing about it said leaf, and nothing about it changed with age.
- * Now the leaves are baked once — ivy's three shapes in three ages of green,
+ * What it accumulates is a plant, not a line drawing of one. A thin green
+ * stroke with the odd green oval beside it is, at house scale, scribble:
+ * nothing about it says leaf, and nothing about it changes with age. So the
+ * leaves are baked once — ivy's three shapes in three ages of green,
  * each shaded, veined and edged — and stamped in alternating clusters along
  * every runner with a soft shadow under each, so where runners cross and
  * recross, the leaves pile into a mat with depth in it. And the stems age: a
@@ -1030,7 +1030,8 @@ function bakeIvy(color, tip) {
  * and woodier, at a few ages, from *behind* everything already drawn, so the
  * oldest runners — the ones that came up from the ground first — end up as the
  * thick bare trunks the rest of the plant hangs off. Every bit of that is a
- * stroke or a stamp into the same bitmap, so it costs what the scribble did.
+ * stroke or a stamp into the same bitmap, so a frame still costs one
+ * drawImage plus the few centimetres it adds.
  */
 const vine = {
   id: 'vine',

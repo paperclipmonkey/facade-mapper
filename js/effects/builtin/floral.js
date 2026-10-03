@@ -581,8 +581,8 @@ function drawLeaf(g, len, wide, green, dead) {
  * petal has fallen, the shrivelled stub of it still curled at the rim.
  *
  * That is what a dead flower is from across a road — not a stalk with nothing
- * on the end, which is what full Wilt used to leave and what read as a scratch
- * on the wall, but a dark, ragged head on a bent stem. Arcs and paths, never an
+ * on the end, which reads as a scratch on the wall, but a dark, ragged head on
+ * a bent stem. Arcs and paths, never an
  * ellipse: ellipses are petals, and a petal is what has to be countable.
  */
 function drawHeart(g, f, r, p, wilt, dead, petals, dist, petal) {
@@ -1540,11 +1540,12 @@ const ditsy = {
     /**
      * A dark ground, and that is the most important default in the effect.
      *
-     * It was cream at 85%, which is a white sheet thrown over the house with
-     * some flowers on it: a projector cannot print a pale fabric onto a wall at
-     * night, only light the whole wall pale. A deep ground throws little light,
-     * so the wall reads as dyed cloth and the flowers as what is printed on
-     * it — the way a dark ditsy print reads on a dress.
+     * A pale ground, the obvious one for a ditsy print, is a white sheet
+     * thrown over the house with some flowers on it: a projector cannot print
+     * a pale fabric onto a wall at night, only light the whole wall pale. A
+     * deep ground throws little light, so the wall reads as dyed cloth and the
+     * flowers as what is printed on it — the way a dark ditsy print reads on a
+     * dress.
      */
     { key: 'ground', type: 'color', label: 'Ground', default: '#163838' },
     /** Nought leaves the wall as it is and prints on it; one paints it out. */
@@ -1898,9 +1899,9 @@ function rosetteSprite(px, ink, light) {
    * Fat, round petals rather than thin pointed ones.
    *
    * A petal narrow enough to be a spike is mostly its own outline, so a rosette
-   * drawn that way is a black cog with some cream showing through it — which is
-   * what this was. The bulge has to be wide enough that the fill is the thing
-   * you see and the ink is a line round it.
+   * drawn that way is a cog of ink with a little of the fill showing through
+   * it. The bulge has to be wide enough that the fill is the thing you see and
+   * the ink is a line round it.
    */
   const petals = 8;
   for (let k = 0; k < petals; k++) {
@@ -2052,9 +2053,9 @@ const paisley = {
   params: [
     /**
      * Cream linework and madder fills on indigo: the bandana, the Kashmir
-     * shawl. The ground was a pale tan at 90% with black ink on it, which on a
-     * wall at night is a lit beige sheet with dark marks — there is no such
-     * thing as projecting black. On a dark ground the linework is the light,
+     * shawl. Black ink on a pale paper ground is, on a wall at night, a lit
+     * beige sheet with dark marks — there is no such thing as projecting
+     * black. On a dark ground the linework is the light,
      * which is how a print survives being thrown onto a house.
      */
     { key: 'ink', type: 'color', label: 'Ink', default: '#f1e2c4' },
