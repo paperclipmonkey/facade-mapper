@@ -49,7 +49,7 @@
  * through the bay window.
  */
 
-import { rgba, clamp, lerp, TAU, mixHex, makeRng, smoothstep, pointInPolygon } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, mixHex, makeRng, smoothstep, pointInPolygon, hashString } from '../../core/math.js';
 import { waterAbsorb } from '../color.js';
 import { collectObstacles, deflect, surfaceNormal, nearestSurface, isClear, findFreeSpot } from '../obstacles.js';
 import { glow, curveThrough, offscreen } from '../lib.js';
@@ -1516,9 +1516,20 @@ const shoal = {
     if (!state.fish?.length) return;
     const size = Math.max(3, p.size);
 
+    /**
+     * Fish are painted over one another, not added.
+     *
+     * A fish is not a light, it is a thing in front of the wall — and in a
+     * shoal the nearer fish hides the one behind it. Drawn additively, as
+     * they were, every place two fish crossed was brighter than either, and
+     * a shoal packed into a corner or streaming along an edge summed to a
+     * white bar with fins. Painted, the overlap is just the nearer fish, so a
+     * dense shoal stays a crowd of fish however dense it gets. Only the
+     * flash adds, because the flash is light: the mirror of the flank
+     * throwing the sky at you.
+     */
     g.save();
     g.clip(shape.path);
-    g.globalCompositeOperation = 'lighter';
     g.lineCap = 'round';
     g.lineJoin = 'round';
 
@@ -1700,6 +1711,7 @@ const shoal = {
        * stuck on it.
        */
       if (shine > 0.02) {
+        g.globalCompositeOperation = 'lighter';
         g.fillStyle = rgba(mixHex(flank, '#ffffff', 0.7), shine * 0.85);
         g.beginPath();
         g.moveTo(half * 0.62, -rim * 0.1);
@@ -1707,6 +1719,7 @@ const shoal = {
         g.quadraticCurveTo(0, rim * 0.85, half * 0.62, -rim * 0.1);
         g.closePath();
         g.fill();
+        g.globalCompositeOperation = 'source-over';
       }
 
       /**
@@ -1952,9 +1965,10 @@ const bubbles = {
        * under a level sill a bubble went nowhere: every one released below a
        * window gathered at the same spot under it and, drawn additively,
        * the pile burned into a white ball. Under a real sill the slightest
-       * tilt decides which way they go and they stream out along it; here
-       * the nearer end decides, at a steady crawl that drag holds to about a
-       * third of the rise speed.
+       * tilt decides which way they go and they run out along it quickly;
+       * here the nearer end decides, at a pace that drag holds to most of
+       * the rise speed, so a sill holds a short string of them rather than
+       * a crowd.
        */
       for (const o of obstacles) {
         const { bbox: ob } = o;
@@ -1969,7 +1983,7 @@ const bubbles = {
         deflect(o.points, b, b.r, 0.05, false);
         if (b.x !== wasX || b.y !== wasY) {
           const toward = b.x < ob.x + ob.w / 2 ? -1 : 1;
-          b.vx += toward * p.rise * 0.35 * drag * dt;
+          b.vx += toward * p.rise * 0.8 * drag * dt;
         }
       }
 
@@ -2928,28 +2942,74 @@ const outlineX = new Float64Array(BODY_SEGMENTS * 2 + 2);
 const outlineY = new Float64Array(BODY_SEGMENTS * 2 + 2);
 
 /**
+ * A small generator for one splash, reseeded from numbers rather than built
+ * from a string key — so a splash is the same droplets in every tab and on
+ * every frame it is in the air, and drawing one allocates nothing.
+ */
+let splashState = 0;
+
+function seedSplash(a, b, c) {
+  splashState = (Math.imul(a + 1, 2654435761) ^ Math.imul(b + 7, 2246822519) ^ Math.imul(c + 13, 3266489917)) >>> 0;
+}
+
+function splashRand() {
+  splashState = (Math.imul(splashState ^ (splashState >>> 15), 2246822519) + 0x9e3779b9) >>> 0;
+  return splashState / 4294967296;
+}
+
+/**
  * Spray, thrown on real ballistics from a point on the surface.
  *
  * Droplets leave at the speed the animal arrived with, and then they are
  * simply projectiles: the same `g` the leap used, so the water that comes off
  * a big leap hangs in the air longer than the water off a small one without
  * anything being told to.
+ *
+ * Each droplet is drawn as the streak it makes in a thirtieth of a second
+ * rather than as a dot: a dot a pixel or two across is invisible on a house,
+ * and what an eye or a camera actually sees of flying water is streaks. They
+ * all go into one path, so a splash is one stroke. And under them, where the
+ * animal broke the surface, a patch of white water spreading out along it
+ * and fading — the part of a splash you can see from across a road.
  */
-function splash(g, x, y, age, life, spread, speed, gPx, colour, strength, key) {
+function splash(g, x, y, age, life, spread, speed, gPx, colour, strength, foam) {
   if (age < 0 || age >= life || strength <= 0) return;
-  const rng = makeRng(key);
   const fade = 1 - age / life;
-  g.fillStyle = rgba(colour, clamp(fade * fade * strength, 0, 1));
-  for (let i = 0; i < 18; i++) {
-    const a = -Math.PI / 2 + (rng() - 0.5) * spread;
-    const v = speed * (0.35 + rng() * 1.15);
-    const dx = Math.cos(a) * v * age;
-    const dy = Math.sin(a) * v * age + 0.5 * gPx * age * age;
-    const r = Math.max(0.5, speed * 0.012 * (0.4 + rng()));
+
+  if (foam > 0) {
+    const wide = speed * (0.22 + age * 0.9);
+    const white = g.createRadialGradient(x, y, 0, x, y, wide);
+    white.addColorStop(0, rgba('#ffffff', clamp(fade * fade * strength * foam, 0, 1)));
+    white.addColorStop(0.35, rgba(colour, clamp(fade * strength * foam * 0.45, 0, 1)));
+    white.addColorStop(1, rgba(colour, 0));
+    g.save();
+    g.translate(x, y);
+    g.scale(1, 0.24);
+    g.translate(-x, -y);
+    g.fillStyle = white;
     g.beginPath();
-    g.arc(x + dx, y + dy, r, 0, TAU);
+    g.arc(x, y, wide, 0, TAU);
     g.fill();
+    g.restore();
   }
+
+  g.strokeStyle = rgba(mixHex(colour, '#ffffff', 0.4), clamp(fade * strength * 1.4, 0, 1));
+  g.lineWidth = Math.max(1, speed * 0.012);
+  g.lineCap = 'round';
+  g.beginPath();
+  for (let i = 0; i < 18; i++) {
+    const a = -Math.PI / 2 + (splashRand() - 0.5) * spread;
+    const v = speed * (0.35 + splashRand() * 1.15);
+    const vx = Math.cos(a) * v;
+    const vy = Math.sin(a) * v + gPx * age;
+    const px = x + vx * age;
+    const py = y + Math.sin(a) * v * age + 0.5 * gPx * age * age;
+    // Below the surface it is water again.
+    if (py > y + 2) continue;
+    g.moveTo(px, py);
+    g.lineTo(px - vx * 0.035, py - vy * 0.035);
+  }
+  g.stroke();
 }
 
 const dolphins = {
@@ -3234,15 +3294,19 @@ const dolphins = {
         const outX = wrapped(unwrappedX - p.speed * launch, spanX, bbox.x - length * 1.25);
         const inX = wrapped(unwrappedX - p.speed * reentry, spanX, bbox.x - length * 1.25);
         const life = 0.6;
+        const who = hashString(shape.id);
+        seedSplash(who, i, leapIndex * 3);
         splash(g, outX, surfacePx, launch, life, 1.5,
           Math.max(L * 0.9, entrySpeed * 0.55), gPx, belly,
-          p.spray * p.level * 0.5, `dolphin-out:${shape.id}:${i}:${leapIndex}`);
-        splash(g, inX, surfacePx, reentry, life, 2.2,
+          p.spray * p.level * 0.5, 0.5);
+        seedSplash(who, i, leapIndex * 3 + 1);
+        splash(g, inX, surfacePx, reentry, life * 1.3, 2.2,
           Math.max(L * 1.1, entrySpeed * 0.7), gPx, belly,
-          p.spray * p.level * 0.6, `dolphin-in:${shape.id}:${i}:${leapIndex}`);
+          p.spray * p.level * 0.6, 0.8);
         // The blow: a narrow plume of exhaled breath, straight up, slow.
+        seedSplash(who, i, leapIndex * 3 + 2);
         splash(g, outX, surfacePx, launch, 0.75, 0.5, L * 0.35, gPx * 0.15,
-          '#ffffff', p.spray * p.level * 0.35, `dolphin-blow:${shape.id}:${i}:${leapIndex}`);
+          '#ffffff', p.spray * p.level * 0.35, 0);
       }
     }
 
