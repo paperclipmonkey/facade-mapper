@@ -274,10 +274,9 @@ const SHAFT_STOPS = [0, 0.035, 0.1, 0.2, 0.34, 0.52, 0.74, 1];
  * of sunlight in water actually looks — light gathered by a moving lens and
  * caught by whatever is suspended in it, not shone through a slot.
  *
- * Painting at a sixteenth of the pixels also pays for itself: the fan costs
- * about what the old stack did on a software canvas, and far less wherever
- * the canvas is on the GPU and the old stack's twelvefold overdraw was the
- * whole bill.
+ * Painting at a sixteenth of the pixels is what pays for the blur and the
+ * blow-up: on a software canvas the whole fan, both of those included,
+ * measures within a fifth or so of what the old stack cost.
  *
  * Where a browser has no canvas filter the blow-up alone softens the edges a
  * little, and the shafts are harder but still correct.
@@ -1162,9 +1161,9 @@ const shoal = {
      * Nothing stopped it being, and for the third of the time it was the whole
      * shoal was being steered *into* the glass while the avoidance below shoved
      * it back out. The two settle against each other rather than cancelling:
-     * every fish ends up pressed on the sill, holding station, buzzing, and
-     * since they are drawn additively the pile reads as one white smear with
-     * fins. It is the standoff that looks broken, not either force.
+     * every fish ends up pressed on the sill, holding station, buzzing — a
+     * pile of fish where there should be a shoal. It is the standoff that
+     * looks broken, not either force.
      *
      * Sliding it out to the nearest edge keeps the tour going — the shoal
      * rounds the window instead of parking on it — and costs one surface query
