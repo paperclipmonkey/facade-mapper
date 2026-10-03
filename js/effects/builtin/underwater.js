@@ -253,65 +253,47 @@ export function orbitalDecay(z, lambda) {
 const SHAFT_STOPS = [0, 0.035, 0.1, 0.2, 0.34, 0.52, 0.74, 1];
 
 /**
- * How a shaft is drawn, and why it is not drawn at full size.
+ * How a shaft is drawn.
  *
  * Canvas has no gradient across the width of a shape, and a beam with a hard
  * edge is a plank. The old answer was a dozen nested quads, each carrying an
  * increment of a Gaussian — but the outermost still stood at a tenth of the
- * peak, so every shaft had a visible edge at its full width and read as a
- * slab of cellophane, and the stack painted the middle of every beam twelve
- * times, which made the shafts the dearest thing in the set.
+ * peak, so every shaft had a visible edge at its full width and read as a slab
+ * of cellophane; and the stack painted the middle of every beam twelve times
+ * over, which made the shafts the dearest thing in the set.
  *
- * A shaft of light in water has no detail finer than a few centimetres. So
- * the fan is drawn into a buffer at a quarter of the resolution: each shaft a
- * soft-sided body, a narrower, brighter core that drifts from side to side as
- * the lens above it changes, and a few thin streaks — three fills, each with
- * the shaft's own gradient down its length. Then the whole buffer is blurred
- * once and blown back up over the shape. The blur is what feathers every
- * edge into nothing, and it costs one filter for the entire fan rather than
- * one per shaft; under it the three add up to a beam that is brightest along
- * a line that wanders and is grained along its length, which is how a shaft
- * of sunlight in water actually looks — light gathered by a moving lens and
- * caught by whatever is suspended in it, not shone through a slot.
+ * Now a shaft is cut lengthways into strips a few pixels wide that cover it
+ * once, each filled with the shaft's own gradient — the absorption down its
+ * length — at the brightness of the light across it at that strip. The light
+ * across it is a soft Gaussian body reaching out until it is under a
+ * hundredth of the peak, so the beam has no edge anywhere; a narrower core
+ * that wanders from side to side as the lens above it changes; and a few
+ * thin rays drifting slowly through it — light gathered by a moving lens and
+ * caught by whatever is suspended in the water, not shone through a slot.
  *
- * Painting at a sixteenth of the pixels is what pays for the blur and the
- * blow-up: on a software canvas the whole fan, both of those included,
- * measures within a fifth or so of what the old stack cost.
- *
- * Where a browser has no canvas filter the blow-up alone softens the edges a
- * little, and the shafts are harder but still correct.
+ * A fill costs about the same whatever is in it, so the strips are gathered
+ * by brightness into eleven levels and each level is one path, a run of
+ * neighbours at the same level being one quad. The levels are spaced in
+ * proportion, closer together at the dim end, so the faint fringe of a shaft
+ * fades out in steps nobody can see rather than stopping at the first one.
  */
-const SHAFT_RESOLUTION = 0.25;
-const SHAFT_BUFFER_MAX = 720;
-let shaftBuffer = null;
-let shaftSoft = null;
+const SHAFT_REACH = 1.4;
+const SHAFT_STRIPS_MIN = 8;
+const SHAFT_STRIPS_MAX = 34;
+const SHAFT_LEVELS = [0.015, 0.04, 0.075, 0.12, 0.18, 0.25, 0.34, 0.45, 0.58, 0.74, 0.92];
 
-/** A buffer of at least `w × h`, grown rather than replaced, cleared over that much of it. */
-function shaftScratch(canvas, w, h) {
-  const out = canvas || offscreen(w, h);
-  if (out.width < w || out.height < h) {
-    out.width = Math.max(out.width, w);
-    out.height = Math.max(out.height, h);
-  }
-  const b = out.getContext('2d');
-  b.setTransform(1, 0, 0, 1, 0, 0);
-  b.filter = 'none';
-  b.globalAlpha = 1;
-  b.globalCompositeOperation = 'copy';
-  b.fillStyle = 'rgba(0,0,0,0)';
-  b.fillRect(0, 0, w, h);
-  return out;
-}
+/** Each strip's level for the shaft being drawn, or -1 for none. Scratch. */
+const shaftStripLevel = new Int8Array(SHAFT_STRIPS_MAX);
 
-/** One side-to-side slice of a shaft, `lo..hi` in half-widths of its axis, added to the path as a closed quad. */
-function shaftSlice(b, originX, top, endX, endY, w0, w1, lo, hi) {
-  // Offsets taken along the surface rather than square to the shaft, so a
-  // slanting shaft does not poke a corner up out of the water.
-  b.moveTo(originX + lo * w0 * 0.5, top);
-  b.lineTo(originX + hi * w0 * 0.5, top);
-  b.lineTo(endX + hi * w1 * 0.5, endY);
-  b.lineTo(endX + lo * w1 * 0.5, endY);
-  b.closePath();
+/**
+ * The light across a shaft at `x` half-widths from its axis, 0..1 of the
+ * peak: the body, the core centred at `core`, and three rays at `ray0..2`.
+ */
+function shaftLight(x, core, ray0, ray1, ray2) {
+  let light = 0.62 * Math.exp(-2.2 * x * x) + 0.38 * Math.exp(-((x - core) ** 2) / 0.1);
+  light += 0.28 * (Math.exp(-((x - ray0) ** 2) / 0.006) + Math.exp(-((x - ray1) ** 2) / 0.004)
+    + Math.exp(-((x - ray2) ** 2) / 0.009));
+  return Math.min(1, light);
 }
 
 const godrays = {
@@ -343,13 +325,6 @@ const godrays = {
     // The surface is below the shape: there is no water here to put light in.
     if (bottom - top <= 1) return;
 
-    // Only the part of the shape a projector can show is worth drawing into.
-    const left = Math.max(bbox.x, -world.w * 0.1);
-    const right = Math.min(bbox.x + bbox.w, world.w * 1.1);
-    const high = Math.max(top, -world.h * 0.1);
-    const low = Math.min(bottom, world.h * 1.1);
-    if (right - left < 2 || low - high < 2) return;
-
     const count = Math.max(1, Math.round(p.shafts));
     const tiltRad = (p.tilt * Math.PI) / 180;
     const spreadRad = (p.spread * Math.PI) / 180;
@@ -379,18 +354,6 @@ const godrays = {
       g.fillRect(bbox.x, top, bbox.w, bottom - top);
     }
 
-    // The quarter-size buffer, in world coordinates with a little margin all
-    // round so the blur has room to fall off before the edge.
-    const res = Math.min(SHAFT_RESOLUTION, SHAFT_BUFFER_MAX / (right - left), SHAFT_BUFFER_MAX / (low - high));
-    const pad = 12;
-    const bw = Math.ceil((right - left) * res) + pad * 2;
-    const bh = Math.ceil((low - high) * res) + pad * 2;
-    shaftBuffer = shaftScratch(shaftBuffer, bw, bh);
-    const b = shaftBuffer.getContext('2d');
-    b.globalCompositeOperation = 'lighter';
-    b.setTransform(res, 0, 0, res, pad - left * res, pad - high * res);
-
-    let totalWidth = 0;
     for (let i = 0; i < count; i++) {
       const rng = makeRng(`godrays:${shape.id}:${i}`);
       const jitter = rng();
@@ -409,13 +372,12 @@ const godrays = {
        * rather than as searchlights. Same phase, different consequence.
        */
       const phase = t * swell + jitter * TAU;
-      const angle = tiltRad + fan * spreadRad + Math.sin(phase) * p.sway * 0.16;
+      const angle = clamp(tiltRad + fan * spreadRad + Math.sin(phase) * p.sway * 0.16, -1.4, 1.4);
       const focus = 0.5 + 0.5 * Math.cos(phase * 1.37 + jitter * 3.1);
-
-      const slant = Math.max(0.15, Math.cos(clamp(angle, -1.4, 1.4)));
-      const length = (bottom - top) / slant;
-      const endX = originX + Math.sin(angle) * length;
-      const endY = top + Math.cos(angle) * length;
+      const slant = 1 / Math.max(0.15, Math.cos(angle));
+      // All the way down: every shaft ends at the foot of the shape.
+      const endX = originX + Math.tan(angle) * (bottom - top);
+      const endY = bottom;
 
       const w0 = bbox.w * p.width * (0.55 + 0.9 * (1 - focus)) * (0.7 + jitter * 0.6);
       // Beams widen going down: the surface is a rough lens, not a slit.
@@ -425,25 +387,23 @@ const godrays = {
       // — a fan that brightens as one reads as a lamp behind a fan blade.
       const shimmer = 1 - p.shimmer * 0.5 * (0.5 + 0.5 * noise.noise2(i * 3.7, t * 0.9));
       // A focused shaft is narrower and brighter at once: the lens again.
-      const peak = 0.9 * p.intensity * shimmer * (0.6 + 0.4 * focus);
+      const peak = p.intensity * shimmer * (0.6 + 0.4 * focus);
+      if (peak <= 0.002) continue;
 
       /**
-       * The shaft's own gradient, down its length.
+       * The colour down the shaft.
        *
-       * Its colour is the light after the water it has actually crossed, and
+       * The light as it arrives after the water it has actually crossed — and
        * a slanting shaft has crossed more of it than its depth: to get `z`
        * metres down at an angle θ off vertical, sunlight travels `z / cos θ`.
-       * So the shafts at the edge of the fan redden out sooner than the ones
-       * coming straight down — which is the only reason a fan of them is not
-       * one colour, and is visible as the outer ones going bluer first.
-       *
-       * Made on `g` and filled on the buffer: a gradient belongs to no
-       * context in particular, and it is in world coordinates either way.
+       * So the shafts at the edge of a fan redden out sooner than the ones
+       * coming straight down, which is the only reason a fan of them is not
+       * one colour.
        */
       const grad = g.createLinearGradient(originX, top, endX, endY);
       for (const u of SHAFT_STOPS) {
         const y = lerp(top, endY, u);
-        const colour = waterAbsorb(p.color, depthAt(p, y, world) / slant, p.turbidity);
+        const colour = waterAbsorb(p.color, depthAt(p, y, world) * slant, p.turbidity);
         /**
          * Out of the surface band, brightest a little way down, then fading
          * along its own length as well as reddening: a shaft ends because the
@@ -452,55 +412,60 @@ const godrays = {
          * the bright mirror under the waterline instead of starting at a ruled
          * line across the top of the picture.
          */
-        const rise = smoothstep(0, 0.09, u);
-        grad.addColorStop(u, rgba(colour, (0.3 + 0.7 * rise) * (1 - u) ** 1.2));
+        const rise = smoothstep(0, 0.12, u);
+        grad.addColorStop(u, rgba(colour, rise * (1 - u) ** 1.2));
       }
-      b.fillStyle = grad;
+      g.fillStyle = grad;
 
-      // The body, soft-sided under the blur...
-      b.globalAlpha = Math.min(1, peak * 0.42);
-      b.beginPath();
-      shaftSlice(b, originX, top, endX, endY, w0, w1, -1, 1);
-      b.fill();
-      // ...the core: narrower, brighter, wandering across the beam...
-      const wander = 0.4 * p.shimmer * noise.noise2(i * 2.3 + 7.1, t * 0.35);
-      b.globalAlpha = Math.min(1, peak * 0.4);
-      b.beginPath();
-      shaftSlice(b, originX, top, endX, endY, w0, w1, wander - 0.36, wander + 0.36);
-      b.fill();
-      /**
-       * ...and the streaks: a few thin rays inside the beam, each its own
-       * width, drifting slowly across it. The light in a shaft does not come
-       * through as a smooth wash; it is gathered by facets of the surface,
-       * and each facet sends its own ray. One path, so one fill for all of
-       * them.
-       */
-      b.globalAlpha = Math.min(1, peak * 0.5);
-      b.beginPath();
-      for (let k = 0; k < 4; k++) {
-        const at = 0.8 * noise.noise2(i * 4.1 + k * 9.7, t * 0.12 * (1 + k * 0.3));
-        const thin = 0.05 + 0.07 * rng();
-        shaftSlice(b, originX, top, endX, endY, w0, w1, at - thin, at + thin);
+      // Where the core and the rays are this frame: drifting, slowly, each on
+      // its own noise, so the grain of the shaft moves as the surface does.
+      const wander = p.shimmer;
+      const core = 0.45 * wander * noise.noise2(i * 2.3 + 7.1, t * 0.35);
+      const ray0 = 0.9 * noise.noise2(i * 4.1 + 1.3, t * 0.12);
+      const ray1 = 0.9 * noise.noise2(i * 4.1 + 9.7, t * 0.15 + 3.1);
+      const ray2 = 0.9 * noise.noise2(i * 4.1 + 17.3, t * 0.1 + 6.4);
+
+      // The strips, and which level each lands on.
+      const strips = clamp(Math.round((w1 * SHAFT_REACH * 2) / 6), SHAFT_STRIPS_MIN, SHAFT_STRIPS_MAX);
+      for (let s = 0; s < strips; s++) {
+        const x = (((s + 0.5) / strips) * 2 - 1) * SHAFT_REACH;
+        const light = shaftLight(x, core, ray0, ray1, ray2) * Math.min(1, peak);
+        // The nearest level, in ratio: the steps are proportional at every brightness.
+        let level = -1;
+        for (let k = 0; k < SHAFT_LEVELS.length; k++) {
+          if (light >= SHAFT_LEVELS[k] * 0.82) level = k;
+        }
+        shaftStripLevel[s] = level;
       }
-      b.fill();
-      totalWidth += w0;
+      for (let k = 0; k < SHAFT_LEVELS.length; k++) {
+        let any = false;
+        g.beginPath();
+        for (let s = 0; s < strips; s++) {
+          if (shaftStripLevel[s] !== k) continue;
+          // A run of neighbours at the same level is one quad.
+          let e = s;
+          while (e + 1 < strips && shaftStripLevel[e + 1] === k) e++;
+          const lo = ((s / strips) * 2 - 1) * SHAFT_REACH;
+          const hi = (((e + 1) / strips) * 2 - 1) * SHAFT_REACH;
+          // Offsets taken along the surface rather than square to the shaft,
+          // so a slanting shaft does not poke a corner up out of the water.
+          g.moveTo(originX + lo * w0 * 0.5, top);
+          g.lineTo(originX + hi * w0 * 0.5, top);
+          g.lineTo(endX + hi * w1 * 0.5, endY);
+          g.lineTo(endX + lo * w1 * 0.5, endY);
+          g.closePath();
+          any = true;
+          s = e;
+        }
+        if (!any) continue;
+        // Brightness above one is the gradient at full strength: it already
+        // carries the shaft's light, and a level is a fraction of it.
+        g.globalAlpha = Math.min(1, SHAFT_LEVELS[k] * Math.max(1, peak));
+        g.fill();
+      }
+      g.globalAlpha = 1;
     }
 
-    /**
-     * The one blur, sized to the shafts: about a tenth of a typical shaft's
-     * width at the surface. Enough that no edge survives it, and not so much
-     * that a shaft turns into a column of fog — it keeps its body, its core
-     * and its streaks, only feathered.
-     */
-    shaftSoft = shaftScratch(shaftSoft, bw, bh);
-    const s = shaftSoft.getContext('2d');
-    const sigma = clamp((totalWidth / count) * res * 0.1, 1, 6);
-    s.filter = `blur(${sigma.toFixed(1)}px)`;
-    s.drawImage(shaftBuffer, 0, 0, bw, bh, 0, 0, bw, bh);
-    s.filter = 'none';
-    s.globalCompositeOperation = 'source-over';
-
-    g.drawImage(shaftSoft, 0, 0, bw, bh, left - pad / res, high - pad / res, bw / res, bh / res);
     g.restore();
   },
 };
@@ -606,13 +571,9 @@ function stampFlecks(g, sprite, ys, light, count, spacing, tall, peak, run, minW
  * away.
  */
 const GLINT_SIZE = 96;
-const glintSprites = new Map();
 
-function glintSprite(colour) {
-  let sprite = glintSprites.get(colour);
-  if (sprite) return sprite;
-  if (glintSprites.size > 64) glintSprites.clear();
-  sprite = offscreen(GLINT_SIZE, GLINT_SIZE);
+function bakeGlint(colour) {
+  const sprite = offscreen(GLINT_SIZE, GLINT_SIZE);
   const g = sprite.getContext('2d');
   const m = GLINT_SIZE / 2;
   g.globalCompositeOperation = 'lighter';
@@ -643,8 +604,6 @@ function glintSprite(colour) {
   spike.addColorStop(1, rgba(colour, 0));
   g.fillStyle = spike;
   g.fillRect(m - 1, m * 0.75, 2, m * 0.5);
-
-  glintSprites.set(colour, sprite);
   return sprite;
 }
 
@@ -657,13 +616,9 @@ function glintSprite(colour) {
  * instead of into a string of beads.
  */
 const PATCH_SIZE = 48;
-const patchSprites = new Map();
 
-function patchSprite(colour) {
-  let sprite = patchSprites.get(colour);
-  if (sprite) return sprite;
-  if (patchSprites.size > 64) patchSprites.clear();
-  sprite = offscreen(PATCH_SIZE, PATCH_SIZE);
+function bakePatch(colour) {
+  const sprite = offscreen(PATCH_SIZE, PATCH_SIZE);
   const g = sprite.getContext('2d');
   const m = PATCH_SIZE / 2;
   const soft = g.createRadialGradient(m, m, 0, m, m, m);
@@ -673,8 +628,30 @@ function patchSprite(colour) {
   }
   g.fillStyle = soft;
   g.fillRect(0, 0, PATCH_SIZE, PATCH_SIZE);
-  patchSprites.set(colour, sprite);
   return sprite;
+}
+
+/**
+ * Every sprite one waterline needs, baked together the first time it draws
+ * and kept in its state: the glint, a fleck for each row of the mirror band
+ * in the colour of the water that row is seen through, and a fleck for the
+ * light above the line.
+ *
+ * In `state` rather than shared, as every cache in this library is, so a tab
+ * builds exactly the canvases another tab builds, in the same order; and all
+ * at once, so which of them exists never depends on which frames a tab
+ * happened to paint. Keyed on `stable`: a murkiness bound to an LFO must not
+ * bake a new set a frame.
+ */
+function waterlineSprites(state, stable) {
+  const key = `${stable.color}|${stable.turbidity}`;
+  if (state.spriteKey === key) return state.sprites;
+  const rows = MIRROR_ROWS.map(([, distance]) =>
+    bakePatch(waterAbsorb(stable.color, distance * 0.6, stable.turbidity)));
+  const surface = waterAbsorb(stable.color, 0, stable.turbidity);
+  state.sprites = { glint: bakeGlint(surface), rows, spill: bakePatch(surface) };
+  state.spriteKey = key;
+  return state.sprites;
 }
 
 const waterline = {
@@ -707,13 +684,14 @@ const waterline = {
     { key: 'spill', type: 'range', label: 'Light above the line', default: 0.7, min: 0, max: 2, step: 0.01 },
     { key: 'level', type: 'range', label: 'Brightness', default: 1, min: 0, max: 3, step: 0.05 },
   ],
-  draw({ g, p, stable, shape, t, world }) {
+  draw({ g, p, stable, shape, t, world, state }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2 || p.level <= 0) return;
 
     const metresPerPixel = (p.metres || 14) / Math.max(1, world.h);
     const pixelsPerMetre = 1 / Math.max(1e-6, metresPerPixel);
     const level = p.level;
+    const sprites = waterlineSprites(state, stable);
 
     /**
      * The tide, which is the difference between a picture of water and water.
@@ -893,10 +871,7 @@ const waterline = {
       g.stroke();
 
       if (p.glint > 0) {
-        // The sprite's tint from `stable`: a baked sprite is a cache, and a
-        // murkiness bound to an LFO would otherwise bake a new one a frame.
-        const flecks = patchSprite(waterAbsorb(stable.color, distance * 0.6, stable.turbidity));
-        stampFlecks(g, flecks, rowY, rowLight, count, spacing, tall,
+        stampFlecks(g, sprites.rows[r], rowY, rowLight, count, spacing, tall,
           0.3, 0.1, tall * 6, 1.4, 0.15, 0.9 * fade * p.glint * level);
       }
     }
@@ -938,7 +913,7 @@ const waterline = {
      * in it — or a facet ten samples wide is ten glints welded into a bar.
      */
     if (p.glint > 0) {
-      const sprite = glintSprite(surfaceColour);
+      const sprite = sprites.glint;
       for (let i = 1; i < count - 1; i++) {
         const here = facing(surfSlope[i], 0.16);
         if (here < 0.55) continue;
@@ -978,7 +953,7 @@ const waterline = {
      */
     if (p.spill > 0 && baseY > bbox.y) {
       const reach = world.h * 0.12;
-      const sprite = patchSprite(surfaceColour);
+      const sprite = sprites.spill;
       for (let b = 1; b <= 4; b++) {
         const up = (b / 4) ** 1.3 * reach * 0.85;
         const fade = (1 - b / 5) ** 1.5 * p.spill * level;
@@ -1805,15 +1780,34 @@ function ventsFor(shape, count, rng, spread) {
  * three paths and three fills.
  */
 const BUBBLE_RUNGS = [16, 32, 64];
-const bubbleSprites = new Map();
 
-function bubbleSprite(colour, diameter) {
-  let ladder = bubbleSprites.get(colour);
-  if (!ladder) {
-    if (bubbleSprites.size > 64) bubbleSprites.clear();
-    ladder = BUBBLE_RUNGS.map((size) => bakeBubble(colour, size));
-    bubbleSprites.set(colour, ladder);
+/**
+ * The ladders for one layer: one per whole metre of depth the shape spans,
+ * each tinted for the water a bubble's light crosses at that depth, all baked
+ * the first time the layer draws and kept in its state. All at once because
+ * which depths a bubble has reached by a given frame depends on the frame
+ * rate, and a cache filled in that order is a different cache in every tab;
+ * keyed on `stable`, because a murkiness or a surface bound to an LFO must not
+ * bake a new set every frame.
+ */
+function bubbleLadders(state, stable, shape, world) {
+  const deepest = Math.min(40, Math.ceil(depthAt(stable, shape.bbox.y + shape.bbox.h, world)));
+  const key = `${stable.color}|${stable.turbidity}|${deepest}`;
+  if (state.ladderKey === key) return state.ladders;
+  const ladders = [];
+  for (let m = 0; m <= deepest; m++) {
+    // The light crosses about a third of the bubble's depth: it is lit from
+    // the surface and seen through the water in front of it.
+    const colour = waterAbsorb(stable.color, m * 0.35, stable.turbidity);
+    ladders.push(BUBBLE_RUNGS.map((size) => bakeBubble(colour, size)));
   }
+  state.ladders = ladders;
+  state.ladderKey = key;
+  return ladders;
+}
+
+/** The rung of `ladder` to stamp a bubble `diameter` pixels across from. */
+function bubbleRung(ladder, diameter) {
   for (let i = 0; i < BUBBLE_RUNGS.length - 1; i++) {
     if (diameter <= BUBBLE_RUNGS[i]) return ladder[i];
   }
@@ -2000,6 +1994,7 @@ const bubbles = {
   },
   draw({ g, p, stable, shape, state, world }) {
     if (!state.bubbles?.length || p.level <= 0) return;
+    const ladders = bubbleLadders(state, stable, shape, world);
 
     g.save();
     g.clip(shape.path);
@@ -2009,13 +2004,7 @@ const bubbles = {
 
     for (const b of state.bubbles) {
       const metres = depthAt(p, b.y, world);
-      /**
-       * The tint, quantised to a third of a metre of water (the bubble's
-       * light only crosses a third of its depth) so a few dozen sprites cover
-       * every depth, and taken from `stable`: the sprites are a cache, and a
-       * murkiness bound to an LFO would otherwise bake a ladder a frame.
-       */
-      const colour = waterAbsorb(stable.color, Math.round(metres) * 0.35, stable.turbidity);
+      const ladder = ladders[clamp(Math.round(metres), 0, ladders.length - 1)];
       // Fades in off the vent and out at the surface, so nothing appears or
       // vanishes on a frame boundary.
       const fade = clamp(b.life * 4, 0, 1)
@@ -2037,7 +2026,7 @@ const bubbles = {
       const w = b.r * 2 * (1 + big * 0.12);
       const h = b.r * 2 * squash;
       g.globalAlpha = alpha;
-      g.drawImage(bubbleSprite(colour, w), b.x - w / 2, b.y - h / 2, w, h);
+      g.drawImage(bubbleRung(ladder, w), b.x - w / 2, b.y - h / 2, w, h);
     }
     g.globalAlpha = 1;
 

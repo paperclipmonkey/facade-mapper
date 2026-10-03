@@ -10,7 +10,7 @@
  * weather and depth that flat colour never will.
  */
 
-import { rgba, clamp, lerp, TAU, frac, mixHex, hexToRgb, hashString } from '../../core/math.js';
+import { rgba, clamp, lerp, TAU, frac, mixHex, hexToRgb, hashString, smoothstep } from '../../core/math.js';
 import { offscreen, glow } from '../lib.js';
 import { blackbodyCss, mixLinear } from '../color.js';
 import { ensureField } from '../field.js';
@@ -233,36 +233,72 @@ const rain = {
  * ------------------------------------------------------------------ */
 
 /**
- * The cones are drawn into a buffer a quarter of the size and blown up once.
+ * The cone, baked once per beam width and stamped.
  *
- * A beam in haze has no edge and no detail — it is scattered light, the
- * softest thing in the picture — so drawing it at full resolution spends the
- * budget on pixels nobody can see. One accumulator holds every cone; one
- * scratch builds each cone before it is added, because a cone is two
- * gradients multiplied together and the second one, applied with
- * `destination-in`, would cut into any cone already there. Both are
- * overwritten whole each time, so they carry nothing between frames.
+ * What makes a beam visible is light scattered out of it by the air, so its
+ * brightness is a Gaussian across the beam — a profile in *angle* about the
+ * lamp — times a falloff along it: near the lamp the light is squeezed into a
+ * narrow beam and the haze in it is brightest, further out the same light is
+ * spread across a wider one. That product has no edge anywhere, which is the
+ * whole difference between a beam and a wedge of paint, and Canvas cannot fill
+ * it directly: a gradient varies in one direction and this varies in two.
+ *
+ * So it is computed per texel into a sprite, apex at the left and the beam
+ * running right, in the layer's colour, the first time a layer draws; and each
+ * frame a beam is one `drawImage`, rotated to where it points and scaled to
+ * how far it reaches. Two of them — one that stops dead where the beam meets
+ * the wall, one that runs out of the shape into the sky — because which a
+ * beam is changes as it sweeps.
  */
-const BEAM_RESOLUTION = 0.25;
-const BEAM_BUFFER_MAX = 720;
-let beamSum = null;
-let beamOne = null;
+const CONE_W = 256;
 
-/** A buffer of at least `w × h`, grown rather than replaced, cleared over that much of it. */
-function beamScratch(canvas, w, h) {
-  const out = canvas || offscreen(w, h);
-  if (out.width < w || out.height < h) {
-    out.width = Math.max(out.width, w);
-    out.height = Math.max(out.height, h);
+function bakeCone(colour, half, lands) {
+  // Out to where the Gaussian is a hundredth of its peak, and not past a
+  // right angle either side, which is a floodlight rather than a beam.
+  const span = Math.min(1.25, half * 1.9);
+  const tall = clamp(Math.round(2 * CONE_W * Math.tan(Math.min(span, 1.2)) + 4), 8, CONE_W * 2);
+  const sprite = offscreen(CONE_W, tall);
+  const g = sprite.getContext('2d');
+  const image = g.createImageData(CONE_W, tall);
+  const data = image.data;
+  const { r, g: gr, b } = hexToRgb(colour);
+  if (data.length >= CONE_W * tall * 4) {
+    const m = tall / 2;
+    for (let y = 0; y < tall; y++) {
+      for (let x = 0; x < CONE_W; x++) {
+        const dx = x + 0.5;
+        const dy = y + 0.5 - m;
+        const d = Math.hypot(dx, dy) / CONE_W;
+        if (d > 1) continue;
+        // The angle off the axis, in half-beam-widths.
+        const a = Math.atan2(dy, dx) / half;
+        const across = Math.exp(-1.25 * a * a);
+        // Rising out of the lamp, then thinning as the beam spreads; at the
+        // far end either dissolving into the spot it makes on the wall — the
+        // last tenth of it is under the spot, and an edge there would show as
+        // a cut across the beam — or carrying on into the dark.
+        const along = smoothstep(0, 0.03, d)
+          * (lands ? 0.4 + 0.6 * (1 - d) ** 1.5 : 0.3 + 0.7 * (1 - d) ** 2)
+          * (lands ? smoothstep(1, 0.84, d) : smoothstep(1, 0.75, d));
+        const o = (y * CONE_W + x) * 4;
+        data[o] = r;
+        data[o + 1] = gr;
+        data[o + 2] = b;
+        data[o + 3] = clamp(across * along, 0, 1) * 255;
+      }
+    }
   }
-  const b = out.getContext('2d');
-  b.setTransform(1, 0, 0, 1, 0, 0);
-  b.globalAlpha = 1;
-  b.globalCompositeOperation = 'copy';
-  b.fillStyle = 'rgba(0,0,0,0)';
-  b.fillRect(0, 0, w, h);
-  b.globalCompositeOperation = 'source-over';
-  return out;
+  g.putImageData(image, 0, 0);
+  return sprite;
+}
+
+/** The pair of cone sprites for this layer, kept in its state, keyed on `stable`. */
+function coneSprites(state, colour, half) {
+  const key = `${colour}|${half.toFixed(4)}`;
+  if (state.coneKey === key) return state.cones;
+  state.cones = { lands: bakeCone(colour, half, true), open: bakeCone(colour, half, false) };
+  state.coneKey = key;
+  return state.cones;
 }
 
 /**
@@ -323,7 +359,7 @@ const searchlight = {
     { key: 'haze', type: 'range', label: 'Haze', default: 0.4, min: 0, max: 1, step: 0.01 },
     { key: 'flicker', type: 'range', label: 'Flicker', default: 0.08, min: 0, max: 1, step: 0.01 },
   ],
-  draw({ g, p, shape, t, noise, world }) {
+  draw({ g, p, stable, shape, t, noise, state }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2 || p.intensity <= 0) return;
     const ox = bbox.x + p.originX * bbox.w;
@@ -332,33 +368,16 @@ const searchlight = {
     const arc = (p.arc * Math.PI) / 180;
     const aim = (p.aim * Math.PI) / 180;
     const beams = Math.round(p.beams);
-
-    // Only the part of the shape a projector can show is worth a buffer.
-    const left = Math.max(bbox.x, -world.w * 0.1);
-    const right = Math.min(bbox.x + bbox.w, world.w * 1.1);
-    const high = Math.max(bbox.y, -world.h * 0.1);
-    const low = Math.min(bbox.y + bbox.h, world.h * 1.1);
-    if (right - left < 2 || low - high < 2) return;
-    const res = Math.min(BEAM_RESOLUTION, BEAM_BUFFER_MAX / (right - left), BEAM_BUFFER_MAX / (low - high));
-    const bw = Math.ceil((right - left) * res) + 2;
-    const bh = Math.ceil((low - high) * res) + 2;
-    beamSum = beamScratch(beamSum, bw, bh);
-    beamOne = beamScratch(beamOne, bw, bh);
-    const sum = beamSum.getContext('2d');
-    const one = beamOne.getContext('2d');
+    // From `stable`: the cone is a cache, and Beam width bound to the
+    // microphone must not bake a new one every frame. A modulated width
+    // stretches the baked cone across the beam instead.
+    const bakedHalf = Math.max(0.004, (stable.spread * Math.PI) / 360);
+    const cones = coneSprites(state, stable.color, bakedHalf);
     const hot = mixHex(p.color, '#ffffff', 0.65);
 
     g.save();
     g.clip(shape.path);
     g.globalCompositeOperation = 'lighter';
-
-    // The part of the buffer the cones actually reach, so only that is blown
-    // up: a single narrow beam is a sliver of the frame, and the blit is most
-    // of what the effect costs.
-    let x0 = Infinity;
-    let y0 = Infinity;
-    let x1 = -Infinity;
-    let y1 = -Infinity;
 
     for (let b = 0; b < beams; b++) {
       /**
@@ -383,90 +402,20 @@ const searchlight = {
       const lands = p.throw <= 1 && exit > 0;
       if (reach <= 1) continue;
 
-      /**
-       * The cone: light scattered out of the beam by the air, so it is a
-       * Gaussian across the beam — a conic gradient about the lamp, which is
-       * exactly a profile in angle — times a falloff with distance. Near the
-       * lamp the same light is squeezed into a narrow beam and the haze in it
-       * is brightest; further out it is spread across a wider one, so the
-       * cone dims as it goes, and it stops dead at the wall.
-       */
+      // The cone, as bright as the haze in it, stood on the beam's axis.
       if (p.haze > 0) {
-        /**
-         * The cone's own corner of the buffer: the lamp and the three far
-         * points of the fan bound it, and every operation below — the clear,
-         * the multiply, the add — is confined to it, so a narrow beam costs a
-         * sliver of the buffer rather than all of it.
-         */
-        const span = half * 1.9;
-        const far = reach * 1.02;
-        let cx0 = ox;
-        let cx1 = ox;
-        let cy0 = oy;
-        let cy1 = oy;
-        for (let k = -1; k <= 1; k++) {
-          const fx = ox + Math.cos(centre + k * span) * far;
-          const fy = oy + Math.sin(centre + k * span) * far;
-          cx0 = Math.min(cx0, fx);
-          cx1 = Math.max(cx1, fx);
-          cy0 = Math.min(cy0, fy);
-          cy1 = Math.max(cy1, fy);
+        const cone = lands ? cones.lands : cones.open;
+        const scale = reach / CONE_W;
+        g.save();
+        g.translate(ox, oy);
+        g.rotate(centre);
+        g.scale(scale, scale * (half / bakedHalf));
+        for (let a = level * (0.6 + 1.2 * p.haze); a > 0.002; a -= 1) {
+          g.globalAlpha = Math.min(1, a);
+          g.drawImage(cone, 0, -cone.height / 2);
         }
-        const bx0 = clamp(Math.floor((cx0 - left) * res), 0, bw);
-        const by0 = clamp(Math.floor((cy0 - high) * res), 0, bh);
-        const bx1 = clamp(Math.ceil((cx1 - left) * res) + 3, 0, bw);
-        const by1 = clamp(Math.ceil((cy1 - high) * res) + 3, 0, bh);
-        if (bx1 > bx0 && by1 > by0) {
-          one.setTransform(1, 0, 0, 1, 0, 0);
-          one.globalCompositeOperation = 'copy';
-          one.globalAlpha = 1;
-          one.fillStyle = 'rgba(0,0,0,0)';
-          one.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
-          one.setTransform(res, 0, 0, res, 1 - left * res, 1 - high * res);
-          one.globalCompositeOperation = 'source-over';
-          const cone = typeof one.createConicGradient === 'function'
-            ? one.createConicGradient(centre - span, ox, oy)
-            : null;
-          const strength = clamp(level * (0.6 + 1.2 * p.haze), 0, 1);
-          if (cone) {
-            // Nine stops across the cone, a Gaussian in angle that is under a
-            // third of its peak at the stated beam width and nothing at the
-            // edge of the fan.
-            for (let k = 0; k <= 8; k++) {
-              const a = (k / 8) * 2 - 1;
-              cone.addColorStop(((a + 1) * span) / TAU, rgba(p.color, strength * Math.exp(-1.25 * (a * 1.9) ** 2)));
-            }
-            cone.addColorStop(Math.min(1, (2 * span) / TAU + 1e-4), rgba(p.color, 0));
-            one.fillStyle = cone;
-          } else {
-            one.fillStyle = rgba(p.color, strength * 0.5);
-          }
-          one.beginPath();
-          one.moveTo(ox, oy);
-          one.arc(ox, oy, far, centre - span, centre + span);
-          one.closePath();
-          one.fill();
-
-          const fall = one.createRadialGradient(ox, oy, 0, ox, oy, far);
-          fall.addColorStop(0, 'rgba(255,255,255,0)');
-          fall.addColorStop(0.03, 'rgba(255,255,255,1)');
-          fall.addColorStop(0.25, 'rgba(255,255,255,0.75)');
-          fall.addColorStop(0.55, 'rgba(255,255,255,0.52)');
-          fall.addColorStop(0.92, 'rgba(255,255,255,0.4)');
-          fall.addColorStop(1, `rgba(255,255,255,${lands ? 0 : 0.25})`);
-          one.globalCompositeOperation = 'destination-in';
-          one.fillStyle = fall;
-          // Over the cone's corner only, in the world coordinates the
-          // gradient is in.
-          one.fillRect(left + (bx0 - 1) / res, high + (by0 - 1) / res, (bx1 - bx0) / res, (by1 - by0) / res);
-
-          sum.globalCompositeOperation = 'lighter';
-          sum.drawImage(beamOne, bx0, by0, bx1 - bx0, by1 - by0, bx0, by0, bx1 - bx0, by1 - by0);
-          x0 = Math.min(x0, cx0);
-          x1 = Math.max(x1, cx1);
-          y0 = Math.min(y0, cy0);
-          y1 = Math.max(y1, cy1);
-        }
+        g.restore();
+        g.globalAlpha = 1;
       }
 
       /**
@@ -507,17 +456,6 @@ const searchlight = {
       glow(g, ox, oy, Math.min(bbox.w, bbox.h) * 0.12, hot, clamp(level, 0, 1));
     }
 
-    if (x1 > x0 && y1 > y0) {
-      // In buffer pixels, a pixel of margin, clamped to the buffer.
-      const bx0 = clamp(Math.floor((x0 - left) * res), 0, bw);
-      const by0 = clamp(Math.floor((y0 - high) * res), 0, bh);
-      const bx1 = clamp(Math.ceil((x1 - left) * res) + 2, 0, bw);
-      const by1 = clamp(Math.ceil((y1 - high) * res) + 2, 0, bh);
-      if (bx1 > bx0 && by1 > by0) {
-        g.drawImage(beamSum, bx0, by0, bx1 - bx0, by1 - by0,
-          left - 1 / res + bx0 / res, high - 1 / res + by0 / res, (bx1 - bx0) / res, (by1 - by0) / res);
-      }
-    }
     g.restore();
   },
 };
@@ -559,14 +497,13 @@ const searchlight = {
  * width and brightness each wander on a noise of their own, so a filament
  * thins to a thread in one place and swells and burns in another.
  *
- * The tile is drawn at a few dozen moments round a loop, each the first time
- * it is needed and never again. Each frame cross-fades the two nearest
- * moments and stamps the result over the shape: two layers of it, at
- * different scales and drifting apart, because the light under real water is
- * two webs — the swell makes the big cells and the chop on it a finer, fainter
- * mesh — and because two tiles that repeat at sizes which never line up hide
- * each other's repetition. Two stamps of a small tile a frame is about what
- * the old version's one blit cost.
+ * The tile is drawn at a couple of dozen moments round a loop, each the first
+ * time it is needed and never again. Each frame cross-fades the two nearest
+ * moments as it stamps them over the shape: two layers of it, at different
+ * scales and drifting apart, because the light under real water is two webs —
+ * the swell makes the big cells and the chop on it a finer, fainter mesh —
+ * and because two tiles that repeat at sizes which never line up hide each
+ * other's repetition.
  */
 
 /** Cells across one tile, and moments round the loop. */
@@ -801,38 +738,6 @@ function causticMoment(loop, f) {
 }
 
 /**
- * Two scratch tiles, one per layer, each the cross-fade of two moments of the
- * loop. Overwritten whole every time they are used, so they carry nothing from
- * one frame to the next.
- */
-const blendTiles = [null, null];
-
-function blendedTile(slot, loop, position) {
-  let tile = blendTiles[slot];
-  if (!tile) {
-    tile = offscreen(loop.size, loop.size);
-    blendTiles[slot] = tile;
-  }
-  if (tile.width !== loop.size) {
-    tile.width = loop.size;
-    tile.height = loop.size;
-  }
-  const g = tile.getContext('2d');
-  const at = ((position % CAUSTIC_FRAMES) + CAUSTIC_FRAMES) % CAUSTIC_FRAMES;
-  const f0 = Math.floor(at) % CAUSTIC_FRAMES;
-  const mix = at - Math.floor(at);
-  g.globalCompositeOperation = 'copy';
-  g.globalAlpha = 1 - mix;
-  g.drawImage(causticMoment(loop, f0), 0, 0);
-  g.globalCompositeOperation = 'lighter';
-  g.globalAlpha = mix;
-  g.drawImage(causticMoment(loop, (f0 + 1) % CAUSTIC_FRAMES), 0, 0);
-  g.globalAlpha = 1;
-  g.globalCompositeOperation = 'source-over';
-  return tile;
-}
-
-/**
  * Cover `bbox` with `tile` repeated at `scale` world pixels per texel, slid by
  * `ox, oy`.
  *
@@ -848,6 +753,31 @@ function fillTiled(g, tile, bbox, scale, ox, oy) {
   const y0 = oy + Math.floor((bbox.y - oy) / span) * span;
   for (let y = y0; y < bbox.y + bbox.h; y += span) {
     for (let x = x0; x < bbox.x + bbox.w; x += span) g.drawImage(tile, x, y, span, span);
+  }
+}
+
+/**
+ * One web at `position` round the loop, cross-faded between the two moments
+ * either side of it and stamped over `bbox` at `alpha`.
+ *
+ * The fade is done on the wall, two stamps at complementary alphas adding up
+ * under `lighter`, rather than in a scratch tile first: a scratch tile would
+ * be a canvas drawn into every frame, and a canvas drawn into every frame is
+ * a different history in a tab painting at fifty frames a second from one
+ * painting at sixty. Near the ends of the fade only one moment is worth
+ * drawing.
+ */
+function stampWeb(g, loop, position, alpha, bbox, scale, ox, oy) {
+  const at = ((position % CAUSTIC_FRAMES) + CAUSTIC_FRAMES) % CAUSTIC_FRAMES;
+  const f0 = Math.floor(at) % CAUSTIC_FRAMES;
+  const mix = at - Math.floor(at);
+  if (mix < 0.97) {
+    g.globalAlpha = clamp(alpha * (1 - mix), 0, 1);
+    fillTiled(g, causticMoment(loop, f0), bbox, scale, ox, oy);
+  }
+  if (mix > 0.03) {
+    g.globalAlpha = clamp(alpha * mix, 0, 1);
+    fillTiled(g, causticMoment(loop, (f0 + 1) % CAUSTIC_FRAMES), bbox, scale, ox, oy);
   }
 }
 
@@ -913,13 +843,11 @@ const caustics = {
      * tile's hot core is already at full alpha and `globalAlpha` stops at one:
      * clamping instead would leave the top half of the slider doing nothing.
      */
-    const near = blendedTile(0, loop, clock * 2.6);
-    const far = blendedTile(1, loop, clock * 3.7 + CAUSTIC_FRAMES * 0.37);
     for (let level = p.level; level > 0.004; level -= 1) {
-      g.globalAlpha = clamp(level, 0, 1);
-      fillTiled(g, near, bbox, coarse, bbox.x + slide * 0.88, bbox.y + slide * 0.47);
-      g.globalAlpha = clamp(level * 0.5, 0, 1);
-      fillTiled(g, far, bbox, fine, bbox.x - slide * 0.61 + cell * 0.31, bbox.y + slide * 0.35 + cell * 0.77);
+      stampWeb(g, loop, clock * 2.6, Math.min(1, level), bbox, coarse,
+        bbox.x + slide * 0.88, bbox.y + slide * 0.47);
+      stampWeb(g, loop, clock * 3.7 + CAUSTIC_FRAMES * 0.37, Math.min(1, level) * 0.5, bbox, fine,
+        bbox.x - slide * 0.61 + cell * 0.31, bbox.y + slide * 0.35 + cell * 0.77);
     }
     g.globalAlpha = 1;
     g.restore();
@@ -954,14 +882,16 @@ function lerpTemp(hot, cool, f) {
  */
 const EMBER_RUNGS = 12;
 const EMBER_SPRITE = 64;
-const emberLadders = new Map();
 
-function emberLadder(hot, cool) {
+/**
+ * Kept in the layer's state, as every cache in this library is, so each tab
+ * bakes the same canvases; keyed on `stable`, so a temperature bound to the
+ * microphone does not bake a new ladder every frame.
+ */
+function emberLadder(state, hot, cool) {
   const key = `${hot}|${cool}`;
-  let ladder = emberLadders.get(key);
-  if (ladder) return ladder;
-  if (emberLadders.size > 8) emberLadders.clear();
-  ladder = [];
+  if (state.ladderKey === key) return state.ladder;
+  const ladder = [];
   for (let r = 0; r < EMBER_RUNGS; r++) {
     const kelvin = lerp(cool, hot, r / (EMBER_RUNGS - 1));
     const colour = blackbodyCss(kelvin);
@@ -982,7 +912,8 @@ function emberLadder(hot, cool) {
     g.fillRect(0, 0, EMBER_SPRITE, EMBER_SPRITE);
     ladder.push(sprite);
   }
-  emberLadders.set(key, ladder);
+  state.ladder = ladder;
+  state.ladderKey = key;
   return ladder;
 }
 
@@ -1060,7 +991,7 @@ const embers = {
   draw({ g, p, shape, t, state, stable }) {
     const { bbox } = shape;
     if (bbox.w <= 0 || bbox.h <= 0 || !state.motes?.length) return;
-    const ladder = emberLadder(stable.hotTemp, stable.coolTemp);
+    const ladder = emberLadder(state, stable.hotTemp, stable.coolTemp);
     const span = Math.max(1, p.hotTemp - p.coolTemp);
 
     g.save();
@@ -1185,15 +1116,11 @@ function alongCrack(i, r, out) {
 const CRACK_A = { x: 0, y: 0 };
 const CRACK_B = { x: 0, y: 0 };
 
-/** A glint: a hot point with four fine rays, baked once per colour. */
-const glassGlints = new Map();
-
-function glassGlint(colour) {
-  let sprite = glassGlints.get(colour);
-  if (sprite) return sprite;
-  if (glassGlints.size > 16) glassGlints.clear();
+/** A glint: a hot point with four fine rays, baked once per colour into the layer's state. */
+function glassGlint(state, colour) {
+  if (state.glintKey === colour) return state.glint;
   const S = 48;
-  sprite = offscreen(S, S);
+  const sprite = offscreen(S, S);
   const g = sprite.getContext('2d');
   const m = S / 2;
   g.globalCompositeOperation = 'lighter';
@@ -1212,7 +1139,8 @@ function glassGlint(colour) {
     g.fillStyle = ray;
     g.fillRect(m - w / 2, m - h / 2, w, h);
   }
-  glassGlints.set(colour, sprite);
+  state.glint = sprite;
+  state.glintKey = colour;
   return sprite;
 }
 
@@ -1243,7 +1171,7 @@ const shatter = {
     { key: 'impactY', type: 'range', label: 'Impact Y', default: 0.45, min: 0, max: 1, step: 0.01 },
     { key: 'flash', type: 'range', label: 'Impact flash', default: 0.7, min: 0, max: 1, step: 0.01 },
   ],
-  draw({ g, p, shape, t }) {
+  draw({ g, p, stable, shape, t, state }) {
     const { bbox } = shape;
     if (bbox.w <= 1 || bbox.h <= 1) return;
     const interval = Math.max(1, p.interval);
@@ -1399,7 +1327,7 @@ const shatter = {
      * is a fixed place on the pane, so the twinkle is in the brightness and
      * never in the position.
      */
-    const sprite = glassGlint(p.color);
+    const sprite = glassGlint(state, stable.color);
     seedCracks(2, impact);
     let radius = reach * 0.13;
     for (let ring = 0; ring < 3; ring++) {
