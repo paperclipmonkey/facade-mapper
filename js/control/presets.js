@@ -983,6 +983,90 @@ const SUNKEN = () => [
 ];
 
 
+/**
+ * Rooftops at dusk.
+ *
+ * The one preset here that is not about a night in the calendar. It is about a
+ * mood, and the mood is the reason to build it out of these particular pieces:
+ * the front wall stops being a wall and becomes a view over a city at sunset,
+ * the windows are the only warm thing left on the building, and one small
+ * animal walks the gutter above the lot with nothing to do and nowhere to be.
+ *
+ * Two of them, deliberately. A single wanderer on the roofline is a character;
+ * a second one further down, smaller, slower and a different colour, is a
+ * *place* with somebody else in it — and because the two walks are seeded
+ * independently they stop, sit and look round at different moments, which is
+ * the thing that makes a crowd watch the wall for longer than a minute.
+ */
+const LOFI = () => [
+  /**
+   * The wall is the scene, and the animal is in it.
+   *
+   * One layer, deliberately: the raccoon walks on the spot at the foot of the
+   * wall and carries the woods behind it, scrolled by exactly how far it has
+   * walked. Two layers — a vista drifting on a clock and a walker on top —
+   * cannot do that, because a layer cannot read another's live position (see
+   * `share` in the renderer), and a world that keeps sliding while the animal
+   * sits down is a treadmill in front of a screensaver. Drawn by the same
+   * effect, the world stops when they do.
+   */
+  layer('wanderer', {
+    name: 'Walking through the woods',
+    tags: ['wall'],
+    needsTag: 'wall',
+    opacity: 0.85,
+    params: {
+      hoodie: '#dda94a', fur: '#a0765a', ink: '#3b2822', rim: '#ffd9a0',
+      // Height is a fraction of the wall here, since the wall is the scene.
+      rimAmount: 0.35, size: 0.46, speed: 22, travel: 'on the spot', backdrop: 'woods',
+      // Left of the door, on the plain brick: on the door the porch light
+      // takes the face off them.
+      ledge: 'bottom', patrol: 'turn back', start: 0.16, raise: 0.02,
+      restless: 0.45, sitting: 0.4, nod: 0.5, headphones: true, hood: true, line: 2,
+    },
+  }),
+  /**
+   * The windows stay the house.
+   *
+   * Everything else on the front is now a picture of somewhere else, and a
+   * picture with no depth cue is a poster. Lighting the real openings warm and
+   * leaving them alone is what keeps the building in front of the view rather
+   * than painted with it.
+   */
+  layer('fill', {
+    name: 'Rooms behind the glass',
+    tags: ['window'],
+    blend: 'lighter',
+    opacity: 0.75,
+    params: { color: '#ffb765', color2: '#7a2c12', gradient: 'vertical', level: 0.85, softness: 1.2, inset: 0.02 },
+  }),
+  layer('pulse', {
+    name: 'Porch light',
+    tags: ['door'],
+    blend: 'lighter',
+    params: { color: '#ffbe73', mode: 'both', rate: 0.18, wave: 'sine', min: 0.3, max: 0.7, width: 14, grow: 0.01 },
+  }),
+  /**
+   * A second one, up on the gutter, going somewhere.
+   *
+   * Smaller, no hood, walking the roofline end to end. Seeded independently
+   * of the one below, so they stop and sit at different moments, which is the
+   * thing that makes a crowd watch the wall for longer than a minute.
+   */
+  layer('wanderer', {
+    name: 'Somebody on the gutter',
+    tags: ['roof'],
+    needsTag: 'roof',
+    opacity: 0.85,
+    params: {
+      hoodie: '#6f86b8', fur: '#b08a6a', ink: '#2e2226', rim: '#ffd9a0',
+      rimAmount: 0.45, size: 0.11, speed: 18, travel: 'along the line', backdrop: 'none',
+      ledge: 'auto', patrol: 'turn back', start: 0.2, raise: 0,
+      restless: 0.6, sitting: 0.5, nod: 0.3, headphones: true, hood: false, line: 2,
+    },
+  }),
+];
+
 export const PRESETS = [
   {
     id: 'halloween',
@@ -1055,6 +1139,15 @@ export const PRESETS = [
     tagsUsed: ['door', 'window', 'roof'],
     grade: 'ember',
     build: BONFIRE_NIGHT,
+  },
+  {
+    id: 'lofi',
+    name: 'Rooftops at dusk',
+    description:
+      'Not a night in the calendar but a mood: a raccoon in a hoodie and headphones walks through the woods on the front wall — on the spot, with the trees and hills sliding past in parallax exactly as far as it has walked — and stops to look round, push a headphone cup on and sit down. The windows are the only warm thing left on the building.',
+    tagsUsed: ['wall', 'roof', 'window', 'door'],
+    grade: 'neutral',
+    build: LOFI,
   },
 ];
 
@@ -1208,6 +1301,40 @@ export const DEMO_BURSTS = [
  * which keys to press stays short.
  */
 const PRESET_BURSTS = {
+  /**
+   * Rooftops at dusk gets two, and both are quiet on purpose.
+   *
+   * The rest of the demos answer a keypress with a bang, because the rest of
+   * the demos are about a bang. This one is about somebody sitting on a roof
+   * with nothing much happening, and the worst thing you could do to it is put
+   * a firework through it. A shooting star and a lit window are the size of
+   * event that belongs in a held shot — enough that pressing the key does
+   * something, not enough to end the mood it took a minute to build.
+   */
+  lofi: [
+    {
+      key: 'x',
+      name: 'A shooting star',
+      effect: 'meteors',
+      tags: ['wall'],
+      hold: 4,
+      params: {
+        radiantX: 1.2, radiantY: -0.4, rate: 14, tint: 'cool', speed: 1.4,
+        length: 1.5, width: 2.5, fireballs: 2, train: 2, showRadiant: false, level: 0.8,
+      },
+    },
+    {
+      key: 'f',
+      name: 'A light goes on in the next room',
+      effect: 'pulse',
+      tags: ['window'],
+      hold: 6,
+      params: {
+        color: '#ffd8a0', mode: 'fill', rate: 0.22, wave: 'sine',
+        min: 0, max: 0.55, width: 10, grow: 0,
+      },
+    },
+  ],
   birthday: [
     {
       key: 'x',

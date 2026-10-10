@@ -79,6 +79,11 @@ const SHOTS = [
   // Long enough for the weed to be laid over, a jellyfish to have climbed past
   // the eaves, and the marine snow to have reached the bottom of the frame.
   { preset: 'sunken', t: 18 },
+  // Half a minute in: the wanderer has walked a good way along the gutter and
+  // had time to stop at least once, and the city has drifted far enough that
+  // the three bands are visibly at three different distances. At four seconds
+  // it is a still of a painting.
+  { preset: 'lofi', t: 34 },
 ];
 
 const W = 1600;

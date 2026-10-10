@@ -723,6 +723,92 @@ pod have to agree with the shafts to the metre.
 This is a starter preset like the rest, with its own demo:
 [under the sea](https://paperclipmonkey.github.io/facade-mapper/?demo=sunken).
 
+## Rooftops at dusk
+
+Not a night in the calendar either — a mood, and the only look in here whose
+subject is a *character* rather than the building. Everything else on this page
+is weather or decoration; this one puts somebody on your roof.
+
+| | |
+| --- | --- |
+| **Wanderer** | A raccoon in a hoodie and headphones, walking slowly — along whatever you point it at, or on the spot with the world sliding past behind it — and stopping to look back the way it came, push a headphone cup on, put its hands in its pouch, stretch, yawn, and sit down for a while. |
+| **Lofi Vista** | The world on its own: a dusk sky, a sun on the horizon, three bands of city or woods drifting at three different rates, a branch across the near corner and a skein of birds every so often. |
+
+This is a starter preset like the rest, with its own demo:
+[rooftops at dusk](https://paperclipmonkey.github.io/facade-mapper/?demo=lofi).
+
+**Where to point them.** Wanderer wants a **traced roofline** — an open path,
+which it walks end to end and turns round at. Pointed at a closed shape it
+walks the *sill*, which is the edge of a window anybody would have meant, and
+**Walks on** overrides that either way (`top` puts them on a bay or a plinth,
+`bottom` on the ground line under a wall). Vista wants the biggest flat thing
+you have: the front wall, or a window if you would rather the view were only
+through the glass. Two Wanderers on two different lines, at two different sizes
+and speeds, is worth more than one — they are seeded independently, so they
+stop and sit at different moments, and the wall stops being a loop.
+
+**Why it reads as an animal.** Three things, and none of them is the drawing:
+
+- **The walk has ground contact.** Half of each leg's cycle is stance, where
+  the foot is planted and the body travels over it, and half is swing, where it
+  arcs forward through the air. A leg swung on a sine wave slides along the
+  surface the whole way, and a foot that slides is the loudest possible tell
+  that something is animated rather than moving.
+- **The tail is simulated.** Seven damped springs, each chasing the one in
+  front, so it lags the hips into a turn, overshoots when they stop and settles
+  by itself. A tail wagged on a sine is a metronome tied to an animal.
+- **Nothing repeats on a period you can measure.** Blinks — one in four of them
+  a double — ear flicks, the decision to stop, and which idle thing to do when
+  stopped are all drawn from the seeded generator. Anything exactly periodic
+  stops being alive at about the fourth repetition.
+
+And one that *is* the drawing, since it is where the uncanny valley actually
+lives: the head is a single profile curve with the snout in it, every fill is
+top-lit with an edge in its own darker colour rather than a black outline, the
+hood is cloth that hangs over the head rather than a shell round it, the body
+squashes on contact and the head and ears arrive a beat behind it, the hands go
+into the pouch whenever they stop, and the eye rests half-lidded. A front-on
+circle with a muzzle pasted to one side, flat fills in a uniform outline, a
+hood drawn as a bigger head, and a round wide-open eye are the four things that
+make a cartoon animal look like a doll of one — or an astronaut — and the
+first drafts of this rig had all four.
+
+**It boils.** Hand-drawn animation is redrawn every frame by a hand, and no two
+drawings agree to the pixel, so the picture quivers — on eights, never on every
+frame. Each part of the rig gets its own offset of half a percent of its height,
+held for an eighth of a second. Invisible as a shape change; as a signal it is
+the strongest cue there is that something was drawn rather than rendered.
+
+**Turn the rim light down last, not first.** A projector adds light and cannot
+subtract any, so a silhouette on a wall has to be *made* of light. **Rim
+strength** is one warm stroke down the trailing edge — crown, shoulder, hem,
+tail — and it is what stops a filled orange shape reading as a sticker on the
+brickwork. On a pale wall, or under a grade with a low bloom threshold, pull
+the layer's opacity down before you touch it: bloom takes the face off a small
+bright shape long before the rim is the problem.
+
+**Walking on the spot, with the world going past.** Set **Travel** to `on
+the spot` and **World behind** to `woods` or `dusk city`, and the animal stays
+where you put it while the hills, trees and rooftops slide past behind it in
+three bands of parallax — scrolled by *exactly* how far it has walked, so the
+nearest trees pass at the pace of its feet, the far hills at half that, and
+all of it stops when it sits down. This is the lofi-stream shot, and it is one
+layer on purpose: a separate Vista can only drift on its own clock, because a
+layer cannot read another's live position (a value two layers must agree on
+has to be a structural fact about the show — see **Talking to another layer**
+in [writing effects](writing-effects.md)), and a world that keeps sliding past
+somebody sitting still is a treadmill in front of a screensaver. It needs a
+closed shape with some area — the wall — and does nothing on a roofline.
+
+**Lofi Vista on its own** is the same scene drifting at **Drift**, for a wall
+you want the view on without anybody walking through it, or a window that
+should be a view. **Terrain** picks a city or woods; **Rain** hatches the
+picture with the light diagonal strokes a hand puts over a wet scene. The woods
+are painted rather than cut out: mist rises at the foot of every band but the
+nearest, every other pine has a sunward side, there is a lake between the hills
+and the trees with the sun smeared down it, and the near ground has grass and
+the odd signpost on it — which is what the eye uses to tell it is moving.
+
 ## Paths and animation
 
 Any shape — closed area or open line — carries an arc-length path. Chase, Fairy
