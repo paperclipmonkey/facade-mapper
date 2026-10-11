@@ -1032,8 +1032,11 @@ window.addEventListener('keydown', (ev) => {
 });
 
 // Hide the cursor once it stops moving — a mouse pointer on the house is not
-// part of the show.
+// part of the show. It starts hidden too: a tab launched headless (a kiosk on a
+// Pi, nobody at the mouse) never gets a mousemove, and would otherwise leave an
+// arrow in the middle of the wall all night.
 let cursorTimer = null;
+document.body.classList.add('hide-cursor');
 window.addEventListener('mousemove', () => {
   document.body.classList.remove('hide-cursor');
   clearTimeout(cursorTimer);
