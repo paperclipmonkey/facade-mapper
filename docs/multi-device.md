@@ -40,6 +40,9 @@ Facade Mapper — serving this folder, link open.
   Second laptop            http://192.168.1.23:8000/projector.html
 ```
 
+For the [dare game](button-game.md), `--mqtt mqtt://homeassistant.local` also
+connects it to a broker, so buttons in Home Assistant can drive the game.
+
 The **Devices** button in the control tab's top bar repeats those addresses,
 including the drawing page for a tablet.
 

@@ -34,6 +34,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createMqttBridge, parseBrokerUrl, parsePress } from './mqtt.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -148,6 +149,27 @@ function requestUrl(req) {
   } catch {
     return null;
   }
+}
+
+/** A small request body, or a rejection once it stops being small. */
+function readBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    let over = false;
+    req.on('data', (chunk) => {
+      if (over) return; // keep reading, so the answer can still be sent
+      size += chunk.length;
+      if (size > limit) {
+        over = true;
+        reject(new Error('Too large for a button press'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
 }
 
 function send(res, status, body, type = 'text/plain; charset=utf-8') {
@@ -311,7 +333,7 @@ const BACKLOG_LIMIT = 512 * 1024;
 
 let nextClientId = 1;
 
-export function createLinkServer({ root = ROOT, key = null, name = os.hostname() } = {}) {
+export function createLinkServer({ root = ROOT, key = null, name = os.hostname(), onShow = null, status = null } = {}) {
   const clients = new Set();
 
   /**
@@ -331,10 +353,12 @@ export function createLinkServer({ root = ROOT, key = null, name = os.hostname()
   });
 
   async function handleRequest(req, res) {
-    if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
-
     const url = requestUrl(req);
     if (!url) return send(res, 400, 'Bad request');
+
+    if (url.pathname === '/link/press') return handlePressRequest(req, res, url);
+
+    if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
 
     /**
      * How a page finds out whether it is being served by this, or by GitHub
@@ -355,12 +379,75 @@ export function createLinkServer({ root = ROOT, key = null, name = os.hostname()
           clients: clients.size,
           needsKey: !!key,
           addresses: localAddresses(server.address()?.port),
+          ...(status ? status() : {}),
         }),
         'application/json; charset=utf-8'
       );
     }
 
     return serveStatic(req, res, root);
+  }
+
+  /**
+   * A button press over plain HTTP: `POST /link/press` with
+   * `{ "button": "yes" }`, or a Home Assistant entity id and a `kind`.
+   *
+   * For a house without a broker — Home Assistant's `rest_command` can do this
+   * on its own — and for `curl` while setting up. It goes onto the link exactly
+   * as an MQTT press does, which is exactly as the remote's Game tab sends one.
+   * Stamped on arrival: an HTTP press is not queued anywhere on its way here.
+   */
+  async function handlePressRequest(req, res, url) {
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', 'POST');
+      return send(res, 405, 'POST a press: {"button": "yes"}');
+    }
+    if (key && url.searchParams.get('key') !== key && req.headers['x-facade-key'] !== key) {
+      return send(res, 401, 'Wrong or missing key');
+    }
+    let body;
+    try {
+      body = await readBody(req, 4096);
+    } catch (err) {
+      return send(res, 413, err.message);
+    }
+    const result = parsePress('link/press', body, 'link');
+    if (result.skip) return send(res, 400, JSON.stringify({ ok: false, error: result.skip }), 'application/json; charset=utf-8');
+    const delivered = injectPress({ ...result.press, at: Date.now() });
+    return send(
+      res,
+      200,
+      JSON.stringify({
+        ok: true,
+        delivered,
+        ...(delivered ? {} : { note: 'No control tab is on the link, so nothing heard it.' }),
+      }),
+      'application/json; charset=utf-8'
+    );
+  }
+
+  /**
+   * Put a press onto the link, as though a remote had sent it.
+   *
+   * The server still does not know what YES means: this is the same `press`
+   * action the remote's Game tab posts, addressed to nobody in particular, and
+   * the control tab's game runtime decides what it is worth. Returns how many
+   * control tabs it reached, so whoever pressed can be told when the answer is
+   * none.
+   */
+  function injectPress(press) {
+    const msg = {
+      type: 'action',
+      payload: { action: 'press', button: press.button, kind: press.kind, id: press.id, at: press.at },
+      from: 'link-server',
+      to: null,
+      at: Date.now(),
+      device: 'link-server',
+    };
+    relay(null, msg, JSON.stringify(msg));
+    let controls = 0;
+    for (const client of clients) if (client.role === 'control') controls++;
+    return controls;
   }
 
   server.on('upgrade', (req, socket) => {
@@ -509,6 +596,17 @@ export function createLinkServer({ root = ROOT, key = null, name = os.hostname()
      */
     if (msg.type.startsWith('link/')) return;
 
+    // The digest for remotes carries the dare game's state, which is what the
+    // MQTT bridge republishes for Home Assistant. Read, not changed: it is
+    // relayed exactly as it arrived.
+    if (msg.type === 'show' && client.role === 'control' && msg.payload?.game) {
+      try {
+        onShow?.(msg.payload);
+      } catch (err) {
+        console.error('[link] digest handler failed', err);
+      }
+    }
+
     relay(client, msg, text);
   }
 
@@ -524,7 +622,7 @@ export function createLinkServer({ root = ROOT, key = null, name = os.hostname()
   function relay(from, msg, text) {
     for (const client of clients) {
       if (client === from) continue;
-      if (client.device && from.device && client.device === from.device) continue;
+      if (client.device && from?.device && client.device === from.device) continue;
       if (client.subs && !client.subs.has(msg.type)) continue;
       if (DROPPABLE.has(msg.type) && client.socket.writableLength > BACKLOG_LIMIT) continue;
       client.send(text);
@@ -592,6 +690,7 @@ export function createLinkServer({ root = ROOT, key = null, name = os.hostname()
   return {
     server,
     clients,
+    injectPress,
     setQuiet: (value) => {
       quiet = value;
     },
@@ -648,7 +747,7 @@ function parsePort(raw) {
 }
 
 export function parseArgs(argv) {
-  const options = { port: 8000, host: '0.0.0.0', key: null, help: false, errors: [] };
+  const options = { port: 8000, host: '0.0.0.0', key: null, mqtt: null, mqttTopic: 'facade', help: false, errors: [] };
 
   const setPort = (raw) => {
     const port = parsePort(raw);
@@ -663,6 +762,19 @@ export function parseArgs(argv) {
     if (!raw) options.errors.push('--key needs a value');
     else options.key = raw;
   };
+  const setMqtt = (raw) => {
+    if (!raw) return options.errors.push('--mqtt needs a broker address, like mqtt://homeassistant.local:1883');
+    const broker = parseBrokerUrl(raw, {});
+    if (broker.error) options.errors.push(broker.error);
+    else options.mqtt = raw;
+  };
+  const setTopic = (raw) => {
+    // A prefix, so no wildcards and no leading or trailing slash: it is glued
+    // in front of "/press", and "facade/+/press" subscribes to who knows what.
+    if (!raw || /[+#]/.test(raw) || raw.startsWith('/') || raw.endsWith('/')) {
+      options.errors.push(`--mqtt-topic needs a plain prefix like "facade", not ${raw || '(nothing)'}`);
+    } else options.mqttTopic = raw;
+  };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -670,10 +782,14 @@ export function parseArgs(argv) {
     if (arg === '--port' || arg === '-p') setPort(value());
     else if (arg === '--host') setHost(value());
     else if (arg === '--key') setKey(value());
+    else if (arg === '--mqtt') setMqtt(value());
+    else if (arg === '--mqtt-topic') setTopic(value());
     else if (arg === '--help' || arg === '-h') options.help = true;
     else if (/^--port=/.test(arg)) setPort(arg.slice('--port='.length));
     else if (/^--host=/.test(arg)) setHost(arg.slice('--host='.length));
     else if (/^--key=/.test(arg)) setKey(arg.slice('--key='.length));
+    else if (/^--mqtt=/.test(arg)) setMqtt(arg.slice('--mqtt='.length));
+    else if (/^--mqtt-topic=/.test(arg)) setTopic(arg.slice('--mqtt-topic='.length));
     else options.errors.push(`Unknown option: ${arg}`);
   }
   return options;
@@ -685,7 +801,14 @@ const HELP = `Facade Mapper link server
 
   --port, -p <n>   Port to listen on (default 8000; 0 picks a free one)
   --host <addr>    Interface to bind (default 0.0.0.0, i.e. the whole network)
-  --key <secret>   Require ?key=<secret> to join the link
+  --key <secret>   Require ?key=<secret> to join the link, and to POST presses
+  --mqtt <url>     Take dare-game button presses from an MQTT broker, and
+                   publish the game's state back to it:
+                   mqtt://homeassistant.local:1883, or mqtts:// for TLS.
+                   The password is best in FACADE_MQTT_PASSWORD rather than
+                   the URL, and the user may be FACADE_MQTT_USERNAME.
+  --mqtt-topic <p> Topic prefix (default "facade"): presses on <p>/press,
+                   the game on <p>/game and <p>/game/cue
   --help, -h       This
 
 Serves the app and relays show messages between devices. Run it from the
@@ -704,7 +827,18 @@ async function main() {
     return;
   }
 
-  const link = createLinkServer({ key: options.key });
+  /**
+   * The bridge and the link need each other — presses go from one to the
+   * other, game state comes back — so the link is handed functions that look
+   * the bridge up when they run rather than the bridge itself.
+   */
+  let bridge = null;
+  const link = createLinkServer({
+    key: options.key,
+    onShow: (digest) => bridge?.digest(digest.game),
+    status: () =>
+      bridge ? { mqtt: { state: bridge.status.state, error: bridge.status.error, presses: bridge.status.presses } } : {},
+  });
   try {
     await link.listen(options.port, options.host);
   } catch (err) {
@@ -734,9 +868,21 @@ Drive the show from this machine's own tab at localhost — camera access needs
 localhost or HTTPS, and a LAN address is neither. Ctrl+C to stop.
 `);
 
+  if (options.mqtt) {
+    const broker = parseBrokerUrl(options.mqtt);
+    bridge = createMqttBridge({
+      broker,
+      prefix: options.mqttTopic,
+      onPress: (press) => link.injectPress(press),
+      log: (message) => console.log(`  ${message}`),
+    });
+    console.log(`  Dare buttons             ${broker.display}, ${bridge.topics.press}\n`);
+  }
+
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => {
       console.log('\nStopping.');
+      bridge?.close();
       link.close().then(() => process.exit(0));
     });
   }

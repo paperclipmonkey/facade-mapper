@@ -1,10 +1,9 @@
 # Dare buttons
 
-> **Status: the game is built; the Home Assistant bridge is not yet.** The state
-> machine, its rules for presses, the diagram, the **Game** panel in the control
-> tab and the **Game** tab on the remote all work today. Every button can be
-> pressed from the remote. Getting presses in from real Matter buttons over MQTT
-> is the next step. See [building it](#building-it).
+> **Status: built.** The state machine, its rules for presses, the diagram, the
+> **Game** panel in the control tab, the **Game** tab on the remote, and the
+> MQTT bridge that brings in presses from Home Assistant all work. See
+> [connecting the buttons](#getting-a-press-to-the-show).
 
 A group of trick-or-treaters comes up the path, and two big buttons are waiting
 for them: **YES** and **NO**. The facade asks *"Do you dare?"*. YES gets them
@@ -102,8 +101,9 @@ Doing it this way has three consequences:
 - Home Assistant does not need to know what level the game is on, and nothing in
   its YAML has to change when you redesign the ladder.
 - The server stays the "forward frames and tell the time" thing
-  [multi-device](multi-device.md) describes. It will gain a second kind of
-  socket, but it still holds no state about the show.
+  [multi-device](multi-device.md) describes. It has a second kind of socket
+  now, but it still holds no state about the show beyond the last game state
+  it republished.
 
 ## The game
 
@@ -256,26 +256,52 @@ because its `initial_press` has already counted.
 
 ## Getting a press to the show
 
-The broker speaks MQTT over TCP and the control tab is a web page, so something
-has to sit between them. There are three places it could go:
-
-| Option | For | Against |
-| --- | --- | --- |
-| **`server.mjs` subscribes to the broker** *(proposed)* | One socket, held by a process that does not stop when a tab is hidden or reloaded. It also publishes state back out. No changes to the broker. | A small MQTT client written by hand: CONNECT, SUBSCRIBE, PUBLISH at QoS 0/1, PING. That is about 150 lines, in the same spirit as the WebSocket code already in there. |
-| The control tab connects over MQTT-over-WebSockets | Nothing to add to the server | The broker needs a WebSocket listener. The page needs an MQTT library, and this project has no dependencies. The socket dies when the control tab reloads mid-evening. |
-| Home Assistant `rest_command` → `POST /link/press` | Smallest possible change, and no MQTT at all | Presses only go in. Telling Home Assistant the game state needs a second mechanism. It also bypasses the pub/sub server you already have. |
-
-**Proposed: the server bridges, and `POST /link/press` comes along too.** The
-HTTP endpoint is about twenty lines once the bridge exists, it is handy for
-`curl` while testing, and it suits anyone without a broker.
+The broker speaks MQTT over TCP, and the control tab is a web page, so the link
+server holds the broker connection for it. It is the one process on the show
+machine that stays up all evening, whether or not a tab is hidden or reloaded.
 
 ```bash
-node server.mjs --mqtt mqtt://homeassistant.local:1883 --mqtt-user facade --mqtt-pass …
+FACADE_MQTT_PASSWORD=… node server.mjs --mqtt mqtt://facade@homeassistant.local:1883
 ```
 
-The bridge turns `facade/press` into the link frame a remote already sends,
-`{ type: 'action', action: 'press', button, id, at }`. To the control tab it is
-a remote action like any other. The server never learns what YES means.
+- `mqtt://` or `mqtts://` (TLS, port 8883 by default).
+- Put the password in `FACADE_MQTT_PASSWORD` rather than in the URL. A URL on a
+  command line can be seen by anyone on the machine who lists processes, and it
+  ends up in shell history. The user can be in the URL or in
+  `FACADE_MQTT_USERNAME`.
+- `--mqtt-topic house/front` changes the prefix from `facade`.
+- If the broker is not up yet, or goes away, the bridge keeps retrying, backing
+  off to every 30 seconds, and says so in the terminal. A wrong password is
+  reported as one and retried only slowly.
+
+The bridge turns each message on `facade/press` into the same link frame the
+remote's Game tab sends: `{ type: 'action', payload: { action: 'press', button,
+kind, id, at } }`. To the control tab it is a remote action like any other. The
+server never learns what YES means. Details, in
+[`mqtt.mjs`](../mqtt.mjs):
+
+- **Only `initial_press` and `long_press` count.** `short_release`,
+  `long_release` and the multi-press events describe a press that has already
+  been counted, so they are ignored.
+- **Retained messages are never presses.** A retained press would start a game
+  every time the server restarted. The terminal says so once if one turns up.
+- **A clean session**, so a reconnect is not handed a backlog of presses.
+- **Home Assistant's clock is not trusted.** It is a different machine, and a
+  couple of seconds' disagreement would make every press look stale, or none.
+  The bridge learns the gap the way the link learns a device's clock offset,
+  from the fastest recent deliveries. It restamps each press in the server's
+  time, so a press held up somewhere is still recognised as late.
+- **No control tab, no game.** A press that reaches no control tab is logged:
+  *"A button was pressed but no control tab is on the link to hear it."*
+
+Not every press needs a broker. `POST /link/press` with `{"button": "yes"}`
+does the same thing over plain HTTP, for Home Assistant's `rest_command` or for
+`curl` while setting up. With `--key`, it needs `?key=` or an `X-Facade-Key`
+header.
+
+```bash
+curl -X POST localhost:8000/link/press -d '{"button":"yes"}'
+```
 
 ### The Home Assistant side
 
@@ -283,7 +309,7 @@ The automation is the same for every button and never needs to change:
 
 ```yaml
 alias: Facade — button press to MQTT
-mode: queued
+mode: parallel
 triggers:
   - trigger: state
     entity_id:
@@ -308,27 +334,49 @@ actions:
         } | tojson }}
 ```
 
-The roles (`yes`, `no`, `door`, `treat`) are assigned in the control tab, not
-in Home Assistant. That keeps the design of the game in one place.
+Then press each real button once. It appears in the Game panel under
+**Buttons** as an unknown entity id, with YES / NO / DOOR / TREAT beside it.
+The roles are assigned there rather than in Home Assistant, which keeps the
+design of the game in one place.
+
+For a button wired up by hand, `facade/press/<button>` works too, with the kind
+as a bare word (`initial_press`, `long_press`) or no payload at all.
 
 ## Telling the rest of the house
 
-The game publishes two topics:
+The bridge reads the game's state from the digest the control tab already
+publishes for remotes, and republishes it:
 
 | Topic | Retained | Payload | For |
 | --- | --- | --- | --- |
-| `facade/game` | yes | `{ "state": "ask", "level": 2, "of": 5 }` | Dashboards, and an automation that lights the buttons only while a question is being asked |
-| `facade/game/cue` | no | `{ "cue": "scare", "level": 3 }`, `{ "cue": "treat" }`… | Fog on rung 3, the gutter WLED going red, the doorbell chime on Treat |
+| `facade/game` | yes | `{"enabled":true,"state":"ask","level":2,"of":4,"zone":"path","active":true,"door":true}` | Dashboards, and lighting the buttons only while a question is waiting |
+| `facade/game/cue` | no | `{"cue":"scare","level":3,"from":"ask","on":"yes"}` | Fog on rung 3, the gutter WLED going red, the doorbell chime on `reward` |
+| `facade/bridge` | yes | `online` / `offline` | Whether the show machine is listening. The broker sends `offline` on its own if the server dies. |
 
 The game state is retained because it is a statement of the current state, and
 a dashboard that connects late should see it. Cues are not retained because they
 are moments: replaying *fog on* to a reconnecting automation an hour later would
 fill the street with fog.
 
-Cues also make the existing per-trigger HTTP hooks optional for anyone running
-Home Assistant. The fog machine is driven by an HA automation listening for
-`level >= 3`, so it does not need a URL pasted into four separate triggers.
-The hooks still work and still fire, so nothing set up for last year breaks.
+```yaml
+alias: Facade — fog on the third rung
+triggers:
+  - trigger: mqtt
+    topic: facade/game/cue
+conditions:
+  - condition: template
+    value_template: "{{ trigger.payload_json.cue == 'scare' and trigger.payload_json.level >= 3 }}"
+actions:
+  - action: switch.turn_on
+    target: { entity_id: switch.fog_machine }
+  - delay: { seconds: 4 }
+  - action: switch.turn_off
+    target: { entity_id: switch.fog_machine }
+```
+
+Cues make the existing per-trigger HTTP hooks optional for anyone running Home
+Assistant. The hooks still work and still fire, so nothing set up for last year
+breaks.
 
 ## Designing a ladder
 
@@ -432,14 +480,15 @@ Done:
    YES / NO (hold for mercy) / DOOR / TREAT, reset, the diagram, the press log,
    and learning which physical button is which from the presses that arrive.
 
-Next:
-
-6. **MQTT bridge in `server.mjs`** behind `--mqtt`, plus `POST /link/press`. Both
-   are key-checked when `--key` is set, like the socket. The bridge only has to
-   send the `press` action the remote already sends. Tests go in `link.test.mjs`
-   for the MQTT framing, as for the WebSocket framing.
-7. **State and cue publishing** to `facade/game` and `facade/game/cue`, and the
-   Home Assistant automation above with a worked fog/WLED example.
+6. **The MQTT bridge** — [`mqtt.mjs`](../mqtt.mjs), started by `--mqtt` on
+   the link server, plus `POST /link/press`. MQTT 3.1.1 written by hand, like
+   the WebSocket, so there is still nothing to install.
+   [`test/mqtt.test.mjs`](../test/mqtt.test.mjs) checks the packets byte by byte,
+   then runs the whole path against a small broker written in the test, through
+   the real link server, to a WebSocket standing in for the control tab. It
+   covers presses in, game state out, reconnecting, a wrong password and the
+   HTTP endpoint. It has also been run against Mosquitto and the real control
+   tab.
 
 ## Open questions
 
