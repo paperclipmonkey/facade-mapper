@@ -350,3 +350,46 @@ body { --remote-chrome: 96px; }
 .sound-fader.playing .fader-label {
   color: var(--good);
 }
+
+/* ------------------------------------------------------------------ *
+ * The dare game
+ * ------------------------------------------------------------------ */
+
+.game-state {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  color: var(--text-dim);
+  font-size: 15px;
+}
+.game-state.on { border-color: var(--accent); color: var(--text); }
+
+/* Four answers, two by two: thumb-sized and coloured so the right one can be
+   hit in the dark without reading it. */
+.game-pad {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.game-pad .big { min-height: 84px; touch-action: none; }
+.game-pad .big-label { font-size: 22px; letter-spacing: 0.04em; }
+.game-yes { border-color: var(--good); color: var(--good); }
+.game-no { border-color: var(--bad); color: var(--bad); }
+.game-no.held { background: var(--bad); color: var(--bg); }
+.game-door { border-color: var(--accent-2); color: var(--accent-2); }
+.game-treat { border-color: var(--warn); color: var(--warn); }
+.game-pad .big:disabled { opacity: 0.35; }
+
+/* The diagram is drawn wide. On a phone it scrolls sideways at a size that can
+   be read, rather than shrinking to fit and being unreadable. */
+.game-graph-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+}
+.game-graph-scroll .game-graph { min-width: 760px; }
+
+.game-log-row { font-size: 13px; color: var(--text-dim); padding: 2px 0; }

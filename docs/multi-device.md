@@ -66,6 +66,9 @@ things you want in your hand out in the dark:
 - **Triggers** — fire one by hand, with its cooldown counting down on the button.
 - **Play, pause, stop and the playlist.**
 - **Master brightness.**
+- **The dare game** — its own tab: YES, NO (hold for mercy), DOOR and TREAT,
+  the same presses the real buttons send, with the game's diagram lit up to
+  show where it is. See [dare buttons](button-game.md).
 - Behind a disclosure: effects on and off, and per-projector blackout with a
   **Flash** button that makes one projector identify itself, which is the only
   practical way to tell three of them apart from the garden.

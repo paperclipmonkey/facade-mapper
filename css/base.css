@@ -484,3 +484,65 @@ input[type="checkbox"] {
 
 /* A status chip in a list row must not push the row into two lines. */
 .list-item .chip { flex: none; white-space: nowrap; }
+
+/* ------------------------------------------------------------------ *
+ * The dare game diagram (js/core/gameGraph.js)
+ *
+ * Shared by the control tab's Game panel and the remote. Everything is
+ * dimmed while the game is live except the current state and the ways out of
+ * it, because the question while testing is "what would this button do now?"
+ * ------------------------------------------------------------------ */
+
+.gg {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: var(--font);
+  user-select: none;
+}
+
+.gg-zone {
+  fill: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.gg-zone-door { fill: var(--accent-2); }
+.gg-zone-rule { stroke: var(--line-strong); stroke-dasharray: 2 4; }
+
+.gg-edge path { fill: none; stroke: var(--line-strong); stroke-width: 1.6; }
+.gg-edge polygon { fill: var(--line-strong); }
+.gg-edge.gg-dim { opacity: 0.35; }
+.gg-edge.gg-off { opacity: 0.18; }
+.gg-edge.gg-off path { stroke-dasharray: 4 4; }
+.gg-edge.gg-live path { stroke: var(--text); stroke-width: 2.2; }
+.gg-edge.gg-live polygon { fill: var(--text); }
+.gg-edge.gg-last path { stroke: var(--accent); stroke-width: 2.6; }
+.gg-edge.gg-last polygon { fill: var(--accent); }
+
+.gg-label rect { fill: var(--bg-panel); stroke: var(--line); }
+.gg-label text { fill: var(--text-dim); font-size: 10.5px; }
+.gg-label.gg-dim { opacity: 0.35; }
+.gg-label.gg-off { opacity: 0.25; }
+.gg-label.gg-live rect { stroke: var(--text); }
+.gg-label.gg-live text { fill: var(--text); font-weight: 600; }
+.gg-label.gg-last rect { stroke: var(--accent); }
+
+.gg-node { cursor: pointer; }
+.gg-node > rect:first-of-type { fill: var(--bg-raised); stroke: var(--line-strong); stroke-width: 1.2; }
+.gg-node .gg-stripe { fill: var(--text-faint); }
+.gg-node.gg-zone-path .gg-stripe { fill: var(--accent); }
+.gg-node.gg-zone-door .gg-stripe { fill: var(--accent-2); }
+.gg-title { fill: var(--text); font-size: 13.5px; font-weight: 600; }
+.gg-sub { fill: var(--text-dim); font-size: 11px; }
+.gg-foot { fill: var(--text-faint); font-size: 10.5px; }
+.gg-node.gg-missing .gg-foot { fill: var(--warn); }
+.gg-node.gg-dim { opacity: 0.45; }
+.gg-node.gg-off { opacity: 0.3; }
+.gg-node.gg-was > rect:first-of-type { stroke: var(--accent-dim); }
+.gg-node.gg-current > rect:first-of-type { fill: #2a1a0c; stroke: var(--accent); stroke-width: 2.4; }
+.gg-node.gg-current .gg-foot { fill: var(--accent); }
+.gg-node:focus { outline: none; }
+.gg-node:focus-visible > rect:first-of-type { stroke: var(--accent-2); stroke-width: 2.4; }
+
+.gg-legend { fill: var(--text-faint); font-size: 11px; }

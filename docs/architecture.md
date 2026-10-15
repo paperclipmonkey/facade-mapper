@@ -160,6 +160,7 @@ plausible-looking output:
 node test/geometry.test.mjs    # homography, marker detection, region and mesh maths
 node test/runtime.test.mjs     # motion, gating, scheduling, grading, the show clock, feeds
 node test/triggers.test.mjs    # holds, restores, timers, hotkeys and the HTTP hooks
+node test/game.test.mjs        # the dare game: its table, every press rule, and its diagram
 node test/migrate.test.mjs     # every project ever saved, arriving at a newer copy
 node test/bus.test.mjs         # cross-tab messages, the mirror, and who is alive
 node test/picker.test.mjs      # the effect gallery: cards, search, and letting go

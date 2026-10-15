@@ -1,21 +1,35 @@
-# Dare buttons — a proposal
+# Dare buttons
 
-> **Status: design, not built.** This is the approach for letting trick-or-treaters
-> drive the show themselves from physical buttons, written down before any code
-> so the interaction can be argued about while it is still cheap to change.
+> **Status: the game is built; the Home Assistant bridge is not yet.** The state
+> machine, its rules for presses, the diagram, the **Game** panel in the control
+> tab and the **Game** tab on the remote all work today. Every button can be
+> pressed from the remote. Getting presses in from real Matter buttons over MQTT
+> is the next step. See [building it](#building-it).
 
-A trick-or-treater rings the bell and the house answers. Two big
-buttons on the path: **YES** and **NO**. The facade asks *"Do you dare?"*.
-Pressing YES gets them something scary, and then the house asks again with a
-scarier one waiting. They keep going until they say NO, they reach the top of
-the ladder, or the adult on the door decides they have earned it and presses
-**TREAT**.
+A group of trick-or-treaters comes up the path, and two big buttons are waiting
+for them: **YES** and **NO**. The facade asks *"Do you dare?"*. YES gets them
+something scary, and then the house asks again with a scarier one waiting. A
+group that keeps saying YES reaches the top of the ladder, and the house invites
+them up to the front door. There, a third button, **DOOR**, sets off the finale
+over their heads. Saying NO at any point ends the escalation kindly. However it
+ends, the adult with the sweets presses **TREAT**, and the group reads *"You
+survived"* on the wall as they walk back down the path.
+
+**Where people stand decides what goes on the wall.** The YES and NO buttons
+sit far enough back that the whole facade is in view and words on it can be
+read. That is where every question, every send-off and every scare with writing
+in it belongs. At the door they are too close to read anything on the house, so
+the finale is sound, light and something looming over them, not text. The
+diagram colours each state by where its audience is standing. The reward is
+written for the walk back, when they are far enough away again.
 
 The buttons are Matter buttons in Home Assistant, and the house already has an
-MQTT broker. Everything below is about getting a press from a child's thumb to
-the wall in about a quarter of a second, and about what happens when four
-children press everything at once.
+MQTT broker. Two or three buttons are enough: YES and NO on the path, and
+optionally DOOR at the front door. Without a door button, the finale plays at the
+top of the ladder where they stand. TREAT is for the adult. The remote has one,
+or it can be a fourth button somewhere a child will not find it.
 
+- [Trying it](#trying-it)
 - [The shape of it](#the-shape-of-it)
 - [The game](#the-game)
 - [Handling presses](#handling-presses)
@@ -26,15 +40,35 @@ children press everything at once.
 - [Building it](#building-it)
 - [Open questions](#open-questions)
 
+## Trying it
+
+1. Build the scares as ordinary **triggers**, mildest first. Each one is a
+   scene, a sound and a hold. Build the questions and the send-offs as
+   **scenes**.
+2. Open the **Game** panel in the control tab. Switch the game on, add the
+   triggers to the ladder in order, pick a finale, and choose a scene for each
+   moment. Clicking a state on the diagram scrolls to its settings.
+3. Press the **YES / NO / DOOR / TREAT** buttons at the top of the panel, or open
+   the remote's **Game** tab on a phone (`remote.html#game`) and walk the path
+   with it. Holding NO is the mercy exit, like a long press on the real button.
+   The diagram lights up the current state and the ways out of it, and marks the
+   move just made. The press log says what happened to every press, including
+   the ones that were dropped and why.
+
+The diagram is drawn from the same table the game runs on
+([`js/core/game.js`](../js/core/game.js)), so an arrow on it is a move the game
+will make, and a press with no arrow is a press the game will drop.
+
 ## The shape of it
 
 ```mermaid
 flowchart LR
-  subgraph path[On the path]
+  subgraph path[On the path — can read the wall]
     Y[YES button]
     N[NO button]
   end
-  T[TREAT button<br/>by the door]
+  D[DOOR button<br/>at the front door]
+  T[TREAT<br/>remote, or hidden button]
   subgraph ha[Home Assistant]
     M[Matter integration<br/>event entities]
     A[automation:<br/>press → MQTT]
@@ -47,7 +81,8 @@ flowchart LR
     P[projector tabs]
   end
 
-  Y & N & T --> M --> A -->|facade/press| B --> S -->|link: action press| C
+  Y & N & D --> M --> A -->|facade/press| B --> S -->|link: action press| C
+  T -->|link: action press| C
   C -->|scene change| P
   C -->|game state| S -->|facade/game| B --> H
 ```
@@ -62,75 +97,98 @@ same way every scene change already does.
 Doing it this way has three consequences:
 
 - A press from the phone remote and a press from a Matter button are the same
-  message. You can rehearse the whole game indoors on a phone, without Home
-  Assistant running.
+  message: `{ action: 'press', button, kind, id, at }`. You can rehearse the
+  whole game indoors on a phone, without Home Assistant running.
 - Home Assistant does not need to know what level the game is on, and nothing in
   its YAML has to change when you redesign the ladder.
 - The server stays the "forward frames and tell the time" thing
-  [multi-device](multi-device.md) describes. It gains a second kind of socket,
-  but it still holds no state about the show.
+  [multi-device](multi-device.md) describes. It will gain a second kind of
+  socket, but it still holds no state about the show.
 
 ## The game
 
 ```mermaid
 stateDiagram-v2
-  direction TB
+  direction LR
   [*] --> Attract
 
-  Attract --> Ask: YES or NO pressed
-  Attract --> Attract: TREAT (ignored, nobody playing)
+  Attract --> Ask: YES or NO
+  Attract --> TooSoon: DOOR
+  TooSoon --> Attract: time
 
   state "Ask (level n)" as Ask
   Ask --> Scare: YES
   Ask --> Chicken: NO
-  Ask --> Treat: TREAT
-  Ask --> Nudge: no press for askTimeout
-  Nudge --> Ask: any press (re-ask)
-  Nudge --> Attract: still nothing
+  Ask --> CantDecide: YES+NO together
+  Ask --> Nudge: time
+  CantDecide --> Scare: time
+  Nudge --> Scare: YES
+  Nudge --> Chicken: NO
+  Nudge --> Cooldown: time
 
   state "Scare (rung n)" as Scare
-  Scare --> Ask: hold ends, n < top (n += 1)
-  Scare --> Finale: hold ends, n = top
-  Scare --> Mercy: NO held (long press)
-  Scare --> Treat: TREAT
+  Scare --> Ask: time, more rungs (n += 1)
+  Scare --> Approach: time, top rung, door on
+  Scare --> Finale: time, top rung, no door
+  Scare --> Mercy: NO held
 
-  Finale --> Treat: TREAT, or finale ends
-  Chicken --> Treat: TREAT, or waitForTreat elapses
-  Mercy --> Treat: TREAT, or waitForTreat elapses
+  state "Come closer" as Approach
+  Approach --> Finale: DOOR
+  Approach --> Chicken: NO, or time
 
-  Treat --> Cooldown: reward scene ends
-  Cooldown --> Attract: cooldown elapses
+  Finale --> Waiting: time
+  Waiting --> Reward: TREAT, or time
+  Chicken --> Reward: TREAT
+  Mercy --> Reward: TREAT
+  Chicken --> Cooldown: time
+  Mercy --> Cooldown: time
+
+  Reward --> Cooldown: time
+  Cooldown --> Attract: time
 ```
 
-| State | On the wall | Presses that count |
-| --- | --- | --- |
-| **Attract** | The ambient loop, plus a prompt: *"Press YES if you dare"* | YES or NO starts a game at level 1. Either button counts, because a child who pressed NO first still wants to see what happens. |
-| **Ask** *n* | The question scene for level *n*. The wording gets worse as *n* rises: *"Scarier?"*, *"Are you SURE?"*, *"Last chance…"* | YES, NO, TREAT |
-| **Scare** *n* | Rung *n* of the ladder: a scene, a sound, a hold | TREAT. A long press on NO also counts (see [Mercy](#mercy)). Everything else is dropped. |
-| **Finale** | The top rung: the worst thing the house can do | TREAT |
-| **Chicken** | A gentle send-off. NO at level 1 gets *"Wise choice"* and NO at level 4 gets *"So close!"*. Pick the scene from *n*. | TREAT |
-| **Mercy** | The calm scene, straight away and with no sting | TREAT |
-| **Treat** | The reward: *"You survived!"*, fireworks, whatever the house does for a happy ending | none |
-| **Cooldown** | Back to ambient, with no prompt yet | none |
+TREAT goes to Reward from any state in which a group is playing. The control
+tab draws this same diagram, live, from the table the game runs on. This copy
+is for reading on GitHub.
+
+| State | Where they are | On the wall | Presses that count |
+| --- | --- | --- | --- |
+| **Attract** | street | The house's normal show, or a prompt: *"Press YES if you dare"* | YES or NO starts a game at level 1. A child who pressed NO first still wants to see what happens. DOOR is **Too soon**. |
+| **Too soon** | door | Somebody went straight to the door. A sound sends them back to the path. | none |
+| **Ask** *n* | path | The question for level *n*. It gets worse as *n* rises: *"Scarier?"*, *"Are you SURE?"*, *"Last chance…"* | YES, NO, TREAT |
+| **Anyone there?** | path | Nobody answered. One more chance before the house gives up on the group. | YES, NO, TREAT |
+| **Can't decide** | path | YES and NO together. *"We'll decide for you…"*, then YES. | TREAT |
+| **Scare** *n* | path | Rung *n* of the ladder: a trigger's scene, sound and hold | TREAT. NO held down is [Mercy](#mercy). Everything else is dropped. |
+| **Come closer** | path | The top of the ladder: the invitation to the door. These are the last words they will read. | DOOR, NO, TREAT |
+| **Finale** | door | Sound, light, something over their heads. No words. | TREAT |
+| **Waiting** | door | They survived. The door opens. | TREAT. If nobody presses it, the reward plays anyway. |
+| **Chicken** | path | A kind send-off, by level: NO at level 1 gets *"Wise choice"*, NO at level 4 gets *"So close!"* | TREAT |
+| **Mercy** | path | Somewhere calm, straight away | TREAT |
+| **Reward** | street | *"You survived!"*, written for the walk back down the path | none |
+| **Cooldown** | street | Back to the house's normal show | none |
 
 ### Mercy
 
-Some children are four. A long press on NO **during a scare** cuts the scare
-short and goes straight to the calm scene. Without this, the only way out of
-something that has gone too far is the adult reaching the laptop. Matter
-buttons report `long_press` on their own, so this costs one extra event type in
-the automation. A slow press of NO is also what a frightened child does
-naturally, which is a better trigger than any instruction you could give them.
+Some children are four. Holding NO down **during a scare** cuts the scare short
+and goes straight to a calm scene. Without this, the only way out of something
+that has gone too far is an adult reaching the laptop. Matter buttons report
+`long_press` on their own, so this costs one extra event type in the automation.
+A slow press of NO is also what a frightened child does naturally, which works
+better than any instruction you could give them.
 
-Mercy goes to **Treat** like every other ending. Nobody is sent away from the
+Mercy ends in the reward like every other ending. Nobody is sent away from the
 door empty-handed for being scared.
 
-### Why NO does not end the game
+### Why NO does not end the visit
 
-NO leads to **Chicken**, which waits for TREAT. The adult at the door is still
-the one who decides when the visit is over. The house only stops escalating.
-`waitForTreat` (default 20 s) is there in case nobody presses TREAT, because a
-show stuck on *"So close!"* all evening is worse than one that resets.
+NO leads to **Chicken**, which waits for TREAT. The adult at the door still
+decides when the visit is over; the house only stops escalating. `waitForTreat`
+(default 30 s) resets the house if nobody presses TREAT, because a show stuck on
+*"So close!"* all evening is worse than one that resets.
+
+A group that survived the finale is different. They are at the door, and it is
+being opened. If nobody remembers TREAT, the reward plays anyway on the
+`waitForTreat` timeout, so they still read *"You survived!"* on the way back.
 
 ## Handling presses
 
@@ -148,7 +206,7 @@ flowchart TD
   S -->|no| R{role of button?}
   R -->|unmapped| X3[drop, log once]
   R -->|TREAT| TR[Treat, from any<br/>state but Attract]
-  R -->|YES / NO| L{state accepts it?}
+  R -->|YES / NO / DOOR| L{state accepts it?}
   L -->|no| FB[drop · optional<br/>'wait…' blip]
   L -->|yes| AR{armed?<br/>≥ 400 ms in state}
   AR -->|no| X4[drop — leftover<br/>from last state]
@@ -167,10 +225,11 @@ flowchart TD
    This is also why presses are **never published retained**: a retained press
    would be redelivered to the bridge every time it reconnects.
 3. **Map buttons to roles, not devices.** The project stores
-   `{ "button-id": "yes" | "no" | "treat" }`. Two YES buttons on two sides of
-   the path is a mapping change, not a code change. A button you replace on
-   the night gets mapped again from a list of the presses the control tab has
-   recently seen.
+   `{ "button-id": "yes" | "no" | "door" | "treat" }`. Two YES buttons on two
+   sides of the path is a mapping change, not a code change. A press that names
+   a role directly, which is what the remote sends, needs no mapping at all. A
+   button you replace on the night is mapped again from the Game panel, which
+   lists every unknown button that has pressed recently with a role to give it.
 4. **Drop, never queue.** A press that arrives during a scare does not answer
    the next question. Queued presses are how a group of mashers skips from level
    1 to level 4 without seeing anything in between. If you want feedback for a
@@ -178,8 +237,8 @@ flowchart TD
 5. **Arm each question.** For the first 400 ms after a question appears, its
    own presses are ignored. Without this, the thumb still on YES from the last
    question answers the new one before anyone has read it.
-6. **Give the other answer a chance.** The first accepted press opens a
-   150 ms window. If the opposite answer arrives inside that window, two
+6. **Give the other answer a chance.** In a question, the first accepted
+   press opens a 150 ms window. If the opposite answer arrives inside that window, two
    children disagreed. Instead of picking whichever packet won, the house says
    so: a "can't decide" sting, and then YES. Presses of the same button inside
    the window add nothing.
@@ -192,7 +251,8 @@ Matter buttons send several events for one press (`initial_press`,
 not wait for the multi-press detection window that `short_release` and
 `multi_press_complete` wait for. That window adds several hundred milliseconds,
 which a child notices. The one place a second event type is needed is
-`long_press` on NO, for Mercy.
+`long_press` on NO, for Mercy. A long press on any other button is ignored,
+because its `initial_press` has already counted.
 
 ## Getting a press to the show
 
@@ -248,8 +308,8 @@ actions:
         } | tojson }}
 ```
 
-The roles (`yes`, `no`, `treat`) are assigned in the control tab and not in
-Home Assistant. That keeps the design of the game in one place.
+The roles (`yes`, `no`, `door`, `treat`) are assigned in the control tab, not
+in Home Assistant. That keeps the design of the game in one place.
 
 ## Telling the rest of the house
 
@@ -280,8 +340,9 @@ hooks. That is exactly what a scare is, and you already know how to build one.
 flowchart LR
   subgraph ladder[A five-rung ladder]
     direction LR
-    r1[1 · eyes in the<br/>windows<br/>4 s] --> r2[2 · figures behind<br/>the glass<br/>5 s] --> r3[3 · blood drips<br/>+ fog cue<br/>6 s] --> r4[4 · lightning,<br/>thunder<br/>6 s] --> r5[5 · finale:<br/>everything<br/>10 s]
+    r1[1 · eyes in the<br/>windows<br/>4 s] --> r2[2 · figures behind<br/>the glass<br/>5 s] --> r3[3 · blood drips<br/>+ fog cue<br/>6 s] --> r4[4 · lightning,<br/>thunder<br/>6 s]
   end
+  r4 --> come[Come closer…<br/>read from the path] --> fin[finale at the door:<br/>thunder, the porch<br/>light, no words]
 ```
 
 Some guidelines that make it work on the night:
@@ -301,28 +362,35 @@ Some guidelines that make it work on the night:
 - **Keep the ladder short.** Five rungs at about six seconds each, plus the
   questions, is already over a minute at the door. Queues form behind long games.
 
-Proposed project shape (one game per show is enough, but an array costs
-nothing and lets you keep a "little ones" ladder next to the full one):
+- **Put the words where they can be read.** Questions, *"Come closer…"* and
+  the send-offs are read from the path. The finale is not read at all, and the
+  reward is read on the way back.
+
+What a show stores (`project.game`; see `createGame` in
+[`state.js`](../js/core/state.js)):
 
 ```js
-games: [{
-  id, name, enabled,
+game: {
+  enabled: false,
   buttons: { 'event.path_button_left_button': 'yes', /* … */ },
-  attractSceneId,            // the prompt over the ambient loop
-  askSceneIds: [ … ],        // one per level, or one reused
-  rungs: [ triggerId, … ],   // scare n is rung n
-  chickenSceneIds: [ … ],    // by level, last one repeats
-  mercySceneId, rewardSceneId, nudgeSceneId, decideSceneId,
-  askTimeout: 15, waitForTreat: 20, cooldown: 6,
-  armMs: 400, windowMs: 150, staleMs: 2000,
-}]
+  door: true,                       // end at the front door
+  scenes: {
+    attract, early, nudge, decide, approach, mercy, waiting, reward,  // scene ids
+    ask: [ … ], chicken: [ … ],     // by level; a blank repeats the one before
+  },
+  rungs: [ triggerId, … ],          // scare n is rung n
+  finale: triggerId,
+  timing: { askTimeout: 15, nudgeTimeout: 10, approachTimeout: 25, waitForTreat: 30,
+            rewardHold: 8, cooldown: 6, armMs: 400, windowMs: 150, staleMs: 2000, … },
+}
 ```
 
 ## What it does to the rest of the show
 
 - **While a game is running it owns the stage.** Playlist advancing, timer
-  triggers and motion triggers are suspended from the first press to the end of
-  Cooldown. Otherwise a timed lightning strike lands in the middle of
+  triggers and motion triggers are suspended from the first press until the game
+  is back in Attract. Timers that come due meanwhile are pushed on, not saved up,
+  and the scene that was up before the game is put back at Cooldown. Otherwise a timed lightning strike lands in the middle of
   *"Are you SURE?"* and the trigger's restore puts back a question that has
   already been answered. In Attract they run as normal, so the house still does
   its thing between visitors. A motion trigger on the path is a good way to
@@ -333,48 +401,53 @@ games: [{
 - **Holds and timeouts use real timers, not the render loop.** This is the
   `armWake` lesson from triggers: a control tab behind another window still has
   to end a scare and still has to time out an unanswered question.
-- **The remote gets the game.** A YES / NO / TREAT row on `remote.html` sends
-  the same `press` action as the buttons, and works as a treat button for an
-  adult who is not standing by the door. It also gets *reset game*, the one
-  thing you want when a group walks off mid-ladder and the nudge has not
-  caught up yet.
+- **The remote gets the game.** Its **Game** tab sends the same `press` action
+  as the buttons, with an id and a timestamp, so it goes through the same rules.
+  It works as the TREAT button for an adult at the door. It also has *Reset*,
+  the one thing you want when a group walks off mid-ladder before the nudge has
+  caught up.
 
 ## Building it
 
-In order, each step usable before the next:
+Done:
 
-1. **`js/control/game.js`**: the state machine as a pure function of
-   `(state, press | tick, now)` with injected `cue` / `scene` / `publish`
-   callbacks. Test it in `test/game.test.mjs` the way `triggers.test.mjs`
-   tests holds: scripted press sequences against a fake clock, including the
-   unfriendly ones. These include a press during a scare, YES and NO 40 ms apart,
-   the same id twice, a press from five seconds ago, and TREAT in Attract.
-2. **Extract `cue(trigger)` from `fire`** in `triggers.js`, covering the
-   scene, sound and before hook without the hold-and-restore. The game needs a
-   rung to play like a trigger but to return to *the next question*, not to
-   whatever was on before. Triggers keep using `fire`, which calls `cue`.
-3. **`press` remote verb + remote UI row.** At this point the game is playable
-   from a phone with no Home Assistant at all. Do the design work on the
-   ladder here.
-4. **Schema + migration** in `state.js`, and a Game panel in the control tab
-   with a button-learning list ("press the button you want to be YES").
-5. **MQTT bridge in `server.mjs`** behind `--mqtt`, plus `POST /link/press`.
-   Both are key-checked when `--key` is set, like the socket. Add tests in
-   `link.test.mjs` for the MQTT framing, as for the WebSocket framing.
-6. **State and cue publishing**, and a page in `docs/` with the HA automation
-   above and a worked fog/WLED example.
+1. **The table** — [`js/core/game.js`](../js/core/game.js): states, transitions,
+   guards and the press-to-role mapping, as data. Nothing there touches the
+   DOM or the clock.
+2. **The runtime** — [`js/control/game.js`](../js/control/game.js): walks the
+   table and applies every press rule above. It acts on the show only through an
+   `io` object it is given, so [`test/game.test.mjs`](../test/game.test.mjs)
+   plays whole evenings against a clock moved by hand: a full ladder, NO at each
+   level, mashing, both buttons at once, redelivered and stale presses, mercy,
+   resets, late ticks from a hidden tab, and edits made mid-game.
+3. **Rungs reuse triggers** — `cue` and `cueEnd` in
+   [`triggers.js`](../js/control/triggers.js) play a trigger without its
+   hold-and-restore. While a game is playing, timer and motion triggers measure
+   but do not fire, the playlist waits, and a scare caught mid-hold is finished
+   with its `after` hook.
+4. **The diagram** — [`js/core/gameGraph.js`](../js/core/gameGraph.js): the table
+   drawn as SVG, laid out by hand from the street on the left to the door on the
+   right, and lit up live.
+5. **The Game panel** in the control tab and the **Game tab** on the remote:
+   YES / NO (hold for mercy) / DOOR / TREAT, reset, the diagram, the press log,
+   and learning which physical button is which from the presses that arrive.
+
+Next:
+
+6. **MQTT bridge in `server.mjs`** behind `--mqtt`, plus `POST /link/press`. Both
+   are key-checked when `--key` is set, like the socket. The bridge only has to
+   send the `press` action the remote already sends. Tests go in `link.test.mjs`
+   for the MQTT framing, as for the WebSocket framing.
+7. **State and cue publishing** to `facade/game` and `facade/game/cue`, and the
+   Home Assistant automation above with a worked fog/WLED example.
 
 ## Open questions
 
-- **How many buttons, and where?** Two on the path plus one by the door is
-  assumed above. A single button (*press to dare*, and walking away means no)
-  is a simpler game that needs only Attract → Scare → Ask with a timeout as the
-  NO. It is worth considering if the second button might get lost or flattened.
 - **Should the buttons light up?** If they have LEDs, or a WLED strip next to
-  them, *lit only while a question is waiting* fixes the most common confusion
-  (pressing during a scare) better than any rule above. It needs nothing from
-  this app beyond `facade/game`.
-- **Should the game ever reach Finale without an adult?** As written, the top
-  rung plays and then the house waits for TREAT. An unattended house, or one
-  that is out of sweets, may want Finale to go straight to a "come back next
-  year" ending instead.
+  them, lighting them only while a question is waiting would prevent the most
+  common confusion (pressing during a scare) better than any rule above. It
+  needs nothing from this app beyond `facade/game`.
+- **Should the game ever reach the finale without an adult?** As built, the
+  finale plays and the house waits a while for TREAT before showing the reward
+  anyway. A house that is unattended, or out of sweets, may want a "come back
+  next year" ending instead.
