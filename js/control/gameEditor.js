@@ -22,7 +22,7 @@
  */
 
 import { el, clear } from './ui.js';
-import { STATES, ROLE_LABELS, EVENT_LABELS, eventsFrom, sceneSlot, cueSlot, beatsFor, gameProblems, persuadeCount } from '../core/game.js';
+import { STATES, ROLES, ROLE_LABELS, EVENT_LABELS, eventsFrom, sceneSlot, cueSlot, beatsFor, gameProblems, persuadeCount } from '../core/game.js';
 import { renderGameGraph, holdable } from '../core/gameGraph.js';
 import { sceneContents, sceneMessage, setSceneMessage, gameNames, gameMissing } from './gamePanel.js';
 
@@ -41,7 +41,6 @@ const EVENT_WORDS = {
   yes: 'YES',
   no: 'NO',
   door: 'DOOR',
-  treat: 'TREAT',
   'long-no': 'NO held down (a frightened child)',
 };
 
@@ -103,7 +102,7 @@ function build() {
   });
 
   const pad = q('pad');
-  for (const role of ['yes', 'no', 'door', 'treat']) {
+  for (const role of ROLES) {
     const button = el('button', { type: 'button', class: `btn game-btn game-${role}`, text: ROLE_LABELS[role], dataset: { role } });
     if (role === 'no') holdable(button, () => appRef.game.press({ button: 'no' }), () => appRef.game.press({ button: 'no', kind: 'long' }));
     else button.addEventListener('click', () => appRef.game.press({ button: role }));
@@ -170,7 +169,7 @@ export function paintGameEditor() {
 export function graphWords(project, game) {
   const words = {};
   for (const state of Object.keys(STATES)) {
-    // When the waiting screen is the first question, "more?" starts at 2.
+    // When the waiting screen is the first question, "scared yet?" starts at 2.
     const level = state === 'ask' && game.openingQuestion ? 2 : 1;
     const sceneId = STATES[state].cue ? project.triggers?.find((t) => t.id === cueSlot(game, state, level))?.sceneId : sceneSlot(game, state, level);
     const message = sceneId ? sceneMessage(project, sceneId) : null;
@@ -210,7 +209,10 @@ function renderSide() {
   // talking them round. `level` below is whichever of those it is.
   const top = Math.max(1, game.rungs.length);
   const levels = def.staged ? top + 1 : def.levelled ? top : def.byAttempt ? Math.max(1, persuadeCount(game)) : 1;
-  const level = Math.min(Math.max(1, current.level), levels);
+  // When the waiting screen is the first question, this box is only ever
+  // "scared yet?": there is no first question of its own to edit.
+  const first = state === 'ask' && game.openingQuestion ? 2 : 1;
+  const level = Math.max(first, Math.min(current.level, levels));
   current.level = level;
   const [zoneName, zoneHint] = ZONE[def.zone];
 
@@ -229,7 +231,7 @@ function renderSide() {
 
   if (def.levelled || (def.byAttempt && levels > 1)) {
     const tabs = el('div', { class: 'ge-levels' });
-    for (let l = 1; l <= levels; l++) {
+    for (let l = first; l <= levels; l++) {
       tabs.appendChild(
         el('button', {
           type: 'button',

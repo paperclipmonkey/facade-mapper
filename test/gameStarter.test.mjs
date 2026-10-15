@@ -73,8 +73,9 @@ console.log('— building it —');
   const s2 = contents(project, 'Scare: the flowers die, a creature at the windows');
   ok('the second, the flowers die and a creature is at the windows', s2.has('Hanging flowers dying') && s2.has('Creature at the windows') && !s2.has('Hanging flowers'));
   ok('the third, tentacles from the walls', contents(project, 'Scare: tentacles from the walls').has('Tentacles through the brick'));
-  ok('and the house keeps what it has shown: "more?" after the creature is asked over it',
-    contents(project, 'More? (after the creature)').has('Creature at the windows') && contents(project, 'More? (after the creature)').has('Hanging flowers dying'));
+  ok('with blood down the door', contents(project, 'Scare: tentacles from the walls').has('Blood down the door'));
+  ok('and the house keeps what it has shown: "scared yet?" after the creature is asked over it',
+    contents(project, 'Scared yet? (after the creature)').has('Creature at the windows') && contents(project, 'Scared yet? (after the creature)').has('Hanging flowers dying'));
   const finale = contents(project, 'Finale: the house wakes up');
   ok('the finale at the door is everything at once',
     ['Creature at the windows', 'Tentacles through the brick', 'Eyes in every window', 'Lightning', 'Bats'].every((n) => finale.has(n)));
@@ -85,7 +86,7 @@ console.log('— the flowers —');
     waiting.has('Hanging flowers') && s1.has('Hanging flowers') && !s1.has('Hanging flowers dying'));
   ok('the second scare swaps in the dying bunch', s2.has('Hanging flowers dying'));
   ok('and they stay dead to the end',
-    ['More? (after the creature)', 'Scare: tentacles from the walls', 'Out of tricks', 'Finale: the house wakes up', 'Waiting for a treat']
+    ['Scared yet? (after the creature)', 'Scare: tentacles from the walls', 'Out of tricks', 'Finale: the house wakes up', 'Waiting for a treat']
       .every((n) => contents(project, n).has('Hanging flowers dying') && !contents(project, n).has('Hanging flowers')));
   const dying = project.layers.find((l) => l.name === 'Hanging flowers dying');
   const fresh = project.layers.find((l) => l.name === 'Hanging flowers');
@@ -99,7 +100,7 @@ console.log('— the words —');
   const say = (id) => sceneMessage(project, id)?.text;
   ok('it asks trick or treat', say(game.scenes.attract) === EXAMPLE_WORDS.attract);
   ok('NO is answered "did you say trick?", then "but we love to scare"', game.scenes.persuade.map(say).join('|') === EXAMPLE_WORDS.persuade.join('|'));
-  ok('after each scare, "do you want more?"', game.scenes.ask.slice(1).every((id) => say(id) === EXAMPLE_WORDS.more));
+  ok('after each scare, "scared yet?"', game.scenes.ask.slice(1).every((id) => say(id) === EXAMPLE_WORDS.more));
   ok('NO for good is "come and get your treat", by how far they got',
     game.scenes.approach.slice(0, 3).every((id) => say(id) === EXAMPLE_WORDS.treat));
   ok('and after the last trick, out of tricks', say(game.scenes.approach[3]) === EXAMPLE_WORDS.outOfTricks);
@@ -138,9 +139,16 @@ console.log('— a house with nowhere for flowers —');
 {
   const project = createProject('bare');
   project.shapes = demoShapes().filter((sh) => !(sh.tags || []).includes('planter'));
-  buildExampleGame(project);
+  const result = buildExampleGame(project);
   ok('no planter, no flowers — they would fill the whole picture', !project.layers.some((l) => l.effect === 'flowers'));
+  ok('and building it says so', result.flowers === false);
   ok('and the game is still whole', gameProblems(project.game, project).length === 0);
+
+  // A hanging basket traced as a basket is a planter.
+  project.shapes = demoShapes().map((sh) => ({ ...sh, tags: (sh.tags || []).map((t) => (t === 'planter' ? 'basket' : t)) }));
+  const basket = buildExampleGame(project);
+  ok('a shape tagged basket grows them just the same',
+    basket.flowers && project.layers.filter((l) => l.effect === 'flowers').every((l) => l.targetTags.join() === 'basket'));
 }
 
 console.log('— the game\'s own scenes —');
@@ -203,7 +211,8 @@ console.log('— playing the script —');
     wait(10);
     seen.push(name());
     wait(1);
-    press('yes');
+    // Scared yet? Not yet.
+    press('no');
     seen.push(name());
   }
   wait(10);
@@ -212,7 +221,8 @@ console.log('— playing the script —');
   seen.push(name());
   wait(11);
   seen.push(name());
-  runtime.press({ button: 'treat' });
+  // Sweets, and the goodbye plays by itself.
+  wait(30);
   seen.push(name());
   wait(9);
   seen.push(name());
@@ -221,8 +231,8 @@ console.log('— playing the script —');
 
   const expected = [
     'Said no 1', 'Said no 2',
-    'Scare: lightning and smoke', 'More? (after the lightning)',
-    'Scare: the flowers die, a creature at the windows', 'More? (after the creature)',
+    'Scare: lightning and smoke', 'Scared yet? (after the lightning)',
+    'Scare: the flowers die, a creature at the windows', 'Scared yet? (after the creature)',
     'Scare: tentacles from the walls', 'Out of tricks',
     'Finale: the house wakes up', 'Waiting for a treat',
     'Happy Halloween', 'My scene', 'Trick or treat?',
@@ -236,8 +246,11 @@ console.log('— playing the script —');
   wait(1);
   press('no');
   ok('three NOs and it sends them for their treat', name() === 'Come and get your treat 1', name());
-  press('treat');
-  ok('and TREAT says Happy Halloween', name() === 'Happy Halloween', name());
+  press('door');
+  ok('and DOOR is them coming up for it', name() === 'Finale: the house wakes up', name());
+  wait(11);
+  wait(30);
+  ok('then Happy Halloween as they leave', name() === 'Happy Halloween', name());
   ok('and the message layer is the one that says them', project.game.messageLayer === project.layers.find((l) => l.name === 'Message')?.id);
 }
 

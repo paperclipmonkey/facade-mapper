@@ -863,6 +863,14 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
          */
         const onWall = enabledWallFor(layer);
         if (inst.onWall !== onWall) {
+          // Switched on again: from scratch, state and all. Restarting only the
+          // clock replayed the run over whatever the last one left behind — the
+          // blood began from drips already at the bottom of the door.
+          if (inst.onWall !== null) {
+            inst.state = {};
+            inst.initialised = false;
+            ctx.state = inst.state;
+          }
           inst.onWall = onWall;
           inst.step = 0;
         }

@@ -258,13 +258,7 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
 
     if (!transitionFor(state, event, g, level, attempt)) return finish('not now');
 
-    // TREAT is an adult who means it, once; it skips the arming delay, and the
-    // words being said.
-    if (saying && event !== 'treat') return finish('wait for the words');
-    if (event === 'treat') {
-      dispatch(event);
-      return finish(`→ ${state}`);
-    }
+    if (saying) return finish('wait for the words');
 
     if (STATES[state].armed && now() - enteredAt < ms('armMs', 400)) return finish('not armed');
 

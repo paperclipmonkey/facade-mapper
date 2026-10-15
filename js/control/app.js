@@ -649,9 +649,11 @@ app.rehearse = () => {
       press('yes');
     } else if (snap.saying) {
       // Listening to the words, like a real group would.
-    } else if ((snap.state === 'ask' || snap.state === 'persuade') && snap.since > READ) press('yes');
+    } else if ((snap.state === 'ask' || snap.state === 'persuade') && snap.since > READ) {
+      // "Scared yet?" after a trick: not yet, so the rehearsal climbs the whole ladder.
+      press(snap.state === 'ask' && snap.level > 1 ? 'no' : 'yes');
+    }
     else if (snap.state === 'approach' && snap.since > READ) press('door');
-    else if (snap.state === 'waiting' && snap.since > 3) press('treat');
   }, 250);
   paintGameLive($('gamePanel'), app);
   paintGameEditor();
@@ -696,11 +698,12 @@ app.buildExampleGame = () => {
   applyScene(app.project, result.attract, { fade: 1 });
   app.commit();
   renderSceneButtons($('sceneButtons'), app);
+  const flowers = result.flowers ? '' : ' No flowers: tag the space just above the hanging basket #planter, then rebuild.';
   toast(
     result.missing.length
-      ? `Built the example game. Nothing is tagged ${result.missing.map((t) => `#${t}`).join(' or ')} yet, so some of it has nowhere to draw.`
-      : `Built the example game: ${result.scenes} scenes and ${result.triggers} scares. Press YES to play it.`,
-    result.missing.length ? 'bad' : 'good'
+      ? `Built the example game. Nothing is tagged ${result.missing.map((t) => `#${t}`).join(' or ')} yet, so some of it has nowhere to draw.${flowers}`
+      : `Built the example game: ${result.scenes} scenes and ${result.triggers} scares. Press YES to play it.${flowers}`,
+    result.missing.length || !result.flowers ? 'bad' : 'good'
   );
 };
 

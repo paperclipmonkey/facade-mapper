@@ -18,8 +18,8 @@ import { hasExampleGame } from './gameStarter.js';
 
 const TIMINGS = [
   ['askTimeout', 'Question waits', 's', 'How long a question waits for an answer before the house starts again from "trick or treat?".'],
-  ['approachTimeout', 'Treat invite waits', 's', 'How long "come and get your treat" waits for DOOR or TREAT before the house starts again.'],
-  ['waitForTreat', 'Door waits', 's', 'At the door: how long until the goodbye plays by itself if nobody presses TREAT.'],
+  ['approachTimeout', 'Treat invite waits', 's', 'How long "come and get your treat" waits for DOOR before the house starts again.'],
+  ['waitForTreat', 'Door waits', 's', 'At the door: how long they have to get their sweets before the goodbye plays.'],
   ['rewardHold', 'Goodbye', 's', 'How long "Happy Halloween" stays up as they walk away.'],
   ['cooldown', 'Between groups', 's', 'After one group leaves and before the house asks the next.'],
   ['scareHold', 'Empty trick', 's', 'Hold for a trick with nothing to play, so the rhythm survives a gap.'],
@@ -255,7 +255,7 @@ function buttonsSection(app, body, commit) {
     el('label', { class: 'inline-check' }, [door, 'End at the front door, with a DOOR button there']),
     el('p', {
       class: 'panel-note',
-      text: 'Press a real button and it appears below — say which it is. YES and NO go on the path, DOOR at the front door. TREAT is for the adult: the remote has one.',
+      text: 'Press a real button and it appears below — say which it is. YES and NO go on the path, DOOR at the front door.',
     })
   );
   const roleSelect = (value, onChange) => {

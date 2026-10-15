@@ -6,13 +6,13 @@
 > [connecting the buttons](#getting-a-press-to-the-show).
 
 A group of trick-or-treaters comes up the path, and two big buttons are waiting
-for them: **YES** and **NO**. The facade asks *"Do you dare?"*. YES gets them
-something scary, and then the house asks again with a scarier one waiting. A
-group that keeps saying YES reaches the top of the ladder, and the house invites
-them up to the front door. There, a third button, **DOOR**, sets off the finale
-over their heads. Saying NO at any point ends the escalation kindly. However it
-ends, the adult with the sweets presses **TREAT**, and the group reads *"You
-survived"* on the wall as they walk back down the path.
+for them: **YES** and **NO**. The facade asks *"Trick or treat?"*. YES gets them
+a trick, and then the house asks *"Scared yet?"*: NO, not yet, gets a scarier
+one. A group that is scared, or that reaches the top of the ladder, is invited
+up to the front door for a treat. There, a third button, **DOOR**, says they
+are coming forward and sets off the finale over their heads. They get their
+sweets, and read *"Happy Halloween!"* on the wall as they walk back down the
+path.
 
 **Where people stand decides what goes on the wall.** The YES and NO buttons
 sit far enough back that the whole facade is in view and words on it can be
@@ -24,9 +24,10 @@ written for the walk back, when they are far enough away again.
 
 The buttons are Matter buttons in Home Assistant, and the house already has an
 MQTT broker. Two or three buttons are enough: YES and NO on the path, and
-optionally DOOR at the front door. Without a door button, the finale plays at the
-top of the ladder where they stand. TREAT is for the adult. The remote has one,
-or it can be a fourth button somewhere a child will not find it.
+optionally DOOR at the front door. There is no button for the adult: the
+goodbye plays by itself once they have been to the door, and the remote's
+**Reset** puts the house back to *"Trick or treat?"* from indoors whenever it is
+needed.
 
 - [Trying it](#trying-it)
 - [The shape of it](#the-shape-of-it)
@@ -53,8 +54,11 @@ or it can be a fourth button somewhere a child will not find it.
    | *TRICK OR TREAT? YES FOR A TRICK* | Lightning and smoke | *DID YOU SAY… TRICK?* |
    | *DID YOU SAY… TRICK?* | Lightning and smoke | *BUT WE LOVE TO SCARE…* |
    | *BUT WE LOVE TO SCARE…* | Lightning and smoke | *COME AND GET YOUR TREAT.* |
-   | after the lightning: *DO YOU WANT MORE?* | The flowers die, a creature at the windows | *COME AND GET YOUR TREAT.* |
-   | after the creature: *DO YOU WANT MORE?* | Tentacles from the walls, then *WE'RE ALL OUT OF TRICKS. COME AND GET YOUR TREAT.* | *COME AND GET YOUR TREAT.* |
+   | after the lightning: *SCARED YET?* | *COME AND GET YOUR TREAT.* | The flowers die, a creature at the windows |
+   | after the creature: *SCARED YET?* | *COME AND GET YOUR TREAT.* | Tentacles from the walls, then *WE'RE ALL OUT OF TRICKS. COME AND GET YOUR TREAT.* |
+
+   *Scared yet?* turns the buttons round: NO, not yet, is another trick, and
+   YES is the treat.
 
    The house keeps what each trick reveals: the flowers that die stay dead, and
    the creature is still at the window when the tentacles come. Pressing DOOR
@@ -85,7 +89,7 @@ or it can be a fourth button somewhere a child will not find it.
    Turn on 🔔 **Sound**, ⚡ **Flash** and 📳 **Buzz** to be told every time the
    game moves on. When a group reaches the door you get a doorbell and a blue
    banner on the remote, whichever tab it is showing. That's the moment to get
-   up with the sweets and press TREAT.
+   up with the sweets. *Happy Halloween* plays by itself 30 seconds later.
 
 Everything the example makes is an ordinary layer, scene or trigger, named
 `Dare · …`. The game's scenes are kept off the transport's scene buttons and the
@@ -116,7 +120,6 @@ flowchart LR
     N[NO button]
   end
   D[DOOR button<br/>at the front door]
-  T[TREAT<br/>remote, or hidden button]
   subgraph ha[Home Assistant]
     M[Matter integration<br/>event entities]
     A[automation:<br/>press → MQTT]
@@ -171,38 +174,37 @@ stateDiagram-v2
   TalkThemRound --> TrickOrTreat: 2 min, nothing pressed
 
   state "Trick (rung n)" as Trick
-  Trick --> More: when it ends, more tricks
+  Trick --> ScaredYet: when it ends, more tricks
   Trick --> ComeAndGetYourTreat: when the last one ends, or NO held
-  state "More? (level n)" as More
-  More --> Trick: YES
-  More --> ComeAndGetYourTreat: NO
-  More --> TrickOrTreat: 2 min, nothing pressed
+  state "Scared yet? (level n)" as ScaredYet
+  ScaredYet --> Trick: NO, not yet
+  ScaredYet --> ComeAndGetYourTreat: YES
+  ScaredYet --> TrickOrTreat: 2 min, nothing pressed
 
   state "Come and get your treat" as ComeAndGetYourTreat
   ComeAndGetYourTreat --> AtTheDoor: DOOR
-  ComeAndGetYourTreat --> HappyHalloween: TREAT
   ComeAndGetYourTreat --> TrickOrTreat: 2 min, nothing pressed
   state "At the door" as AtTheDoor
   AtTheDoor --> Waiting: when it ends
-  Waiting --> HappyHalloween: TREAT, or time
+  Waiting --> HappyHalloween: 30 s, sweets handed out
   state "Happy Halloween" as HappyHalloween
   HappyHalloween --> Cooldown: time
   Cooldown --> TrickOrTreat: time
 ```
 
-TREAT goes to Happy Halloween from any moment of a visit. The control tab draws
+The remote's **Reset** goes back to *"Trick or treat?"* from any moment. The control tab draws
 this same diagram, live, from the table the game runs on. This copy is for
 reading on GitHub.
 
 | Moment | Where they are | On the wall | Presses that count |
 | --- | --- | --- | --- |
-| **Trick or treat?** | street | The question, waiting for a group. With "the waiting screen asks the first question" off, it only invites a press, and **More?** asks first. | YES, NO |
-| **Talk them round** *try n* | path | NO was not the answer the house wanted: *"DID YOU SAY… TRICK?"* | YES, NO, TREAT |
-| **Trick** *n* | path | Rung *n* of the ladder: a trigger's scene, sound and hold | TREAT. NO held down stops it. Everything else is dropped. |
-| **More?** *n* | path | *"DO YOU WANT MORE?"*, over everything shown so far | YES, NO, TREAT |
-| **Come and get your treat** | path | The invitation up to the door. By how far they got: after the last trick it is *"WE'RE ALL OUT OF TRICKS…"* | DOOR, TREAT |
-| **At the door** | door | They pressed DOOR: they are coming forward. Sound and light, no words. | TREAT |
-| **Waiting for the treat** | door | The door opens. If nobody presses TREAT, the goodbye plays anyway. | TREAT |
+| **Trick or treat?** | street | The question, waiting for a group. With "the waiting screen asks the first question" off, it only invites a press, and the same box as **Scared yet?** asks the first question, with YES for a trick. | YES, NO |
+| **Talk them round** *try n* | path | NO was not the answer the house wanted: *"DID YOU SAY… TRICK?"* | YES, NO |
+| **Trick** *n* | path | Rung *n* of the ladder: a trigger's scene, sound and hold | NO held down stops it. Everything else is dropped. |
+| **Scared yet?** *n* | path | *"SCARED YET?"*, over everything shown so far. NO, not yet, is another trick; YES is the treat. | YES, NO |
+| **Come and get your treat** | path | The invitation up to the door. By how far they got: after the last trick it is *"WE'RE ALL OUT OF TRICKS…"* | DOOR |
+| **At the door** | door | They pressed DOOR: they are coming forward. Sound and light, no words. | none |
+| **Waiting for the treat** | door | The door opens and they get their sweets. The goodbye plays by itself after 30 seconds. | none |
 | **Happy Halloween** | street | The goodbye, read as they walk away | none |
 | **Cooldown** | street | Back to the house's normal show | none |
 
@@ -214,7 +216,8 @@ treat?". The remote's **Reset** does the same at once, from indoors.
 DOOR does nothing until the house has invited them up. Pressed then, it means "I
 am coming forward", and the door moment plays. It does not need to be a
 countdown or a dare: nobody is hurried up the path. With no DOOR button, switch
-it off in the settings, and TREAT from indoors does the same job.
+it off in the settings: the invitation then waits its two minutes and says
+goodbye, since they will have come up for their sweets anyway.
 
 ### Holding NO
 
@@ -239,7 +242,6 @@ flowchart TD
   S -->|yes| X2[drop — stale]
   S -->|no| R{role of button?}
   R -->|unmapped| X3[drop, log once]
-  R -->|TREAT| TR[Happy Halloween, from any<br/>moment of a visit]
   R -->|YES / NO / DOOR| L{does this moment<br/>take it?}
   L -->|no| FB[drop — nothing queues]
   L -->|yes| AR{armed?<br/>≥ 400 ms in state}
@@ -256,7 +258,7 @@ flowchart TD
    This is also why presses are **never published retained**: a retained press
    would be redelivered to the bridge every time it reconnects.
 3. **Map buttons to roles, not devices.** The project stores
-   `{ "button-id": "yes" | "no" | "door" | "treat" }`. Two YES buttons on two
+   `{ "button-id": "yes" | "no" | "door" }`. Two YES buttons on two
    sides of the path is a mapping change, not a code change. A press that names
    a role directly, which is what the remote sends, needs no mapping at all. A
    button you replace on the night is mapped again from the Game panel, which
@@ -270,12 +272,10 @@ flowchart TD
    question answers the new one before anyone has read it.
 6. **The first answer wins.** Two children pressing at once is one of them
    being a little quicker, and the house answers whichever it heard.
-7. **TREAT always takes effect.** It skips the arming delay and works at
-   every moment of a visit. An adult presses it once and means it.
 
 Matter buttons send several events for one press (`initial_press`,
 `short_release`, `long_press`, `multi_press_complete`…). **Use
-`initial_press`** for YES, NO and TREAT. It is the earliest event, and it does
+`initial_press`** for YES, NO and DOOR. It is the earliest event, and it does
 not wait for the multi-press detection window that `short_release` and
 `multi_press_complete` wait for. That window adds several hundred milliseconds,
 which a child notices. The one place a second event type is needed is
@@ -363,7 +363,7 @@ actions:
 ```
 
 Then press each real button once. It appears in the Game panel under
-**Buttons** as an unknown entity id, with YES / NO / DOOR / TREAT beside it.
+**Buttons** as an unknown entity id, with YES / NO / DOOR beside it.
 The roles are assigned there rather than in Home Assistant, which keeps the
 design of the game in one place.
 
@@ -473,7 +473,7 @@ game: {
   triggers and motion triggers are suspended from the first press until the game
   is back in Attract. Timers that come due meanwhile are pushed on, not saved up,
   and the scene that was up before the game is put back at Cooldown. Otherwise a timed lightning strike lands in the middle of
-  *"Do you want more?"* and the trigger's restore puts back a question that has
+  *"Scared yet?"* and the trigger's restore puts back a question that has
   already been answered. In Attract they run as normal, so the house still does
   its thing between visitors. A motion trigger on the path is a good way to
   draw people to the buttons.
@@ -485,8 +485,8 @@ game: {
   to end a scare and still has to time out an unanswered question.
 - **The remote gets the game.** Its **Game** tab sends the same `press` action
   as the buttons, with an id and a timestamp, so it goes through the same rules.
-  It works as the TREAT button for an adult at the door. It also has *Reset*,
-  the one thing you want when a group walks off mid-ladder.
+  It also has *Reset*, the one thing you want when a group walks off
+  mid-ladder.
 
 ## Building it
 
@@ -510,7 +510,7 @@ Done:
    drawn as SVG, laid out by hand from the street on the left to the door on the
    right, and lit up live.
 5. **The Game panel** in the control tab and the **Game tab** on the remote:
-   YES / NO (hold to stop a trick) / DOOR / TREAT, reset, the diagram, the press log,
+   YES / NO (hold to stop a trick) / DOOR, reset, the diagram, the press log,
    and learning which physical button is which from the presses that arrive.
 
 6. **The MQTT bridge** — [`mqtt.mjs`](../mqtt.mjs), started by `--mqtt` on
@@ -529,7 +529,7 @@ Done:
   them, lighting them only while a question is waiting would prevent the most
   common confusion (pressing during a scare) better than any rule above. It
   needs nothing from this app beyond `facade/game`.
-- **Should the game ever reach the finale without an adult?** As built, the
-  finale plays and the house waits a while for TREAT before showing the reward
-  anyway. A house that is unattended, or out of sweets, may want a "come back
-  next year" ending instead.
+- **What about a house that is out of sweets?** As built, the finale plays and
+  the goodbye follows 30 seconds later whether or not anybody came to the door.
+  A house that is unattended, or out of sweets, may want a "come back next
+  year" ending instead.

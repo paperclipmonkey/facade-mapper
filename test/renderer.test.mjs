@@ -156,11 +156,13 @@ function watch(effectId, cost = 0) {
   const original = effect.step;
   const ages = new Map();
   const steps = new Map();
+  const states = new Map();
   let calls = 0;
   effect.step = function step(ctx) {
     calls += 1;
     const id = ctx.layer.id;
     ages.set(id, ctx.age);
+    states.set(id, ctx.state);
     steps.set(id, (steps.get(id) || 0) + 1);
     if (cost > 0) {
       const until = performance.now() + cost;
@@ -171,6 +173,7 @@ function watch(effectId, cost = 0) {
   return {
     ages,
     steps,
+    states,
     get calls() { return calls; },
     reset() { calls = 0; steps.clear(); },
     restore() { effect.step = original; },
@@ -369,14 +372,23 @@ console.log('\n— the transport —');
   const tab = openTab(project);
   tab.run(4, 60);
   const before = probe.ages.get('L0');
+  // Something the first run left behind, the way blood leaves drips down a door.
+  probe.states.get('L0').leftOver = true;
 
   project.layers[0].onAt = Date.now();   // pressed again
   tab.run(1, 60);
   const after = probe.ages.get('L0');
+  const fresh = !probe.states.get('L0').leftOver;
   probe.restore();
 
   ok('switching a layer on again does restart it',
     before > 3.5 && after < 1.5, `${before.toFixed(2)} s, then ${after.toFixed(2)} s`);
+  /**
+   * From scratch, not from where the last run got to. Restarting the clock
+   * but keeping the simulation replayed the blood over drips already at the
+   * bottom of the door: it started oddly, and never the same way twice.
+   */
+  ok('and starts its simulation afresh, not from where it had got to', fresh);
 }
 
 {

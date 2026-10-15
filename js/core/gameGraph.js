@@ -17,7 +17,7 @@
  * marked so a press that did something can be told from one that was dropped.
  */
 
-import { STATES, TRANSITIONS, EVENT_LABELS, ROLE_LABELS, guardPasses, guardPossible, topLevel } from './game.js';
+import { STATES, TRANSITIONS, EVENT_LABELS, guardPasses, guardPossible, topLevel } from './game.js';
 
 const COL = 252;
 const ROW = 118;
@@ -102,7 +102,9 @@ function arrowHead(tip, from, size = 9) {
 
 const GUARD_SHORT = {
   more: 'more tricks',
+  first: 'first question',
   door: '',
+  'no-door': 'no DOOR button',
   opening: '',
   closed: '',
   'opening-plead': '',
@@ -126,9 +128,11 @@ export function graphEdges() {
   return [...groups.values()];
 }
 
-function edgeLabel(rows) {
+function edgeLabel(rows, shape) {
   const parts = [];
-  for (const row of rows) {
+  // A press this game can never make here is no part of the arrow's label.
+  const possible = rows.filter((row) => guardPossible(row.when, shape));
+  for (const row of possible.length ? possible : rows) {
     // A guarded timeout is named by its guard alone: "next rung" already says
     // the scare ended, and the gap between two boxes is only so wide.
     let text = EVENT_LABELS[row.on] || row.on;
@@ -267,7 +271,7 @@ export function renderGameGraph({ game = {}, snapshot = null, names = {}, missin
         `<polygon points="${arrowHead(tip, tipFrom)}" />` +
         `</g>`
     );
-    labels.push({ text: edgeLabel(edge.rows), mid, cls });
+    labels.push({ text: edgeLabel(edge.rows, shape), mid, cls });
   }
   out.push(`</g>`);
 
@@ -326,11 +330,11 @@ export function renderGameGraph({ game = {}, snapshot = null, names = {}, missin
   }
   out.push(`</g>`);
 
-  // The arrows not drawn, said once.
+  // The arrow not drawn — it would come from every box — said once.
   const legendY = GRAPH_SIZE.h - 18;
   out.push(
     `<text class="gg-legend" x="${PAD_X}" y="${legendY}">` +
-      `${ROLE_LABELS.treat} from any moment of a visit goes to Happy Halloween. ` +
+      `Reset, indoors, goes back to Trick or treat? from anywhere. ` +
       `Orange edge: on the path, words work. Blue: at the door, sound and light only. ` +
       `</text>`
   );

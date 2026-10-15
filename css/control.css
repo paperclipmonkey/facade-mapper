@@ -1077,7 +1077,6 @@
 .game-btn.game-yes { border-color: var(--good); color: var(--good); }
 .game-btn.game-no { border-color: var(--bad); color: var(--bad); }
 .game-btn.game-door { border-color: var(--accent-2); color: var(--accent-2); }
-.game-btn.game-treat { border-color: var(--warn); color: var(--warn); }
 .game-btn.game-no.held { background: var(--bad); color: var(--bg); }
 
 .gstarter {

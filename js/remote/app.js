@@ -599,7 +599,7 @@ function paintDoorBanner(state) {
   const text = {
     approach: 'COMING FOR A TREAT',
     finale: 'AT THE DOOR — the finale',
-    waiting: 'AT THE DOOR — press TREAT when they have their sweets',
+    waiting: 'AT THE DOOR — sweets!',
   }[state];
   banner.hidden = !text;
   if (text) banner.textContent = text;

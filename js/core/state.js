@@ -281,7 +281,7 @@ export function createTrigger(overrides = {}) {
 export function createGame(overrides = {}) {
   return {
     enabled: false,
-    /** Physical button id (as Home Assistant names it) → 'yes' | 'no' | 'door' | 'treat'. */
+    /** Physical button id (as Home Assistant names it) → 'yes' | 'no' | 'door'. */
     buttons: {},
     /**
      * The waiting screen is the first question — "TRICK OR TREAT?" — so YES
@@ -562,7 +562,8 @@ export function migrateProject(raw) {
   p.game = {
     ...game,
     ...savedGame,
-    buttons: { ...(savedGame.buttons || {}) },
+    // A button once mapped to TREAT, which the game no longer has, is unmapped.
+    buttons: Object.fromEntries(Object.entries(savedGame.buttons || {}).filter(([, role]) => ['yes', 'no', 'door'].includes(role))),
     // Only the moments the game still has: a show saved with "chicken" or
     // "anyone there?" in it arrives without them.
     scenes: Object.fromEntries(Object.keys(game.scenes).map((key) => [key, savedGame.scenes?.[key] ?? game.scenes[key]])),

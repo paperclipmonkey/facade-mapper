@@ -20,6 +20,11 @@
 /**
  * What a physical button can mean.
  *
+ * There used to be a fourth, TREAT, for the adult with the sweets to end a
+ * visit. It was one more button to explain and nobody needed it: the goodbye
+ * plays by itself once they have been to the door, and the reset indoors
+ * covers everything else.
+ *
  * Buttons are mapped to roles rather than the game knowing about devices, so
  * two YES buttons on either side of the path is a mapping, not a change here.
  *
@@ -27,16 +32,13 @@
  * - **door** — at the front door, for the last dare. Close enough to touch the
  *   house is too close to read anything on it, so nothing that needs reading
  *   happens while somebody is standing there.
- * - **treat** — the adult with the sweets. A phone, a hidden fourth button, or
- *   the remote; never a child's button.
  */
-export const ROLES = ['yes', 'no', 'door', 'treat'];
+export const ROLES = ['yes', 'no', 'door'];
 
 export const ROLE_LABELS = {
   yes: 'YES',
   no: 'NO',
   door: 'DOOR',
-  treat: 'TREAT',
 };
 
 /**
@@ -69,13 +71,13 @@ export const STATES = {
     note: 'They said NO to the first question, so the house asks again',
   },
   ask: {
-    label: 'More?',
+    label: 'Scared yet?',
     zone: 'path',
     scene: 'ask',
     timer: 'askTimeout',
     armed: true,
     levelled: true,
-    note: 'Asked after each trick: do you want another?',
+    note: 'Asked after each trick: NO for another, YES for the treat',
   },
   scare: {
     label: 'Trick',
@@ -105,7 +107,7 @@ export const STATES = {
     zone: 'door',
     scene: 'waiting',
     timer: 'waitForTreat',
-    note: 'At the door; the goodbye plays anyway if nobody presses TREAT',
+    note: 'At the door, getting their sweets; then the goodbye plays by itself',
   },
   reward: {
     label: 'Happy Halloween',
@@ -121,9 +123,6 @@ export const STATES = {
     note: 'The house goes back to what it was doing',
   },
 };
-
-/** Where TREAT is honoured: everywhere somebody is actually playing. */
-export const TREATABLE = ['ask', 'persuade', 'scare', 'approach', 'finale', 'waiting'];
 
 /**
  * Every transition the game can take.
@@ -147,9 +146,17 @@ export const TRANSITIONS = [
   { from: 'attract', on: 'yes', to: 'ask', when: 'closed', do: 'start' },
   { from: 'attract', on: 'no', to: 'ask', when: 'closed', do: 'start' },
 
-  { from: 'ask', on: 'yes', to: 'scare' },
+  /**
+   * Two questions share this moment. Before any trick — only when the waiting
+   * screen merely invites a press — it is the first question, and YES is a
+   * trick. After a trick it is "SCARED YET?", which turns the buttons round:
+   * NO, not yet, is another trick, and YES, enough, is the treat.
+   */
+  { from: 'ask', on: 'yes', to: 'scare', when: 'first' },
   { from: 'ask', on: 'no', to: 'persuade', when: 'first-plead', do: 'plead' },
-  { from: 'ask', on: 'no', to: 'approach' },
+  { from: 'ask', on: 'no', to: 'approach', when: 'first' },
+  { from: 'ask', on: 'no', to: 'scare' },
+  { from: 'ask', on: 'yes', to: 'approach' },
   // Nobody answered for a long time: they have gone. Back to the start.
   { from: 'ask', on: 'timeout', to: 'attract' },
 
@@ -171,24 +178,18 @@ export const TRANSITIONS = [
   { from: 'scare', on: 'timeout', to: 'approach', do: 'next' },
 
   /**
-   * The door is theirs to press, and only now: it means "I'm coming up". With
-   * no DOOR button the adult's TREAT does the same job, and if nobody does
-   * anything for long enough the house starts again for the next group.
+   * The door is theirs to press, and only now: it means "I'm coming up". If
+   * nobody does for long enough the house starts again for the next group —
+   * or, with no DOOR button, says goodbye, because they will have come up
+   * for their sweets without being able to say so.
    */
   { from: 'approach', on: 'door', to: 'finale', when: 'door' },
+  { from: 'approach', on: 'timeout', to: 'reward', when: 'no-door' },
   { from: 'approach', on: 'timeout', to: 'attract' },
 
   { from: 'finale', on: 'timeout', to: 'waiting' },
-  // They have been to the door; if nobody remembered TREAT they still get the
-  // goodbye on the way back down the path.
+  // They have been to the door; the goodbye is for the way back down the path.
   { from: 'waiting', on: 'timeout', to: 'reward' },
-
-  ...TREATABLE.map((from) => ({
-    from,
-    on: 'treat',
-    to: 'reward',
-    quiet: !['approach', 'waiting'].includes(from),
-  })),
 
   { from: 'reward', on: 'timeout', to: 'cooldown' },
   { from: 'cooldown', on: 'timeout', to: 'attract' },
@@ -196,7 +197,9 @@ export const TRANSITIONS = [
 
 export const GUARD_LABELS = {
   more: 'more tricks',
+  first: 'the first question',
   door: 'there is a DOOR button',
+  'no-door': 'there is no DOOR button',
   opening: 'the waiting screen asks',
   closed: 'the waiting screen only invites',
   'opening-plead': 'asks again after NO',
@@ -208,7 +211,6 @@ export const EVENT_LABELS = {
   yes: 'YES',
   no: 'NO',
   door: 'DOOR',
-  treat: 'TREAT',
   'long-no': 'hold NO',
   timeout: 'time',
 };
@@ -235,7 +237,9 @@ export function guardPasses(when, game, level, attempt = 0) {
   const opening = !!game?.openingQuestion;
   const tries = persuadeCount(game);
   if (when === 'more') return level < top;
+  if (when === 'first') return !opening && level <= 1;
   if (when === 'door') return !!game?.door;
+  if (when === 'no-door') return !game?.door;
   if (when === 'opening') return opening;
   if (when === 'closed') return !opening;
   if (when === 'opening-plead') return opening && tries > 0;
@@ -253,6 +257,7 @@ export function guardPossible(when, game) {
   const tries = persuadeCount(game);
   const opening = !!game?.openingQuestion;
   if (when === 'more') return topLevel(game) > 1;
+  if (when === 'first') return !opening;
   if (when === 'first-plead') return !opening && tries > 0;
   if (when === 'plead') return tries > 1;
   return guardPasses(when, game, topLevel(game), 0);
