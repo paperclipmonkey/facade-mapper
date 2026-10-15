@@ -35,6 +35,8 @@ import {
   applySceneToLayers,
   effectiveLayers,
   sceneDrift,
+  unsavedChanges,
+  restoreScene,
 } from '../js/core/scenes.js';
 import { demoShapes } from '../js/control/demoHouse.js';
 
@@ -508,6 +510,42 @@ console.log('\n— what counts as an unsaved change —');
 
   ok('an edit to a layer the scene does name still counts',
     (() => { a.opacity = 0.4; return sceneDrift(project, look.id).includes(a.id); })());
+}
+
+console.log('— only a loaded scene can have unsaved changes —');
+{
+  const project = createProject('t');
+  const a = createLayer('fill', { enabled: true, opacity: 1 });
+  const b = createLayer('fill', { enabled: true, opacity: 1 });
+  project.layers = [a, b];
+  const ambient = createScene({ id: 'amb', name: 'Ambient', full: true, state: captureScene(project) });
+  b.enabled = false;
+  const scare = createScene({ id: 'scare', name: 'Scare', full: true, state: captureScene(project) });
+  b.enabled = true;
+  project.scenes = [ambient, scare];
+
+  activateScene(project, 'amb');
+  applySceneToLayers(project, 'amb');
+  a.opacity = 0.5;
+  ok('an edit to the loaded scene is unsaved', unsavedChanges(project, 'amb').includes(a.id));
+
+  // A trigger, the playlist or the game: activated, never loaded.
+  activateScene(project, 'scare');
+  ok('the layers do differ from a scene a trigger put up', sceneDrift(project, 'scare').length > 0);
+  ok('but that is not an edit, so there is nothing to save', unsavedChanges(project, 'scare').length === 0);
+  ok('and the scene that was being edited is not live, so it offers nothing either', unsavedChanges(project, 'amb').length === 0);
+
+  restoreScene(project, 'amb', { fade: 0.8, wasLoaded: true });
+  ok('handed back loaded, the edit is unsaved again', unsavedChanges(project, 'amb').includes(a.id));
+  ok('and the wall shows the layers — the edit — once the fade is over',
+    effectiveLayers(project, project.show.sceneChangeAt + 1000) === project.layers);
+
+  activateScene(project, 'scare');
+  restoreScene(project, 'amb', { fade: 0, wasLoaded: false });
+  ok('handed back without having been loaded, it stays render-only', project.show.sceneLoaded === null);
+  ok('with nothing to save', unsavedChanges(project, 'amb').length === 0);
+  ok('a scene that is not there is not restored as loaded',
+    restoreScene(project, 'gone', { wasLoaded: true }).sceneLoaded !== 'gone');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');

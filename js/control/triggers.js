@@ -15,7 +15,7 @@
  * the scene change stamp, which every tab reads, and that one is link time.
  */
 
-import { activateScene } from '../core/scenes.js';
+import { activateScene, restoreScene } from '../core/scenes.js';
 import { now as linkNow } from '../core/time.js';
 import { createMotionGate } from './motion.js';
 import { fireWebhook } from './webhooks.js';
@@ -53,6 +53,9 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange 
     // Remember what to go back to. If a hold is already running, keep the
     // original scene rather than nesting one scare inside another.
     const restoreTo = holding ? holding.restoreTo : show.activeScene ?? null;
+    // And whether it was loaded: a scene somebody was editing comes back as
+    // their edits, not as its stored values. See `restoreScene`.
+    const restoreLoaded = holding ? holding.restoreLoaded : !!restoreTo && show.sceneLoaded === restoreTo;
 
     if (trigger.sceneId) activateScene(app.project, trigger.sceneId, { fade: 0.12 });
 
@@ -82,7 +85,7 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange 
 
     const hold = Math.max(0, trigger.hold ?? 0);
     if (hold > 0) {
-      holding = { until: Date.now() + hold * 1000, restoreTo, triggerId: trigger.id };
+      holding = { until: Date.now() + hold * 1000, restoreTo, restoreLoaded, triggerId: trigger.id };
       armWake(hold * 1000 + 60);
     } else {
       holding = null;
@@ -205,7 +208,7 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange 
       const scenes = scenesById();
       call((app.project.triggers || []).find((t) => t.id === holding.triggerId), 'after');
       if (holding.restoreTo && scenes.has(holding.restoreTo)) {
-        activateScene(app.project, holding.restoreTo, { fade: 0.8 });
+        restoreScene(app.project, holding.restoreTo, { fade: 0.8, wasLoaded: holding.restoreLoaded });
       } else {
         // Nothing to go back to: clear the scene so authored layer state returns.
         const show = app.project.show || {};

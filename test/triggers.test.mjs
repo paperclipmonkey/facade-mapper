@@ -20,6 +20,7 @@ import { readFile } from 'node:fs/promises';
 
 import { createProject, createScene, createTrigger, RESERVED_KEYS } from '../js/core/state.js';
 import { createTriggerRuntime } from '../js/control/triggers.js';
+import { applySceneToLayers, unsavedChanges } from '../js/core/scenes.js';
 
 let failures = 0;
 const ok = (name, cond, detail = '') => {
@@ -493,6 +494,34 @@ console.log('\n— the keys a trigger cannot have —');
     runtime.fireByKey('w') === true);
   ok('which is why the warning is the only thing that saves it',
     app.project.show.activeScene === 'scare');
+}
+
+console.log('— a scare in the middle of somebody\'s editing —');
+{
+  const trigger = createTrigger({ id: 'T', source: 'manual', sceneId: 'scare', hold: 4 });
+  const app = show({ triggers: [trigger] });
+  const layer = { id: 'L1', effect: 'fill', enabled: true, opacity: 1, params: {} };
+  app.project.layers = [layer];
+  app.project.scenes[0].state = { L1: { enabled: true, opacity: 1, params: {} } };
+  applySceneToLayers(app.project, 'amb');
+  layer.opacity = 0.3;
+  ok('an edit to the ambient scene is unsaved before the scare', unsavedChanges(app.project, 'amb').length === 1);
+
+  const runtime = createTriggerRuntime({ app });
+  runtime.fire(trigger);
+  ok('during the scare there is nothing to save — the scare is not an edit',
+    unsavedChanges(app.project, 'scare').length === 0);
+  advance(5);
+  runtime.tick();
+  ok('afterwards the ambient scene comes back loaded', app.project.show.sceneLoaded === 'amb');
+  ok('with the edit still unsaved, and still savable', unsavedChanges(app.project, 'amb').length === 1);
+
+  // A scene nobody loaded — the playlist's, say — comes back as it went.
+  app.project.show.sceneLoaded = null;
+  runtime.fire(trigger);
+  advance(5);
+  runtime.tick();
+  ok('a scene that was not loaded is not loaded by a scare ending', app.project.show.sceneLoaded === null);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');

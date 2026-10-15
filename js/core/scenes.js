@@ -114,6 +114,42 @@ export function sceneDrift(project, sceneId) {
   return changed;
 }
 
+/**
+ * Changes that would be lost by leaving a scene: its drift, but only while it
+ * is *loaded*.
+ *
+ * A scene put up by a trigger, the playlist or the dare game is applied at
+ * render time and never written onto the layers — deliberately, so an evening
+ * of scares cannot rewrite the show. Its layers therefore differ from it as a
+ * matter of course, and `sceneDrift` says so. Reading that as unsaved work put
+ * a Save button on the transport in the middle of every scare, and pressing it
+ * captured the layers as they were — another scene's values, or none of the
+ * scene's own — straight over the scene that was on the wall.
+ *
+ * Only a scene that has been loaded has layers that are meant to be it, so
+ * only a loaded scene can have been edited.
+ */
+export function unsavedChanges(project, sceneId) {
+  if (!sceneId || project?.show?.sceneLoaded !== sceneId) return [];
+  return sceneDrift(project, sceneId);
+}
+
+/**
+ * Put a scene back on the wall the way it was before something took the stage,
+ * which is not quite the same as activating it.
+ *
+ * If it was loaded — somebody had been working on it — then the layers are
+ * still that work, and they are what should come back: activating it alone
+ * would leave it render-only, so the wall would show the stored values, the
+ * edits would vanish from it, and the button that saves them would vanish
+ * with them.
+ */
+export function restoreScene(project, sceneId, { fade, wasLoaded = false } = {}) {
+  const show = activateScene(project, sceneId, { fade });
+  if (wasLoaded && show.activeScene === sceneId) show.sceneLoaded = sceneId;
+  return show;
+}
+
 /** Blend factor for the running transition, 0 = fully previous, 1 = fully active. */
 export function transitionProgress(show, at = now()) {
   if (!show?.sceneChangeAt) return 1;

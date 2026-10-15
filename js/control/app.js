@@ -78,7 +78,7 @@ import {
 import { GRADE_PRESETS, DEFAULT_GRADE } from '../render/postfx.js';
 import { createMediaPool, importMediaFile, removeMedia } from '../core/media.js';
 import { loadUserEffects, listByCategory, defaultParams, getEffect, getCompileErrors } from '../effects/registry.js';
-import { captureScene, activateScene as applyScene, applySceneToLayers, sceneDrift, tickPlaylist, transitionProgress, effectiveLayers } from '../core/scenes.js';
+import { captureScene, activateScene as applyScene, applySceneToLayers, unsavedChanges, restoreScene, tickPlaylist, transitionProgress, effectiveLayers } from '../core/scenes.js';
 import { createCamera } from './camera.js';
 import { feed as extraFeed, pruneFeeds } from './feeds.js';
 import { runCalibration, checkDrift, solveFromCorners, solveFromPointPairs, POINT_PAIRS_NEEDED } from './calibration.js';
@@ -190,6 +190,8 @@ let gameRuntime = null;
  * null is a real answer, "no scene was up".
  */
 let beforeGame;
+/** Whether that scene was loaded — being worked on — so it comes back loaded. */
+let beforeGameLoaded = false;
 let gameWake = null;
 /** Motion is measured a few times a second, not every frame — it costs a readback. */
 let lastMotionAt = 0;
@@ -1991,8 +1993,12 @@ app.activateScene = async (sceneId) => {
   toast(scene.name);
 };
 
-/** Layers whose current values differ from the scene that is live. */
-app.sceneDrift = (sceneId) => sceneDrift(app.project, sceneId);
+/**
+ * Layers whose current values differ from the scene that is live — when it is
+ * loaded. A scene a trigger, the playlist or the game put up has not been
+ * edited, whatever its layers say. See `unsavedChanges` in core/scenes.js.
+ */
+app.sceneDrift = (sceneId) => unsavedChanges(app.project, sceneId);
 
 /**
  * The scene that is live, and how far it has drifted from what was stored.
@@ -2003,7 +2009,7 @@ app.sceneDrift = (sceneId) => sceneDrift(app.project, sceneId);
 function liveScene() {
   const id = app.project.show?.activeScene;
   const scene = id ? app.project.scenes.find((s) => s.id === id) : null;
-  return scene ? { scene, drift: sceneDrift(app.project, scene.id).length } : null;
+  return scene ? { scene, drift: unsavedChanges(app.project, scene.id).length } : null;
 }
 
 /**
@@ -2079,7 +2085,7 @@ function refreshSceneGuard(force = false) {
  */
 function askAboutUnsaved(leavingId, goingTo) {
   const leaving = app.project.scenes.find((s) => s.id === leavingId);
-  const drift = leaving ? sceneDrift(app.project, leavingId).length : 0;
+  const drift = leaving ? unsavedChanges(app.project, leavingId).length : 0;
   if (!leaving || !drift) return Promise.resolve('discard');
 
   const dialog = $('sceneGuardDialog');
@@ -4484,6 +4490,7 @@ function renderShowsDialog() {
 function takeStageForGame() {
   if (beforeGame !== undefined) return;
   beforeGame = app.project.show?.activeScene ?? null;
+  beforeGameLoaded = !!beforeGame && app.project.show?.sceneLoaded === beforeGame;
   triggerRuntime?.endHold();
 }
 
@@ -4494,7 +4501,7 @@ function releaseStageFromGame() {
   const restore = beforeGame;
   beforeGame = undefined;
   if (restore && (app.project.scenes || []).some((s) => s.id === restore)) {
-    applyScene(app.project, restore, { fade: 0.8 });
+    restoreScene(app.project, restore, { fade: 0.8, wasLoaded: beforeGameLoaded });
   } else {
     show.previousScene = show.activeScene ?? null;
     show.activeScene = null;
