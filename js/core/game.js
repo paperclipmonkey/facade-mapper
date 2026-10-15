@@ -295,6 +295,28 @@ export function roleOf(game, button) {
 }
 
 /**
+ * Every scene the game plays: its own slots, and the scenes of its scares.
+ *
+ * These are the game's, the way a slide belongs to a deck. They are played by
+ * the game and edited from its panel, so they are kept off the transport's
+ * scene buttons and the remote's — eighteen buttons nobody should press by
+ * hand would bury the four somebody does.
+ */
+export function gameSceneIds(game, project) {
+  const ids = new Set();
+  if (!game) return ids;
+  for (const slot of Object.values(game.scenes || {})) {
+    for (const id of Array.isArray(slot) ? slot : [slot]) if (id) ids.add(id);
+  }
+  const triggers = new Map((project?.triggers || []).map((t) => [t.id, t]));
+  for (const id of [...(game.rungs || []), game.finale]) {
+    const sceneId = triggers.get(id)?.sceneId;
+    if (sceneId) ids.add(sceneId);
+  }
+  return ids;
+}
+
+/**
  * What is wrong with a game, worded for the person building it.
  *
  * Nothing here stops the game running — every gap has a fallback — but each one

@@ -8,6 +8,7 @@
  */
 
 import { el, clear, escapeHtml } from './ui.js';
+import { gameSceneIds } from '../core/game.js';
 import { getEffect } from '../effects/registry.js';
 import { layerIssues, showIssues } from './diagnostics.js';
 import { formatBytes } from '../core/media.js';
@@ -388,8 +389,12 @@ export function renderPlaylist(node, app) {
 
 export function renderSceneButtons(node, app) {
   clear(node);
+  // The dare game's scenes are played by the game and edited in its panel; a
+  // button for each would bury the show's own. One that is live still shows.
+  const gameScenes = gameSceneIds(app.project.game, app.project);
   for (const scene of app.project.scenes) {
     const active = app.project.show?.activeScene === scene.id;
+    if (gameScenes.has(scene.id) && !active) continue;
     /**
      * Only the live scene can have drifted.
      *

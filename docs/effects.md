@@ -744,6 +744,13 @@ neon tube. Text longer than its path is shrunk to fit rather than running off
 the end; turn **Shrink to fit path** off if you meant to scroll it along with
 **Position on path**.
 
+In a box, a new line in the text is a new line on the wall. Two short lines
+read from much further away than one long one, because it is the width of the
+wall that limits how big a line can be. Lines are stacked about the middle of
+the shape and shrunk together until the widest fits across it. The dare game's
+questions are written this way, and its panel's word boxes take new lines
+directly.
+
 ### Bees, and the line they leave
 
 **Bees** is about the path rather than the animal. Nobody at the end of a garden

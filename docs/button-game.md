@@ -41,20 +41,46 @@ or it can be a fourth button somewhere a child will not find it.
 
 ## Trying it
 
-1. Build the scares as ordinary **triggers**, mildest first. Each one is a
-   scene, a sound and a hold. Build the questions and the send-offs as
-   **scenes**.
-2. Open the **Game** panel in the control tab. Switch the game on, add the
-   triggers to the ladder in order, pick a finale, and choose a scene for each
-   moment. Clicking a state on the diagram scrolls to its settings.
-3. Press the **YES / NO / DOOR / TREAT** buttons at the top of the panel, or open
-   the remote's **Game** tab on a phone (`remote.html#game`) and walk the path
-   with it. Holding NO is the mercy exit, like a long press on the real button.
-   The diagram lights up the current state and the ways out of it, and marks the
-   move just made. The press log says what happened to every press, including
-   the ones that were dropped and why.
+1. Trace the house and tag the **wall**, the **door** and the **windows**. A
+   flat panel tagged **primary** is where the words go, if there is one.
+2. Open the **Game** panel in the control tab and press **Build the example
+   game**. It makes a complete game out of the built-in effects:
 
-The diagram is drawn from the same table the game runs on
+   | Moment | The house |
+   | --- | --- |
+   | Waiting for visitors | Brick and smoke. *DARE YOU? PRESS YES* |
+   | Question 1 | Brick and smoke. *SOMETHING LIVES HERE. LOOK CLOSER?* |
+   | Scare 1 | Blood down the door |
+   | Question 2 | …still bleeding. *IT'S BLEEDING. KEEP GOING?* |
+   | Scare 2 | People at the windows, and lightning |
+   | Question 3 | …blood and people. *THEY'VE SEEN YOU. CLOSER?* |
+   | Scare 3 | Tentacles through the brick |
+   | Come to the door | All of it, and the door glowing. *NOW… COME TO THE DOOR* |
+   | The finale | Everything at once, eyes in every window, bats — no words |
+   | Reward | Candlelight and fireworks. *YOU SURVIVED!* |
+
+   The house keeps what each scare reveals, so the horror accumulates.
+   Saying NO, holding NO, going quiet, pressing both buttons and running
+   straight to the door are all filled in too.
+3. Read it as a **timeline**: one card per moment, in the order a visitor meets
+   it. Each card lists the effects in that moment and marks it **PATH** (words
+   can be read) or **DOOR** (they cannot). Change the words right on the card.
+   A new line is a new line on the wall. **▶** puts that moment on the wall.
+4. Press **▶ Rehearse the whole visit** and go outside. The laptop plays a brave
+   group through every question, scare, the door and the treat, and the
+   timeline follows along.
+5. Or play it yourself with **YES / NO / DOOR / TREAT** at the top of the panel,
+   or from the remote's **Game** tab on a phone (`remote.html#game`). Holding NO
+   is the mercy exit, like a long press on the real button.
+
+Everything the example makes is an ordinary layer, scene or trigger, named
+`Dare · …`. Change any of it, or point a card at a scene of your own. The game's
+scenes are kept off the transport's scene buttons and the remote's, because the
+game plays them and nobody should press them by hand. **Rebuild the example**,
+at the bottom of the panel, puts it back how it started.
+
+The machine underneath is under **The whole thing as a diagram** at the bottom
+of the panel. It is drawn from the same table the game runs on
 ([`js/core/game.js`](../js/core/game.js)), so an arrow on it is a move the game
 will make, and a press with no arrow is a press the game will drop.
 

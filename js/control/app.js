@@ -106,7 +106,9 @@ import { createSoundscape, planSoundscape, soundFaders, soundOwners, VOICES } fr
 import { baseParams } from '../core/modulators.js';
 import { createTriggerRuntime } from './triggers.js';
 import { createGameRuntime } from './game.js';
+import { gameSceneIds } from '../core/game.js';
 import { renderGamePanel, paintGameLive, gameNames, gameMissing } from './gamePanel.js';
+import { buildExampleGame } from './gameStarter.js';
 import { scheduleWantsOn, describeSchedule } from './schedule.js';
 import { el, clear, toast, paramRow } from './ui.js';
 import { HELP_SECTIONS, EFFECT_TEMPLATE } from './help.js';
@@ -581,9 +583,95 @@ app.fireTrigger = (triggerId) => {
  */
 app.game = {
   press: (press) => gameRuntime?.press(press) ?? 'not running',
-  reset: () => gameRuntime?.reset(),
+  reset: () => {
+    if (rehearsal) app.rehearse();
+    gameRuntime?.reset();
+  },
   snapshot: () =>
     gameRuntime?.snapshot() ?? { state: 'attract', level: 0, of: 1, active: false, enabled: false, remaining: null, log: [], last: null },
+};
+
+/**
+ * Put a scene on the wall to look at it, from the Game panel's ▶.
+ *
+ * Shown, not loaded — the same way the game itself will show it — so nothing
+ * about the layers changes, the inspector is left alone, and there is no Save
+ * button for a scene nobody has edited.
+ */
+app.previewScene = (sceneId) => {
+  const scene = app.project.scenes.find((s) => s.id === sceneId);
+  if (!scene) return;
+  applyScene(app.project, sceneId, { fade: 0.4 });
+  app.commitLive();
+  renderSceneButtons($('sceneButtons'), app);
+  publishShowState(true);
+  toast(`Showing “${scene.name}”`);
+};
+
+/**
+ * Rehearse: a brave group, played by the laptop.
+ *
+ * Checking a game means walking the whole visit — every question, every
+ * scare, the door, the treat — and doing that by pressing buttons at the right
+ * moments takes two hands and a good memory. This plays a group that says YES
+ * to everything, after a pause long enough to read each question, walks to the
+ * door when asked and gets its treat, so the person building the game can go
+ * and stand where the visitors will stand and watch it.
+ *
+ * Every press goes through the game like any other, with all its rules, so a
+ * rehearsal is the real thing. It stops when the visit is over, when the game
+ * is reset, or when it is pressed again.
+ */
+let rehearsal = null;
+app.rehearsing = () => !!rehearsal;
+app.rehearse = () => {
+  if (rehearsal) {
+    clearInterval(rehearsal.timer);
+    rehearsal = null;
+    paintGameLive($('gamePanel'), app);
+    return;
+  }
+  if (!app.project.game.enabled) {
+    app.project.game.enabled = true;
+    app.commit();
+  }
+  gameRuntime?.reset();
+  rehearsal = { started: false, timer: null };
+  const READ = 2.6; // seconds a question stays up before the group answers it
+  rehearsal.timer = setInterval(() => {
+    const snap = app.game.snapshot();
+    const press = (button) => app.game.press({ button, id: `rehearse-${Date.now()}-${button}` });
+    if (snap.state === 'attract') {
+      if (rehearsal.started) return app.rehearse(); // the visit is over
+      rehearsal.started = true;
+      press('yes');
+    } else if ((snap.state === 'ask' || snap.state === 'nudge') && snap.since > READ) press('yes');
+    else if (snap.state === 'approach' && snap.since > READ) press('door');
+    else if (snap.state === 'waiting' && snap.since > 3) press('treat');
+  }, 250);
+  paintGameLive($('gamePanel'), app);
+};
+
+/** Build — or rebuild — the example dare game. See control/gameStarter.js. */
+app.buildExampleGame = () => {
+  if (!app.project.shapes.length) {
+    toast('Trace and tag the house first — the example draws on #wall, #door and #window.', 'bad');
+    switchPanel('shapes');
+    return;
+  }
+  app.pushUndo();
+  gameRuntime?.reset();
+  const result = buildExampleGame(app.project);
+  // Show the first moment, so building it is also seeing it.
+  applyScene(app.project, result.attract, { fade: 1 });
+  app.commit();
+  renderSceneButtons($('sceneButtons'), app);
+  toast(
+    result.missing.length
+      ? `Built the example game. Nothing is tagged ${result.missing.map((t) => `#${t}`).join(' or ')} yet, so some of it has nowhere to draw.`
+      : `Built the example game: ${result.scenes} scenes and ${result.triggers} scares. Press YES to play it.`,
+    result.missing.length ? 'bad' : 'good'
+  );
 };
 
 app.triggerActivity = (id) => triggerRuntime?.activityFor(id) ?? 0;
@@ -2522,6 +2610,7 @@ function showDigest() {
   const transport = clock.getTransport();
   const show = project.show || {};
   const scenes = project.scenes || [];
+  const gameScenes = gameSceneIds(project.game, project);
   const at = linkNow();
   // Read off `effectiveLayers`, so a scene that has switched a layer off hands
   // its voice to whichever layer is still on rather than leaving the fader
@@ -2539,7 +2628,10 @@ function showDigest() {
     master: project.settings.master ?? 1,
     blackout: !!project.settings.blackout,
     activeScene: show.activeScene || null,
-    scenes: scenes.map((s) => ({ id: s.id, name: s.name, hotkey: s.hotkey })),
+    // Without the dare game's own scenes: see `gameSceneIds`.
+    scenes: scenes
+      .filter((s) => !gameScenes.has(s.id) || s.id === show.activeScene)
+      .map((s) => ({ id: s.id, name: s.name, hotkey: s.hotkey })),
     /**
      * Triggers carry the instant they are next ready rather than how long is
      * left. A countdown has to be re-sent to stay true; an instant does not, so
