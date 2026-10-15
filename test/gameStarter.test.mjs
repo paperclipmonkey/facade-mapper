@@ -53,14 +53,14 @@ console.log('— building it —');
     [...game.rungs, game.finale].every((id) => project.triggers.some((t) => t.id === id)));
   ok('and every trigger at a scene that exists',
     project.triggers.filter((t) => t.example === EXAMPLE).every((t) => project.scenes.some((s) => s.id === t.sceneId)));
-  ok('every moment of the visit has a scene', Object.values(game.scenes).flat().every(Boolean) && game.scenes.ask.length === 3 && game.scenes.chicken.length === 3);
+  ok('every moment of the visit has a scene', Object.values(game.scenes).flat().every(Boolean) && game.scenes.ask.length === 3 && game.scenes.approach.length === 4);
   ok('so the game has nothing to complain about', gameProblems(game, project).length === 0, gameProblems(game, project).join(' | '));
   ok('nothing the demo needs is missing', result.missing.length === 0, result.missing.join(','));
 
   ok('building it changes nothing on the wall', project.show.activeScene === 'mine' && mine.enabled === true);
   ok('and its layers are all off outside its own scenes',
     project.layers.filter((l) => l.example === EXAMPLE).every((l) => l.enabled === false));
-  ok('it says what it made', result.scenes === 19 && result.triggers === 4, `${result.scenes} scenes, ${result.triggers} scares`);
+  ok('it says what it made', result.scenes === 15 && result.triggers === 4, `${result.scenes} scenes, ${result.triggers} scares`);
 
   console.log('— the story it tells —');
   ok('the waiting screen is the first question', game.openingQuestion === true && game.scenes.ask[0] === game.scenes.attract);
@@ -100,11 +100,13 @@ console.log('— the words —');
   ok('it asks trick or treat', say(game.scenes.attract) === EXAMPLE_WORDS.attract);
   ok('NO is answered "did you say trick?", then "but we love to scare"', game.scenes.persuade.map(say).join('|') === EXAMPLE_WORDS.persuade.join('|'));
   ok('after each scare, "do you want more?"', game.scenes.ask.slice(1).every((id) => say(id) === EXAMPLE_WORDS.more));
-  ok('at the top, out of tricks: come and get your treat', say(game.scenes.approach) === EXAMPLE_WORDS.approach);
-  ok('and NO for good is a treat too', game.scenes.chicken.every((id) => say(id) === EXAMPLE_WORDS.treat));
+  ok('NO for good is "come and get your treat", by how far they got',
+    game.scenes.approach.slice(0, 3).every((id) => say(id) === EXAMPLE_WORDS.treat));
+  ok('and after the last trick, out of tricks', say(game.scenes.approach[3]) === EXAMPLE_WORDS.outOfTricks);
+  ok('the goodbye is Happy Halloween, read as they leave', say(game.scenes.reward) === EXAMPLE_WORDS.goodbye);
   const finaleTrigger = project.triggers.find((t) => t.id === game.finale);
   ok('nothing at the door has words — they could not read them',
-    [game.scenes.waiting, game.scenes.early, finaleTrigger.sceneId].every((id) => sceneMessage(project, id) === null));
+    [game.scenes.waiting, finaleTrigger.sceneId].every((id) => sceneMessage(project, id) === null));
   ok('and nor does a scare', game.rungs.every((id) => sceneMessage(project, project.triggers.find((t) => t.id === id).sceneId) === null));
 
   const q1 = game.scenes.ask[1];
@@ -146,7 +148,7 @@ console.log('— the game\'s own scenes —');
   const { project } = house();
   buildExampleGame(project);
   const ids = gameSceneIds(project.game, project);
-  ok('the game knows which scenes are its own', ids.size === 19, String(ids.size));
+  ok('the game knows which scenes are its own', ids.size === 15, String(ids.size));
   ok('and that mine is not', !ids.has('mine'));
 }
 
@@ -234,6 +236,8 @@ console.log('— playing the script —');
   wait(1);
   press('no');
   ok('three NOs and it sends them for their treat', name() === 'Come and get your treat 1', name());
+  press('treat');
+  ok('and TREAT says Happy Halloween', name() === 'Happy Halloween', name());
   ok('and the message layer is the one that says them', project.game.messageLayer === project.layers.find((l) => l.name === 'Message')?.id);
 }
 

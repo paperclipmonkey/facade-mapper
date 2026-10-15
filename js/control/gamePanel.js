@@ -17,19 +17,15 @@ import { renderGameGraph, holdable } from '../core/gameGraph.js';
 import { hasExampleGame } from './gameStarter.js';
 
 const TIMINGS = [
-  ['askTimeout', 'Question waits', 's', 'How long a question waits before asking whether anyone is there.'],
-  ['nudgeTimeout', 'Then gives up', 's', 'How long "anyone there?" waits before the house resets.'],
-  ['approachTimeout', 'Door waits', 's', 'How long the house waits for the door button.'],
-  ['waitForTreat', 'Treat waits', 's', 'After saying no, or surviving: how long until the house moves on by itself.'],
-  ['rewardHold', 'Reward', 's', 'How long the reward plays.'],
-  ['cooldown', 'Between groups', 's', 'After one group leaves and before the house invites the next.'],
-  ['decideHold', "Can't decide", 's', 'How long the "we will decide for you" moment lasts.'],
-  ['earlyHold', 'Too soon', 's', 'How long the door shouts at somebody who ran straight to it.'],
-  ['scareHold', 'Empty scare', 's', 'Hold for a scare with nothing to play, so the rhythm survives a gap.'],
+  ['askTimeout', 'Question waits', 's', 'How long a question waits for an answer before the house starts again from "trick or treat?".'],
+  ['approachTimeout', 'Treat invite waits', 's', 'How long "come and get your treat" waits for DOOR or TREAT before the house starts again.'],
+  ['waitForTreat', 'Door waits', 's', 'At the door: how long until the goodbye plays by itself if nobody presses TREAT.'],
+  ['rewardHold', 'Goodbye', 's', 'How long "Happy Halloween" stays up as they walk away.'],
+  ['cooldown', 'Between groups', 's', 'After one group leaves and before the house asks the next.'],
+  ['scareHold', 'Empty trick', 's', 'Hold for a trick with nothing to play, so the rhythm survives a gap.'],
   ['armMs', 'Ignore presses for', 'ms', 'A new question ignores presses for this long — a thumb still on YES from the last one.'],
-  ['windowMs', 'Both buttons within', 'ms', 'YES and NO within this long of each other is "can’t decide".'],
   ['staleMs', 'Too late after', 'ms', 'A press older than this when it arrives is ignored, so a reconnect cannot replay it.'],
-];
+]
 
 /* ------------------------------------------------------------------ *
  * What a scene is
@@ -106,7 +102,7 @@ export function gameNames(project, game, level = 0) {
   }
   const rungs = game.rungs || [];
   const triggerName = (id) => triggerOf(project, id)?.name?.replace(/^Dare · /, '') || '';
-  names.scare = level > 0 && rungs[level - 1] ? triggerName(rungs[level - 1]) : rungs.length ? `${rungs.length} scare${rungs.length === 1 ? '' : 's'}` : '';
+  names.scare = level > 0 && rungs[level - 1] ? triggerName(rungs[level - 1]) : rungs.length ? `${rungs.length} trick${rungs.length === 1 ? '' : 's'}` : '';
   names.finale = triggerName(game.finale);
   return names;
 }
@@ -205,9 +201,9 @@ function liveBar(app) {
   for (const role of ROLES) {
     const button = el('button', { type: 'button', class: `btn game-btn game-${role}`, text: ROLE_LABELS[role] });
     if (role === 'no') {
-      // Held down it is mercy, the same as the real button's long press.
+      // Held down it stops a trick, the same as the real button's long press.
       holdable(button, () => app.game.press({ button: 'no' }), () => app.game.press({ button: 'no', kind: 'long' }));
-      button.title = 'Hold it down during a scare for mercy';
+      button.title = 'Hold it down during a trick to stop it';
     } else {
       button.addEventListener('click', () => app.game.press({ button: role }));
     }
@@ -336,10 +332,9 @@ export function paintGameLive(node, app) {
     if (!game.enabled) text = 'Off — presses do nothing.';
     else if (!snapshot.active) text = 'Waiting for somebody to press a button.';
     else {
-      text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : def.byAttempt ? ` (try ${snapshot.attempt})` : ''}`;
+      text = `${def.label}${def.levelled && !def.staged ? ` ${snapshot.level} of ${snapshot.of}` : def.byAttempt ? ` (try ${snapshot.attempt})` : ''}`;
       if (snapshot.saying) text += ` · saying “${snapshot.saying.text.replace(/\s*\n\s*/g, ' ')}”`;
       else if (snapshot.remaining !== null) text += ` · ${Math.ceil(snapshot.remaining)} s`;
-      if (snapshot.deciding) text += ' · listening for the other button…';
     }
     status.textContent = text;
     status.classList.toggle('on', playing);
@@ -361,7 +356,7 @@ export function paintGameLive(node, app) {
     clear(log);
     if (!snapshot.log.length) log.appendChild(el('p', { class: 'panel-note', text: 'Nothing pressed yet.' }));
     for (const entry of snapshot.log.slice(0, 10)) {
-      const acted = entry.result.startsWith('→') || entry.result.startsWith('both');
+      const acted = entry.result.startsWith('→');
       log.appendChild(
         el('div', { class: `game-log-row${acted ? ' acted' : ''}` }, [
           el('span', { class: 'ago', text: `${Math.round(entry.ago)}s` }),

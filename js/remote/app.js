@@ -520,8 +520,8 @@ paintAlertToggles();
 
 /** Where the game is, as the kind of moment it is. The door is its own. */
 function alertKind(state) {
-  if (state === 'approach' || state === 'finale' || state === 'waiting' || state === 'early') return 'door';
-  if (state === 'scare' || state === 'decide') return 'scare';
+  if (state === 'approach' || state === 'finale' || state === 'waiting') return 'door';
+  if (state === 'scare') return 'scare';
   if (state === 'reward') return 'treat';
   if (state === 'attract' || state === 'cooldown') return 'quiet';
   return 'step';
@@ -597,7 +597,7 @@ function alertOnMove(game) {
 function paintDoorBanner(state) {
   const banner = $('gameDoor');
   const text = {
-    approach: 'COMING TO THE DOOR',
+    approach: 'COMING FOR A TREAT',
     finale: 'AT THE DOOR — the finale',
     waiting: 'AT THE DOOR — press TREAT when they have their sweets',
   }[state];
@@ -616,10 +616,9 @@ function paintGame() {
   if (!game.enabled) text = 'The game is off. Switch it on to test it from here.';
   else if (!snapshot.active) text = 'Waiting for somebody to press a button.';
   else {
-    text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : def.byAttempt ? ` (try ${snapshot.attempt})` : ''}`;
+    text = `${def.label}${def.levelled && !def.staged ? ` ${snapshot.level} of ${snapshot.of}` : def.byAttempt ? ` (try ${snapshot.attempt})` : ''}`;
     if (snapshot.saying) text += ` · “${String(snapshot.saying.text).replace(/\s*\n\s*/g, ' ')}”`;
     else if (snapshot.remaining !== null && snapshot.remaining !== undefined) text += ` · ${Math.ceil(snapshot.remaining)} s`;
-    if (snapshot.deciding) text += ` · listening for the other button`;
   }
   $('gameState').textContent = text;
   $('gameState').classList.toggle('on', !!(game.enabled && snapshot.active));

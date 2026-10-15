@@ -57,8 +57,6 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
   let deadline = null;
   /** The trigger a cue state is playing, so its `after` hook fires on the way out. */
   let playing = null;
-  /** First answer inside the decision window, waiting to see if it has company. */
-  let pending = null;
   /** The last transition taken, for the diagram to light up. */
   let last = null;
   /** Whether the game has put anything on the stage that needs handing back. */
@@ -93,7 +91,6 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
       io.cueEnd?.(playing);
       playing = null;
     }
-    pending = null;
   }
 
   function enter(next) {
@@ -261,7 +258,7 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
 
     if (!transitionFor(state, event, g, level, attempt)) return finish('not now');
 
-    // TREAT is an adult who means it, once; it skips both windows, and the
+    // TREAT is an adult who means it, once; it skips the arming delay, and the
     // words being said.
     if (saying && event !== 'treat') return finish('wait for the words');
     if (event === 'treat') {
@@ -271,22 +268,8 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
 
     if (STATES[state].armed && now() - enteredAt < ms('armMs', 400)) return finish('not armed');
 
-    // The first answer opens a short window. If the other answer arrives in
-    // it, two children disagreed, and the house says so rather than picking
-    // whichever packet happened to win.
-    const answers = event === 'yes' || event === 'no';
-    const window = ms('windowMs', 150);
-    if (answers && window > 0 && transitionFor(state, 'both', g, level, attempt)) {
-      if (pending) {
-        if (pending.event === event) return finish('same answer');
-        pending = null;
-        dispatch('both');
-        return finish(`both → ${state}`);
-      }
-      pending = { event, until: now() + window };
-      return finish('deciding');
-    }
-
+    // The first answer wins. Two children pressing at once is one of them
+    // being a little quicker, and the house answers whichever it heard.
     dispatch(event);
     return finish(`→ ${state}`);
   }
@@ -302,11 +285,6 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
    */
   function tick() {
     let changed = false;
-    if (pending && now() >= pending.until) {
-      const { event } = pending;
-      pending = null;
-      if (dispatch(event)) changed = true;
-    }
     for (let hop = 0; hop < MAX_HOPS && deadline !== null && now() >= deadline; hop++) {
       if (saying) {
         sayNext();
@@ -333,8 +311,7 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
   }
 
   function nextDeadline() {
-    const times = [deadline, pending?.until].filter((t) => t !== null && t !== undefined);
-    return times.length ? Math.min(...times) : null;
+    return deadline;
   }
 
   /** Everything the panel, the remote and the diagram need, and nothing live. */
@@ -351,7 +328,6 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
       enabled: !!game().enabled,
       since: (t - enteredAt) / 1000,
       remaining: deadline !== null ? Math.max(0, (deadline - t) / 1000) : null,
-      deciding: pending ? pending.event : null,
       saying: saying ? { text: String(saying.lines[saying.index].text), index: saying.index, of: saying.lines.length } : null,
       next: next !== null ? Math.max(0, next - t) : null,
       last: last ? { from: last.from, on: last.on, to: last.to, ago: (t - last.at) / 1000 } : null,

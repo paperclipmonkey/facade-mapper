@@ -1,8 +1,8 @@
 /**
  * The dare game, as data.
  *
- * Trick-or-treaters press buttons on the path, the house asks "do you dare?",
- * and every YES gets something scarier. The design and the reasoning are in
+ * Trick-or-treaters press buttons on the path, the house asks "trick or
+ * treat?", and every YES gets a trick, each scarier than the last. The design and the reasoning are in
  * docs/button-game.md; this file is the machine itself, written as a table
  * rather than as code, for one reason: the diagram has to be the truth.
  *
@@ -45,7 +45,8 @@ export const ROLE_LABELS = {
  * - `zone` is where the visitors are standing while it plays, which decides
  *   what kind of content belongs in it: `path` can carry words, `door` cannot.
  * - `scene` names the slot in `game.scenes` it shows. An array slot is chosen
- *   by level, so the question can get worse as the ladder goes up.
+ *   by level (or by try, for `byAttempt`), so the words can change as the
+ *   visit goes on.
  * - `cue` plays a trigger instead — scene, sound, hooks and its hold.
  * - `timer` names the `game.timing` entry after which `timeout` happens.
  * - `armed` states ignore presses for `armMs` after they appear, so the thumb
@@ -53,34 +54,10 @@ export const ROLE_LABELS = {
  */
 export const STATES = {
   attract: {
-    label: 'Attract',
+    label: 'Trick or treat?',
     zone: 'street',
     scene: 'attract',
-    note: 'The house idles and invites a press',
-  },
-  early: {
-    label: 'Too soon',
-    zone: 'door',
-    scene: 'early',
-    timer: 'earlyHold',
-    note: 'Somebody went straight to the door',
-  },
-  ask: {
-    label: 'Ask',
-    zone: 'path',
-    scene: 'ask',
-    timer: 'askTimeout',
-    armed: true,
-    levelled: true,
-    note: '"Do you dare?" — worse at every level',
-  },
-  nudge: {
-    label: 'Anyone there?',
-    zone: 'path',
-    scene: 'nudge',
-    timer: 'nudgeTimeout',
-    armed: true,
-    note: 'Nobody answered the question',
+    note: 'The house waits for somebody to press a button',
   },
   persuade: {
     label: 'Talk them round',
@@ -91,61 +68,51 @@ export const STATES = {
     byAttempt: true,
     note: 'They said NO to the first question, so the house asks again',
   },
-  decide: {
-    label: "Can't decide",
+  ask: {
+    label: 'More?',
     zone: 'path',
-    scene: 'decide',
-    timer: 'decideHold',
-    note: 'YES and NO together — the house picks YES',
+    scene: 'ask',
+    timer: 'askTimeout',
+    armed: true,
+    levelled: true,
+    note: 'Asked after each trick: do you want another?',
   },
   scare: {
-    label: 'Scare',
+    label: 'Trick',
     zone: 'path',
     cue: 'rung',
     levelled: true,
     note: 'One rung of the ladder',
   },
-  mercy: {
-    label: 'Mercy',
-    zone: 'path',
-    scene: 'mercy',
-    timer: 'waitForTreat',
-    note: 'NO held down during a scare',
-  },
   approach: {
-    label: 'Come closer',
+    label: 'Come and get your treat',
     zone: 'path',
     scene: 'approach',
     timer: 'approachTimeout',
-    note: 'Invited to the door — the last words they will read',
+    levelled: true,
+    // By how far they got, not a step of its own: not numbered like one.
+    staged: true,
+    note: 'Out of tricks, or they have had enough: the invitation up to the door',
   },
   finale: {
-    label: 'Finale',
+    label: 'At the door',
     zone: 'door',
     cue: 'finale',
-    note: 'At the door: sound and light, no words',
-  },
-  chicken: {
-    label: 'Chicken',
-    zone: 'path',
-    scene: 'chicken',
-    timer: 'waitForTreat',
-    levelled: true,
-    note: 'Said NO — kindly, by how far they got',
+    note: 'They pressed DOOR to say they are coming forward: sound and light, no words',
   },
   waiting: {
-    label: 'Waiting',
+    label: 'Waiting for the treat',
     zone: 'door',
     scene: 'waiting',
     timer: 'waitForTreat',
-    note: 'Survived the finale; the reward plays anyway if nobody presses TREAT',
+    note: 'At the door; the goodbye plays anyway if nobody presses TREAT',
   },
   reward: {
-    label: 'Reward',
+    label: 'Happy Halloween',
     zone: 'street',
     scene: 'reward',
     timer: 'rewardHold',
-    note: 'Read on the way back down the path',
+    note: 'The goodbye, read as they walk away',
   },
   cooldown: {
     label: 'Cooldown',
@@ -156,37 +123,35 @@ export const STATES = {
 };
 
 /** Where TREAT is honoured: everywhere somebody is actually playing. */
-export const TREATABLE = ['ask', 'persuade', 'nudge', 'decide', 'scare', 'mercy', 'approach', 'finale', 'chicken', 'waiting'];
+export const TREATABLE = ['ask', 'persuade', 'scare', 'approach', 'finale', 'waiting'];
 
 /**
  * Every transition the game can take.
  *
- * `on` is a role, `both` (YES and NO inside the decision window), `long-no`
- * (NO held down) or `timeout`. `when` is a guard, `do` an effect on the level.
- * The first match wins, so guarded rows come before their fallbacks.
+ * `on` is a role, `long-no` (NO held down) or `timeout`. `when` is a guard,
+ * `do` an effect on the level and the tries. The first match wins, so guarded
+ * rows come before their fallbacks.
  *
  * `quiet` rows are real but are summarised on the diagram rather than drawn —
- * nine arrows into Reward say less than one line of text does.
+ * an arrow into the goodbye from every moment says less than a line of text.
  */
 export const TRANSITIONS = [
   /**
    * The first press. Either the waiting screen *is* the first question — "TRICK
-   * OR TREAT?", and YES goes straight to the first scare — or it only invites
+   * OR TREAT?", and YES goes straight to the first trick — or it only invites
    * a press, and the first question comes after it.
    */
   { from: 'attract', on: 'yes', to: 'scare', when: 'opening', do: 'start' },
   { from: 'attract', on: 'no', to: 'persuade', when: 'opening-plead', do: 'start+plead' },
-  { from: 'attract', on: 'no', to: 'chicken', when: 'opening', do: 'start' },
+  { from: 'attract', on: 'no', to: 'approach', when: 'opening', do: 'start' },
   { from: 'attract', on: 'yes', to: 'ask', when: 'closed', do: 'start' },
   { from: 'attract', on: 'no', to: 'ask', when: 'closed', do: 'start' },
-  { from: 'attract', on: 'door', to: 'early' },
-  { from: 'early', on: 'timeout', to: 'attract' },
 
   { from: 'ask', on: 'yes', to: 'scare' },
   { from: 'ask', on: 'no', to: 'persuade', when: 'first-plead', do: 'plead' },
-  { from: 'ask', on: 'no', to: 'chicken' },
-  { from: 'ask', on: 'both', to: 'decide' },
-  { from: 'ask', on: 'timeout', to: 'nudge' },
+  { from: 'ask', on: 'no', to: 'approach' },
+  // Nobody answered for a long time: they have gone. Back to the start.
+  { from: 'ask', on: 'timeout', to: 'attract' },
 
   /**
    * NO to the first question need not be the end of it: the house can ask
@@ -195,42 +160,34 @@ export const TRANSITIONS = [
    */
   { from: 'persuade', on: 'yes', to: 'scare' },
   { from: 'persuade', on: 'no', to: 'persuade', when: 'plead', do: 'plead' },
-  { from: 'persuade', on: 'no', to: 'chicken' },
-  { from: 'persuade', on: 'both', to: 'decide' },
-  { from: 'persuade', on: 'timeout', to: 'nudge' },
+  { from: 'persuade', on: 'no', to: 'approach' },
+  { from: 'persuade', on: 'timeout', to: 'attract' },
 
-  // No decision window here: a group that has gone quiet for fifteen seconds
-  // is not about to press both buttons inside 150 ms of each other.
-  { from: 'nudge', on: 'yes', to: 'scare' },
-  { from: 'nudge', on: 'no', to: 'chicken' },
-  { from: 'nudge', on: 'timeout', to: 'cooldown' },
-
-  { from: 'decide', on: 'timeout', to: 'scare' },
-
-  { from: 'scare', on: 'long-no', to: 'mercy' },
+  // NO held down during a trick: somebody is frightened. Stop, and send them
+  // for their treat.
+  { from: 'scare', on: 'long-no', to: 'approach' },
   { from: 'scare', on: 'timeout', to: 'ask', when: 'more', do: 'next' },
-  { from: 'scare', on: 'timeout', to: 'approach', when: 'top-door' },
-  { from: 'scare', on: 'timeout', to: 'finale', when: 'top' },
+  // Out of tricks. One past the top, so "come and get your treat" can say so.
+  { from: 'scare', on: 'timeout', to: 'approach', do: 'next' },
 
-  { from: 'approach', on: 'door', to: 'finale' },
-  { from: 'approach', on: 'no', to: 'chicken' },
-  // Invited to the door and nobody pressed DOOR: they are on their way up the
-  // path for their treat, which is what the invitation was for.
-  { from: 'approach', on: 'timeout', to: 'waiting' },
+  /**
+   * The door is theirs to press, and only now: it means "I'm coming up". With
+   * no DOOR button the adult's TREAT does the same job, and if nobody does
+   * anything for long enough the house starts again for the next group.
+   */
+  { from: 'approach', on: 'door', to: 'finale', when: 'door' },
+  { from: 'approach', on: 'timeout', to: 'attract' },
 
   { from: 'finale', on: 'timeout', to: 'waiting' },
-
-  { from: 'chicken', on: 'timeout', to: 'cooldown' },
-  { from: 'mercy', on: 'timeout', to: 'cooldown' },
-  // They survived the finale and the door has been opened; if nobody
-  // remembered to press TREAT they still get the ending on the way back down.
+  // They have been to the door; if nobody remembered TREAT they still get the
+  // goodbye on the way back down the path.
   { from: 'waiting', on: 'timeout', to: 'reward' },
 
   ...TREATABLE.map((from) => ({
     from,
     on: 'treat',
     to: 'reward',
-    quiet: !['chicken', 'mercy', 'waiting'].includes(from),
+    quiet: !['approach', 'waiting'].includes(from),
   })),
 
   { from: 'reward', on: 'timeout', to: 'cooldown' },
@@ -238,9 +195,8 @@ export const TRANSITIONS = [
 ];
 
 export const GUARD_LABELS = {
-  more: 'more rungs',
-  'top-door': 'top rung, door on',
-  top: 'top rung, no door',
+  more: 'more tricks',
+  door: 'there is a DOOR button',
   opening: 'the waiting screen asks',
   closed: 'the waiting screen only invites',
   'opening-plead': 'asks again after NO',
@@ -253,7 +209,6 @@ export const EVENT_LABELS = {
   no: 'NO',
   door: 'DOOR',
   treat: 'TREAT',
-  both: 'YES+NO',
   'long-no': 'hold NO',
   timeout: 'time',
 };
@@ -280,8 +235,7 @@ export function guardPasses(when, game, level, attempt = 0) {
   const opening = !!game?.openingQuestion;
   const tries = persuadeCount(game);
   if (when === 'more') return level < top;
-  if (when === 'top-door') return level >= top && !!game?.door;
-  if (when === 'top') return level >= top && !game?.door;
+  if (when === 'door') return !!game?.door;
   if (when === 'opening') return opening;
   if (when === 'closed') return !opening;
   if (when === 'opening-plead') return opening && tries > 0;
@@ -421,8 +375,9 @@ export function gameProblems(game, project) {
     if (id && !triggers.has(id)) problems.push(`Rung ${i + 1} points at a trigger that no longer exists.`);
   });
   if (game.finale && !triggers.has(game.finale)) problems.push('The finale points at a trigger that no longer exists.');
-  if (!game.finale) problems.push('No finale — the top of the ladder will hold for a few seconds and show nothing.');
-  if (!sceneSlot(game, 'ask', 1)) problems.push('No question scene — nobody will know there is a question.');
+  if (game.door && !game.finale) problems.push('Nothing happens at the door — pick a trigger for it, or switch the DOOR button off.');
+  if (!game.openingQuestion && !sceneSlot(game, 'ask', 1)) problems.push('No question scene — nobody will know there is a question.');
+  if (!sceneSlot(game, 'attract', 1)) problems.push('Nothing on the wall while the house waits — nobody will know there is a game.');
 
   for (const [key, slot] of Object.entries(game.scenes || {})) {
     for (const id of Array.isArray(slot) ? slot : [slot]) {
@@ -433,7 +388,7 @@ export function gameProblems(game, project) {
   const roles = new Set(Object.values(game.buttons || {}));
   if (Object.keys(game.buttons || {}).length) {
     if (!roles.has('yes')) problems.push('No button is mapped to YES.');
-    if (game.door && !roles.has('door')) problems.push('The door stage is on, but no button is mapped to DOOR.');
+    if (game.door && !roles.has('door')) problems.push('The DOOR button is on, but no button is mapped to DOOR.');
   }
   return problems;
 }

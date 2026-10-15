@@ -42,8 +42,7 @@ const EVENT_WORDS = {
   no: 'NO',
   door: 'DOOR',
   treat: 'TREAT',
-  both: 'YES and NO together',
-  'long-no': 'NO held down',
+  'long-no': 'NO held down (a frightened child)',
 };
 
 export function isGameEditorOpen() {
@@ -143,7 +142,7 @@ export function paintGameEditor() {
   if (!game.enabled) status.textContent = 'Off — presses do nothing.';
   else if (!snapshot.active) status.textContent = 'Waiting for somebody to press a button.';
   else {
-    let text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : def.byAttempt ? ` (try ${snapshot.attempt})` : ''}`;
+    let text = `${def.label}${def.levelled && !def.staged ? ` ${snapshot.level} of ${snapshot.of}` : def.byAttempt ? ` (try ${snapshot.attempt})` : ''}`;
     if (snapshot.saying) text += ` · saying “${snapshot.saying.text.replace(/\s*\n\s*/g, ' ')}”`;
     else if (snapshot.remaining !== null) text += ` · ${Math.ceil(snapshot.remaining)} s`;
     status.textContent = text;
@@ -171,7 +170,9 @@ export function paintGameEditor() {
 export function graphWords(project, game) {
   const words = {};
   for (const state of Object.keys(STATES)) {
-    const sceneId = STATES[state].cue ? project.triggers?.find((t) => t.id === cueSlot(game, state, 1))?.sceneId : sceneSlot(game, state, 1);
+    // When the waiting screen is the first question, "more?" starts at 2.
+    const level = state === 'ask' && game.openingQuestion ? 2 : 1;
+    const sceneId = STATES[state].cue ? project.triggers?.find((t) => t.id === cueSlot(game, state, level))?.sceneId : sceneSlot(game, state, level);
     const message = sceneId ? sceneMessage(project, sceneId) : null;
     if (message?.text) words[state] = message.text;
   }
@@ -207,7 +208,8 @@ function renderSide() {
   const def = STATES[state];
   // A moment that comes in several: a level of the ladder, or a try at
   // talking them round. `level` below is whichever of those it is.
-  const levels = def.levelled ? Math.max(1, game.rungs.length) : def.byAttempt ? Math.max(1, persuadeCount(game)) : 1;
+  const top = Math.max(1, game.rungs.length);
+  const levels = def.staged ? top + 1 : def.levelled ? top : def.byAttempt ? Math.max(1, persuadeCount(game)) : 1;
   const level = Math.min(Math.max(1, current.level), levels);
   current.level = level;
   const [zoneName, zoneHint] = ZONE[def.zone];
@@ -232,7 +234,8 @@ function renderSide() {
         el('button', {
           type: 'button',
           class: `chip${l === level ? ' on' : ''}`,
-          text: state === 'scare' ? `Scare ${l}` : state === 'ask' ? `Question ${l}` : state === 'persuade' ? `Try ${l}` : `After ${l - 1}`,
+          text: state === 'scare' ? `Trick ${l}` : state === 'ask' ? (l === 1 ? 'First question' : `After trick ${l - 1}`) : state === 'persuade' ? `Try ${l}`
+            : def.staged ? (l > top ? 'Out of tricks' : l === 1 ? 'Said NO first' : `After trick ${l - 1}`) : `After ${l - 1}`,
           onclick: () => select(state, l),
         })
       );
@@ -336,7 +339,7 @@ function beatList(game, state, level) {
 }
 
 function defaultLine(state) {
-  return { ask: 'SO…\nYOU DARE.', scare: 'YOU ASKED FOR IT…', reward: 'YOU MADE IT…', approach: 'ONE LAST THING…', chicken: 'OH WELL…' }[state] || '…';
+  return { ask: 'SO…\nYOU DARE.', scare: 'YOU ASKED FOR IT…', reward: 'YOU MADE IT…', approach: 'ONE LAST THING…', persuade: 'REALLY?' }[state] || '…';
 }
 
 function sceneEditor(app, state, level, rebuild) {
@@ -549,7 +552,7 @@ function nextSection(app, state, level) {
     if (steps.includes('next')) nextLevel = level + 1;
     if (STATES[t.to].byAttempt) nextLevel = steps.includes('start') ? 1 : byTry ? level + 1 : 1;
     const target = STATES[t.to];
-    const label = `${target.label}${target.levelled ? ` ${nextLevel}` : target.byAttempt ? ` (try ${nextLevel})` : ''}`;
+    const label = `${target.label}${target.staged ? '' : target.levelled ? ` ${nextLevel}` : target.byAttempt ? ` (try ${nextLevel})` : ''}`;
     list.appendChild(
       el('li', {}, [
         el('span', { class: `ge-when ev-${event}`, text: when }),

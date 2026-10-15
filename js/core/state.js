@@ -296,17 +296,15 @@ export function createGame(overrides = {}) {
      * and the finale waits for the door button; off, it plays where they stand.
      */
     door: true,
-    /** Scene ids per state. `ask` and `chicken` are per level, last one repeating. */
+    /**
+     * Scene ids per moment. `ask` and `approach` are per level and `persuade`
+     * per try, a blank one repeating the one before.
+     */
     scenes: {
       attract: null,
-      early: null,
       ask: [],
       persuade: [],
-      nudge: null,
-      decide: null,
-      approach: null,
-      chicken: [],
-      mercy: null,
+      approach: [],
       waiting: null,
       reward: null,
     },
@@ -323,19 +321,17 @@ export function createGame(overrides = {}) {
     beats: {},
     /** The text layer that says them. The example's Message layer. */
     messageLayer: null,
-    /** Seconds, except the three press-handling windows in milliseconds. */
+    /** Seconds, except the two press-handling windows in milliseconds. */
     timing: {
-      askTimeout: 15,
-      nudgeTimeout: 10,
-      decideHold: 2.5,
-      scareHold: 5,
-      approachTimeout: 25,
+      // Long, on purpose: a group can stand and argue about a question for a
+      // while, and the house can always be reset from indoors.
+      askTimeout: 120,
+      approachTimeout: 120,
       waitForTreat: 30,
       rewardHold: 8,
       cooldown: 6,
-      earlyHold: 5,
+      scareHold: 5,
       armMs: 400,
-      windowMs: 150,
       staleMs: 2000,
     },
     ...overrides,
@@ -567,16 +563,18 @@ export function migrateProject(raw) {
     ...game,
     ...savedGame,
     buttons: { ...(savedGame.buttons || {}) },
-    scenes: { ...game.scenes, ...(savedGame.scenes || {}) },
-    timing: { ...game.timing, ...(savedGame.timing || {}) },
+    // Only the moments the game still has: a show saved with "chicken" or
+    // "anyone there?" in it arrives without them.
+    scenes: Object.fromEntries(Object.keys(game.scenes).map((key) => [key, savedGame.scenes?.[key] ?? game.scenes[key]])),
+    timing: Object.fromEntries(Object.keys(game.timing).map((key) => [key, savedGame.timing?.[key] ?? game.timing[key]])),
     rungs: list(savedGame.rungs).filter(Boolean),
     finale: savedGame.finale || null,
     beats: normaliseBeats(savedGame.beats),
     messageLayer: typeof savedGame.messageLayer === 'string' ? savedGame.messageLayer : null,
   };
   p.game.scenes.ask = list(p.game.scenes.ask);
-  p.game.scenes.chicken = list(p.game.scenes.chicken);
   p.game.scenes.persuade = list(p.game.scenes.persuade);
+  p.game.scenes.approach = list(p.game.scenes.approach);
   p.game.openingQuestion = !!p.game.openingQuestion;
   p.game.persuade = Math.max(0, Math.round(Number(p.game.persuade) || 0));
 

@@ -14,12 +14,14 @@
  *     YES  → the flowers die, a creature at the windows → DO YOU WANT MORE?
  *     YES  → tentacles out of the walls
  *          → WE'RE ALL OUT OF TRICKS. COME AND GET YOUR TREAT.
+ *   DOOR, when they are ready to come forward → the house wakes up at the door
+ *   TREAT → HAPPY HALLOWEEN!, read as they walk away
  *
  * YES at any of the NO questions goes straight to the first scare. The house
  * keeps what each scare reveals, so the second "more?" is asked over dead
  * flowers and a creature in the window, and the group can see how far they have
- * come. Pressing DOOR when invited up sets off the finale; not pressing it just
- * means waiting for the treat.
+ * come. NO to "more?" is a treat too. The DOOR button only does anything once
+ * they have been invited up: it is them saying they are coming forward.
  *
  * Every question, send-off and reward is the same **Message** layer with
  * different words: each scene stores the text it shows, so rewording a moment
@@ -61,13 +63,11 @@ export const EXAMPLE_WORDS = {
   attract: 'TRICK OR TREAT?\nYES FOR A TRICK',
   persuade: ['DID YOU SAY…\nTRICK?', 'BUT WE LOVE\nTO SCARE…'],
   more: 'DO YOU\nWANT MORE?',
-  approach: "WE'RE ALL OUT OF TRICKS.\nCOME AND GET YOUR TREAT.",
   treat: 'COME AND GET\nYOUR TREAT.',
-  nudge: 'HELLO…?\nANYONE THERE?',
-  decide: "CAN'T DECIDE?\nTRICK IT IS…",
-  mercy: "IT'S ONLY A HOUSE.\nYOU'RE SAFE.",
-  reward: 'HAPPY HALLOWEEN!',
-};
+  outOfTricks: "WE'RE ALL OUT OF TRICKS.\nCOME AND GET YOUR TREAT.",
+  // Read on the way back down the path, so it can be words again.
+  goodbye: 'HAPPY HALLOWEEN!',
+}
 
 function layer(effect, name, { tags = [], params = {}, ...rest } = {}) {
   return createLayer(effect, {
@@ -245,18 +245,17 @@ export function buildExampleGame(project) {
     // each over everything shown so far.
     ask: [attract, scene('More? (after the lightning)', afterRung[1], { words: W.more }), scene('More? (after the creature)', afterRung[2], { words: W.more })],
     persuade: W.persuade.map((words, i) => scene(`Said no ${i + 1}`, base, { words, tweak: { message: { animation: i ? 'jitter' : 'wave' } } })),
-    approach: scene('Out of tricks', [...afterRung[3], 'doorGlow', 'candles'], { words: W.approach }),
+    /**
+     * Come and get your treat, by how far they got: said over whatever the
+     * house had become when they said NO — or, after the last trick, the house
+     * owning up that it has nothing left. The door glows: that is where to go.
+     */
+    approach: [
+      ...afterRung.slice(0, 3).map((look, i) => scene(`Come and get your treat ${i + 1}`, [...look, 'doorGlow'], { words: W.treat, tweak: { message: { animation: 'fade', color: '#ffd23a' } } })),
+      scene('Out of tricks', [...afterRung[3], 'doorGlow', 'candles'], { words: W.outOfTricks }),
+    ],
     waiting: scene('Waiting for a treat', [...ruined, 'candles', 'doorGlow', 'eyes'], { fade: 1 }),
-    reward: scene('Happy Halloween', ['wash', 'brick', 'candles', 'fireworks'], { words: W.reward, fade: 0.4, tweak: { message: { animation: 'pop', color: '#ffd23a' } } }),
-    // NO for good — after being asked three times, or to "more?" — is a treat
-    // either way, said over whatever the house had got to.
-    chicken: afterRung.slice(0, 3).map((look, i) => scene(`Come and get your treat ${i + 1}`, [...look, 'doorGlow'], { words: W.treat, tweak: { message: { animation: 'fade', color: '#ffd23a' } } })),
-    nudge: scene('Anyone there?', base, { words: W.nudge, tweak: { message: { animation: 'typewriter' } } }),
-    decide: scene("Can't decide", [...base, 'lightning'], { words: W.decide, fade: 0.2 }),
-    mercy: scene("You're safe", ['brick', 'candles'], { words: W.mercy, fade: 0.3, tweak: { message: { color: '#ffd9a8', animation: 'fade' } } }),
-    // Somebody ran straight to the door: no words — they could not read them —
-    // just the door going red and fast, and then back to waiting.
-    early: scene('Too soon', [...base, 'doorGlow'], { fade: 0.2, tweak: { doorGlow: { color: '#ff1a1a', rate: 3, min: 0.3, max: 1 } } }),
+    reward: scene('Happy Halloween', ['wash', 'brick', 'candles', 'fireworks'], { words: W.goodbye, fade: 0.4, tweak: { message: { animation: 'pop', color: '#ffd23a' } } }),
   };
 
   const scares = [
@@ -295,17 +294,13 @@ export function buildExampleGame(project) {
   game.finale = finale.id;
   game.scenes = {
     attract: scenes.attract.id,
-    early: scenes.early.id,
     ask: scenes.ask.map((s) => s.id),
     persuade: scenes.persuade.map((s) => s.id),
-    nudge: scenes.nudge.id,
-    decide: scenes.decide.id,
-    approach: scenes.approach.id,
-    chicken: scenes.chicken.map((s) => s.id),
-    mercy: scenes.mercy.id,
+    approach: scenes.approach.map((s) => s.id),
     waiting: scenes.waiting.id,
     reward: scenes.reward.id,
   };
+
 
   game.beats = JSON.parse(JSON.stringify(EXAMPLE_BEATS));
   game.messageLayer = cast.message.id;

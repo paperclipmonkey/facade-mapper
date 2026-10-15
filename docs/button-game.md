@@ -159,85 +159,70 @@ Doing it this way has three consequences:
 ```mermaid
 stateDiagram-v2
   direction LR
-  [*] --> Attract
+  [*] --> TrickOrTreat
 
-  Attract --> Ask: YES or NO
-  Attract --> TooSoon: DOOR
-  TooSoon --> Attract: time
+  state "Trick or treat?" as TrickOrTreat
+  TrickOrTreat --> Trick: YES
+  TrickOrTreat --> TalkThemRound: NO
+  state "Talk them round (try n)" as TalkThemRound
+  TalkThemRound --> Trick: YES
+  TalkThemRound --> TalkThemRound: NO, tries left
+  TalkThemRound --> ComeAndGetYourTreat: NO, no tries left
+  TalkThemRound --> TrickOrTreat: 2 min, nothing pressed
 
-  state "Ask (level n)" as Ask
-  Ask --> Scare: YES
-  Ask --> Chicken: NO
-  Ask --> CantDecide: YES+NO together
-  Ask --> Nudge: time
-  CantDecide --> Scare: time
-  Nudge --> Scare: YES
-  Nudge --> Chicken: NO
-  Nudge --> Cooldown: time
+  state "Trick (rung n)" as Trick
+  Trick --> More: when it ends, more tricks
+  Trick --> ComeAndGetYourTreat: when the last one ends, or NO held
+  state "More? (level n)" as More
+  More --> Trick: YES
+  More --> ComeAndGetYourTreat: NO
+  More --> TrickOrTreat: 2 min, nothing pressed
 
-  state "Scare (rung n)" as Scare
-  Scare --> Ask: time, more rungs (n += 1)
-  Scare --> Approach: time, top rung, door on
-  Scare --> Finale: time, top rung, no door
-  Scare --> Mercy: NO held
-
-  state "Come closer" as Approach
-  Approach --> Finale: DOOR
-  Approach --> Chicken: NO, or time
-
-  Finale --> Waiting: time
-  Waiting --> Reward: TREAT, or time
-  Chicken --> Reward: TREAT
-  Mercy --> Reward: TREAT
-  Chicken --> Cooldown: time
-  Mercy --> Cooldown: time
-
-  Reward --> Cooldown: time
-  Cooldown --> Attract: time
+  state "Come and get your treat" as ComeAndGetYourTreat
+  ComeAndGetYourTreat --> AtTheDoor: DOOR
+  ComeAndGetYourTreat --> HappyHalloween: TREAT
+  ComeAndGetYourTreat --> TrickOrTreat: 2 min, nothing pressed
+  state "At the door" as AtTheDoor
+  AtTheDoor --> Waiting: when it ends
+  Waiting --> HappyHalloween: TREAT, or time
+  state "Happy Halloween" as HappyHalloween
+  HappyHalloween --> Cooldown: time
+  Cooldown --> TrickOrTreat: time
 ```
 
-TREAT goes to Reward from any state in which a group is playing. The control
-tab draws this same diagram, live, from the table the game runs on. This copy
-is for reading on GitHub.
+TREAT goes to Happy Halloween from any moment of a visit. The control tab draws
+this same diagram, live, from the table the game runs on. This copy is for
+reading on GitHub.
 
-| State | Where they are | On the wall | Presses that count |
+| Moment | Where they are | On the wall | Presses that count |
 | --- | --- | --- | --- |
-| **Attract** | street | The house's normal show, or a prompt: *"Press YES if you dare"* | YES or NO starts a game at level 1. A child who pressed NO first still wants to see what happens. DOOR is **Too soon**. |
-| **Too soon** | door | Somebody went straight to the door. A sound sends them back to the path. | none |
-| **Ask** *n* | path | The question for level *n*. It gets worse as *n* rises: *"Scarier?"*, *"Are you SURE?"*, *"Last chance…"* | YES, NO, TREAT |
-| **Anyone there?** | path | Nobody answered. One more chance before the house gives up on the group. | YES, NO, TREAT |
-| **Can't decide** | path | YES and NO together. *"We'll decide for you…"*, then YES. | TREAT |
-| **Scare** *n* | path | Rung *n* of the ladder: a trigger's scene, sound and hold | TREAT. NO held down is [Mercy](#mercy). Everything else is dropped. |
-| **Come closer** | path | The top of the ladder: the invitation to the door. These are the last words they will read. | DOOR, NO, TREAT |
-| **Finale** | door | Sound, light, something over their heads. No words. | TREAT |
-| **Waiting** | door | They survived. The door opens. | TREAT. If nobody presses it, the reward plays anyway. |
-| **Chicken** | path | A kind send-off, by level: NO at level 1 gets *"Wise choice"*, NO at level 4 gets *"So close!"* | TREAT |
-| **Mercy** | path | Somewhere calm, straight away | TREAT |
-| **Reward** | street | *"You survived!"*, written for the walk back down the path | none |
+| **Trick or treat?** | street | The question, waiting for a group. With "the waiting screen asks the first question" off, it only invites a press, and **More?** asks first. | YES, NO |
+| **Talk them round** *try n* | path | NO was not the answer the house wanted: *"DID YOU SAY… TRICK?"* | YES, NO, TREAT |
+| **Trick** *n* | path | Rung *n* of the ladder: a trigger's scene, sound and hold | TREAT. NO held down stops it. Everything else is dropped. |
+| **More?** *n* | path | *"DO YOU WANT MORE?"*, over everything shown so far | YES, NO, TREAT |
+| **Come and get your treat** | path | The invitation up to the door. By how far they got: after the last trick it is *"WE'RE ALL OUT OF TRICKS…"* | DOOR, TREAT |
+| **At the door** | door | They pressed DOOR: they are coming forward. Sound and light, no words. | TREAT |
+| **Waiting for the treat** | door | The door opens. If nobody presses TREAT, the goodbye plays anyway. | TREAT |
+| **Happy Halloween** | street | The goodbye, read as they walk away | none |
 | **Cooldown** | street | Back to the house's normal show | none |
 
-### Mercy
+Every question waits two minutes, then the house starts again from "Trick or
+treat?". The remote's **Reset** does the same at once, from indoors.
 
-Some children are four. Holding NO down **during a scare** cuts the scare short
-and goes straight to a calm scene. Without this, the only way out of something
-that has gone too far is an adult reaching the laptop. Matter buttons report
-`long_press` on their own, so this costs one extra event type in the automation.
-A slow press of NO is also what a frightened child does naturally, which works
-better than any instruction you could give them.
+### The door is theirs
 
-Mercy ends in the reward like every other ending. Nobody is sent away from the
-door empty-handed for being scared.
+DOOR does nothing until the house has invited them up. Pressed then, it means "I
+am coming forward", and the door moment plays. It does not need to be a
+countdown or a dare: nobody is hurried up the path. With no DOOR button, switch
+it off in the settings, and TREAT from indoors does the same job.
 
-### Why NO does not end the visit
+### Holding NO
 
-NO leads to **Chicken**, which waits for TREAT. The adult at the door still
-decides when the visit is over; the house only stops escalating. `waitForTreat`
-(default 30 s) resets the house if nobody presses TREAT, because a show stuck on
-*"So close!"* all evening is worse than one that resets.
-
-A group that survived the finale is different. They are at the door, and it is
-being opened. If nobody remembers TREAT, the reward plays anyway on the
-`waitForTreat` timeout, so they still read *"You survived!"* on the way back.
+Some children are four. Holding NO down **during a trick** stops it at once and
+sends them for their treat. Matter buttons report `long_press` on their own, so
+this costs one extra event type in the automation. A slow press of NO is also
+what a frightened child does naturally, which works better than any instruction
+you could give them.
 
 ## Handling presses
 
@@ -254,15 +239,12 @@ flowchart TD
   S -->|yes| X2[drop — stale]
   S -->|no| R{role of button?}
   R -->|unmapped| X3[drop, log once]
-  R -->|TREAT| TR[Treat, from any<br/>state but Attract]
-  R -->|YES / NO / DOOR| L{state accepts it?}
-  L -->|no| FB[drop · optional<br/>'wait…' blip]
+  R -->|TREAT| TR[Happy Halloween, from any<br/>moment of a visit]
+  R -->|YES / NO / DOOR| L{does this moment<br/>take it?}
+  L -->|no| FB[drop — nothing queues]
   L -->|yes| AR{armed?<br/>≥ 400 ms in state}
   AR -->|no| X4[drop — leftover<br/>from last state]
-  AR -->|yes| W[open decision window<br/>150 ms]
-  W --> C{other answer<br/>in window?}
-  C -->|no| GO[act on first press]
-  C -->|yes| BOTH[both pressed:<br/>'Can't decide?<br/>We'll decide for you…'<br/>→ YES]
+  AR -->|yes| GO[act on it: the first<br/>answer wins]
 ```
 
 1. **Deduplicate by id.** Each press carries the Home Assistant event's context
@@ -286,13 +268,10 @@ flowchart TD
 5. **Arm each question.** For the first 400 ms after a question appears, its
    own presses are ignored. Without this, the thumb still on YES from the last
    question answers the new one before anyone has read it.
-6. **Give the other answer a chance.** In a question, the first accepted
-   press opens a 150 ms window. If the opposite answer arrives inside that window, two
-   children disagreed. Instead of picking whichever packet won, the house says
-   so: a "can't decide" sting, and then YES. Presses of the same button inside
-   the window add nothing.
-7. **TREAT always wins.** It skips the arming delay and the decision window
-   and works in every state except Attract. An adult presses it once and means it.
+6. **The first answer wins.** Two children pressing at once is one of them
+   being a little quicker, and the house answers whichever it heard.
+7. **TREAT always takes effect.** It skips the arming delay and works at
+   every moment of a visit. An adult presses it once and means it.
 
 Matter buttons send several events for one press (`initial_press`,
 `short_release`, `long_press`, `multi_press_complete`…). **Use
@@ -300,7 +279,7 @@ Matter buttons send several events for one press (`initial_press`,
 not wait for the multi-press detection window that `short_release` and
 `multi_press_complete` wait for. That window adds several hundred milliseconds,
 which a child notices. The one place a second event type is needed is
-`long_press` on NO, for Mercy. A long press on any other button is ignored,
+`long_press` on NO, to stop a trick. A long press on any other button is ignored,
 because its `initial_press` has already counted.
 
 ## Getting a press to the show
@@ -470,15 +449,21 @@ What a show stores (`project.game`; see `createGame` in
 game: {
   enabled: false,
   buttons: { 'event.path_button_left_button': 'yes', /* … */ },
-  door: true,                       // end at the front door
+  door: true,                       // there is a DOOR button
+  openingQuestion: true,            // the waiting screen asks "trick or treat?"
+  persuade: 2,                      // after a NO to it, ask again this many times
   scenes: {
-    attract, early, nudge, decide, approach, mercy, waiting, reward,  // scene ids
-    ask: [ … ], chicken: [ … ],     // by level; a blank repeats the one before
+    attract, waiting, reward,       // scene ids
+    ask: [ … ],                     // by level; a blank repeats the one before
+    persuade: [ … ],                // by try
+    approach: [ … ],                // by how far they got; the last is "out of tricks"
   },
-  rungs: [ triggerId, … ],          // scare n is rung n
-  finale: triggerId,
-  timing: { askTimeout: 15, nudgeTimeout: 10, approachTimeout: 25, waitForTreat: 30,
-            rewardHold: 8, cooldown: 6, armMs: 400, windowMs: 150, staleMs: 2000, … },
+  rungs: [ triggerId, … ],          // trick n is rung n
+  finale: triggerId,                // at the door
+  beats: { … },                     // words first
+  messageLayer: layerId,
+  timing: { askTimeout: 120, approachTimeout: 120, waitForTreat: 30,
+            rewardHold: 8, cooldown: 6, scareHold: 5, armMs: 400, staleMs: 2000 },
 }
 ```
 
@@ -488,7 +473,7 @@ game: {
   triggers and motion triggers are suspended from the first press until the game
   is back in Attract. Timers that come due meanwhile are pushed on, not saved up,
   and the scene that was up before the game is put back at Cooldown. Otherwise a timed lightning strike lands in the middle of
-  *"Are you SURE?"* and the trigger's restore puts back a question that has
+  *"Do you want more?"* and the trigger's restore puts back a question that has
   already been answered. In Attract they run as normal, so the house still does
   its thing between visitors. A motion trigger on the path is a good way to
   draw people to the buttons.
@@ -501,8 +486,7 @@ game: {
 - **The remote gets the game.** Its **Game** tab sends the same `press` action
   as the buttons, with an id and a timestamp, so it goes through the same rules.
   It works as the TREAT button for an adult at the door. It also has *Reset*,
-  the one thing you want when a group walks off mid-ladder before the nudge has
-  caught up.
+  the one thing you want when a group walks off mid-ladder.
 
 ## Building it
 
@@ -515,7 +499,7 @@ Done:
    table and applies every press rule above. It acts on the show only through an
    `io` object it is given, so [`test/game.test.mjs`](../test/game.test.mjs)
    plays whole evenings against a clock moved by hand: a full ladder, NO at each
-   level, mashing, both buttons at once, redelivered and stale presses, mercy,
+   level, mashing, redelivered and stale presses, holding NO,
    resets, late ticks from a hidden tab, and edits made mid-game.
 3. **Rungs reuse triggers** — `cue` and `cueEnd` in
    [`triggers.js`](../js/control/triggers.js) play a trigger without its
@@ -526,7 +510,7 @@ Done:
    drawn as SVG, laid out by hand from the street on the left to the door on the
    right, and lit up live.
 5. **The Game panel** in the control tab and the **Game tab** on the remote:
-   YES / NO (hold for mercy) / DOOR / TREAT, reset, the diagram, the press log,
+   YES / NO (hold to stop a trick) / DOOR / TREAT, reset, the diagram, the press log,
    and learning which physical button is which from the presses that arrive.
 
 6. **The MQTT bridge** — [`mqtt.mjs`](../mqtt.mjs), started by `--mqtt` on

@@ -30,49 +30,38 @@ const PAD_BOTTOM = 86;
 /**
  * Where each state sits, in grid cells.
  *
- * Columns run from the street to the house: column 0 is where a group arrives
- * and leaves, columns 1–3 are the path where words can be read, column 4 is
- * the door. The middle row is the way through; above it is hesitation, below it
- * the ways out.
+ * Columns run from the street to the house: the house waits on the left, the
+ * tricks and questions are on the path in the middle, and the door is on the
+ * right. The middle row is the way through; above it is the house arguing,
+ * below it the goodbye and the walk home.
  */
 export const LAYOUT = {
-  early: [0, 0],
   attract: [0, 1],
-  cooldown: [0, 3],
-  decide: [1, 0],
-  persuade: [2, 0],
-  ask: [1, 1],
-  nudge: [1, 2],
+  cooldown: [0, 2],
+  persuade: [1, 0],
+  ask: [2, 0],
   scare: [2, 1],
-  chicken: [2, 3],
   approach: [3, 1],
-  mercy: [3, 2],
   finale: [4, 1],
+  reward: [3, 2],
   waiting: [4, 2],
-  reward: [4, 3],
 };
 
 /**
  * Edges that cannot go in a straight line without crossing a state.
  *
  * Waypoints in grid cells. Anything not listed is drawn as a gentle curve,
- * bent to its own left so that a pair going both ways — Ask to Scare and back —
- * reads as two arrows rather than one line with two heads.
+ * bent to its own left so that a pair going both ways — a trick and the
+ * question after it — reads as two arrows rather than one line with two heads.
  */
 const ROUTES = {
-  'scare>finale': [[2.5, 0.45], [3.5, 0.45]],
-  'reward>cooldown': [[4, 3.62], [0, 3.62]],
-  // Under Ask, between it and "Anyone there?".
-  'attract>scare': [[0.55, 1.55], [1.5, 1.55]],
-  'attract>chicken': [[0.55, 2.5], [1.5, 2.5]],
-  // Down the gap between Scare and Come closer.
-  'persuade>chicken': [[2.5, 0], [2.5, 2.6]],
-  // Down the gap between Ask and Scare.
-  'persuade>nudge': [[1.5, 0.45], [1.5, 1.6]],
+  // Along the gap under the middle row.
+  'attract>approach': [[0.6, 1.47], [2.6, 1.47]],
+  'approach>attract': [[3, 1.62], [0.45, 1.62]],
 };
 
 const COLS = 5;
-const ROWS = 4;
+const ROWS = 3;
 export const GRAPH_SIZE = {
   w: PAD_X * 2 + (COLS - 1) * COL + NODE_W,
   h: PAD_TOP + (ROWS - 1) * ROW + NODE_H + PAD_BOTTOM,
@@ -112,15 +101,14 @@ function arrowHead(tip, from, size = 9) {
 }
 
 const GUARD_SHORT = {
-  more: 'next rung',
-  'top-door': 'top rung',
-  top: 'top rung',
+  more: 'more tricks',
+  door: '',
   opening: '',
   closed: '',
   'opening-plead': '',
   'first-plead': '',
   plead: 'try again',
-};
+}
 
 /**
  * The arrows: table rows grouped by where they go, so "YES or NO" from Attract
@@ -311,7 +299,7 @@ export function renderGameGraph({ game = {}, snapshot = null, names = {}, missin
     if (state === selected) cls.push('gg-selected');
 
     let title = def.label;
-    if (def.levelled) title += state === current ? ` ${level}/${top}` : ` ×${top}`;
+    if (def.levelled && !def.staged) title += state === current ? ` ${level}/${top}` : ` ×${top}`;
     const said = words[state] ? `“${String(words[state]).replace(/\s*\n\s*/g, ' ')}”` : '';
     const sub = said || describe(state, game, names);
     let foot = '';
@@ -342,9 +330,8 @@ export function renderGameGraph({ game = {}, snapshot = null, names = {}, missin
   const legendY = GRAPH_SIZE.h - 18;
   out.push(
     `<text class="gg-legend" x="${PAD_X}" y="${legendY}">` +
-      `${ROLE_LABELS.treat} from any playing state goes to Reward. ` +
+      `${ROLE_LABELS.treat} from any moment of a visit goes to Happy Halloween. ` +
       `Orange edge: on the path, words work. Blue: at the door, sound and light only. ` +
-      `${live?.deciding ? `Deciding: ${EVENT_LABELS[live.deciding]} pressed, waiting a moment for the other button…` : ''}` +
       `</text>`
   );
 
@@ -362,7 +349,7 @@ function clip(text, max) {
  * Matter button: `initial_press` at once, `long_press` if it is still down.
  *
  * The one piece of DOM in this file. It lives here because both pages that
- * draw the game also need a NO you can hold for mercy, and the remote does
+ * draw the game also need a NO you can hold to stop a trick, and the remote does
  * not load the control tab's modules.
  */
 export function holdable(button, onPress, onHold, holdMs = 800) {
@@ -382,7 +369,7 @@ export function holdable(button, onPress, onHold, holdMs = 800) {
     }, holdMs);
   });
   for (const event of ['pointerup', 'pointercancel', 'pointerleave']) button.addEventListener(event, up);
-  // A keyboard press is a press; there is no holding a key for mercy.
+  // A keyboard press is a press; there is no holding a key down for long.
   button.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' || ev.key === ' ') {
       ev.preventDefault();
