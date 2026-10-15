@@ -524,12 +524,24 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
      * Only layers the scene explicitly *enables*, so re-firing a scene cannot
      * quietly wipe the ivy or the frost that some other layer has spent the
      * evening accumulating.
+     *
+     * And, moving from one scene to another, only the layers the new scene
+     * brings *in*. A layer that was already on in the scene before carries on
+     * where it was: moving between two looks that share a fog bank must not
+     * restart the fog, and the dare game's house keeps what it has shown — the
+     * flowers that died in one scene stay dead in the next, the tentacles stay
+     * out of the wall — only because their clocks keep running across the
+     * change. A scene fired again over itself is the exception: that is the
+     * doorbell pressed twice, and everything in it replays.
      */
     const sceneAt = project.show?.sceneChangeAt ?? null;
-    const active = (project.scenes || []).find((s) => s.id === project.show?.activeScene);
+    const sceneList = project.scenes || [];
+    const active = sceneList.find((s) => s.id === project.show?.activeScene);
+    const before = sceneList.find((s) => s.id === project.show?.previousScene);
+    const refired = !!active && before === active;
     const sceneEnables = new Set(
       Object.entries(active?.state || {})
-        .filter(([, layerState]) => layerState?.enabled)
+        .filter(([layerId, layerState]) => layerState?.enabled && (refired || !before?.state?.[layerId]?.enabled))
         .map(([layerId]) => layerId)
     );
 

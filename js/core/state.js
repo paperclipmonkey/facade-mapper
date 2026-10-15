@@ -284,6 +284,14 @@ export function createGame(overrides = {}) {
     /** Physical button id (as Home Assistant names it) → 'yes' | 'no' | 'door' | 'treat'. */
     buttons: {},
     /**
+     * The waiting screen is the first question — "TRICK OR TREAT?" — so YES
+     * goes straight to the first scare. Off, it only invites a press, and the
+     * first question comes after it.
+     */
+    openingQuestion: false,
+    /** After a NO to the first question, how many more times the house asks. */
+    persuade: 0,
+    /**
      * End at the front door. On, the top of the ladder invites them up the path
      * and the finale waits for the door button; off, it plays where they stand.
      */
@@ -293,6 +301,7 @@ export function createGame(overrides = {}) {
       attract: null,
       early: null,
       ask: [],
+      persuade: [],
       nudge: null,
       decide: null,
       approach: null,
@@ -567,6 +576,9 @@ export function migrateProject(raw) {
   };
   p.game.scenes.ask = list(p.game.scenes.ask);
   p.game.scenes.chicken = list(p.game.scenes.chicken);
+  p.game.scenes.persuade = list(p.game.scenes.persuade);
+  p.game.openingQuestion = !!p.game.openingQuestion;
+  p.game.persuade = Math.max(0, Math.round(Number(p.game.persuade) || 0));
 
   p.userEffects = Array.isArray(raw.userEffects) ? raw.userEffects : [];
   p.media = Array.isArray(raw.media) ? raw.media : [];

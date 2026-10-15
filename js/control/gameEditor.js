@@ -22,7 +22,7 @@
  */
 
 import { el, clear } from './ui.js';
-import { STATES, ROLE_LABELS, EVENT_LABELS, eventsFrom, sceneSlot, cueSlot, beatsFor, gameProblems } from '../core/game.js';
+import { STATES, ROLE_LABELS, EVENT_LABELS, eventsFrom, sceneSlot, cueSlot, beatsFor, gameProblems, persuadeCount } from '../core/game.js';
 import { renderGameGraph, holdable } from '../core/gameGraph.js';
 import { sceneContents, sceneMessage, setSceneMessage, gameNames, gameMissing } from './gamePanel.js';
 
@@ -143,7 +143,7 @@ export function paintGameEditor() {
   if (!game.enabled) status.textContent = 'Off — presses do nothing.';
   else if (!snapshot.active) status.textContent = 'Waiting for somebody to press a button.';
   else {
-    let text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : ''}`;
+    let text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : def.byAttempt ? ` (try ${snapshot.attempt})` : ''}`;
     if (snapshot.saying) text += ` · saying “${snapshot.saying.text.replace(/\s*\n\s*/g, ' ')}”`;
     else if (snapshot.remaining !== null) text += ` · ${Math.ceil(snapshot.remaining)} s`;
     status.textContent = text;
@@ -182,7 +182,7 @@ export function graphWords(project, game) {
 export function graphNotes(game) {
   const notes = {};
   for (const state of Object.keys(STATES)) {
-    const levels = Math.max(1, STATES[state].levelled ? game.rungs.length : 1);
+    const levels = Math.max(1, STATES[state].levelled ? game.rungs.length : STATES[state].byAttempt ? persuadeCount(game) : 1);
     let lines = 0;
     for (let l = 1; l <= levels; l++) lines += beatsFor(game, state, l).length;
     if (lines) notes[state] = `💬 words first (${lines})`;
@@ -205,7 +205,9 @@ function renderSide() {
 
   const { state } = current;
   const def = STATES[state];
-  const levels = def.levelled ? Math.max(1, game.rungs.length) : 1;
+  // A moment that comes in several: a level of the ladder, or a try at
+  // talking them round. `level` below is whichever of those it is.
+  const levels = def.levelled ? Math.max(1, game.rungs.length) : def.byAttempt ? Math.max(1, persuadeCount(game)) : 1;
   const level = Math.min(Math.max(1, current.level), levels);
   current.level = level;
   const [zoneName, zoneHint] = ZONE[def.zone];
@@ -223,14 +225,14 @@ function renderSide() {
   );
   side.appendChild(el('p', { class: 'ge-note', text: `${def.note}.` }));
 
-  if (def.levelled) {
+  if (def.levelled || (def.byAttempt && levels > 1)) {
     const tabs = el('div', { class: 'ge-levels' });
     for (let l = 1; l <= levels; l++) {
       tabs.appendChild(
         el('button', {
           type: 'button',
           class: `chip${l === level ? ' on' : ''}`,
-          text: state === 'scare' ? `Scare ${l}` : state === 'ask' ? `Question ${l}` : `After ${l - 1}`,
+          text: state === 'scare' ? `Scare ${l}` : state === 'ask' ? `Question ${l}` : state === 'persuade' ? `Try ${l}` : `After ${l - 1}`,
           onclick: () => select(state, l),
         })
       );
@@ -241,6 +243,8 @@ function renderSide() {
   if (state === 'cooldown') {
     side.appendChild(el('p', { class: 'panel-note', text: 'The house goes back to what it was doing before the group arrived, and waits a moment before inviting the next one.' }));
   }
+
+  if (state === 'attract' || state === 'persuade') side.appendChild(startSection(app, rebuild));
 
   /* --- 1. Words first --- */
 
@@ -326,7 +330,7 @@ function renderSide() {
 function beatList(game, state, level) {
   game.beats = game.beats || {};
   const levels = (game.beats[state] = game.beats[state] || []);
-  const index = STATES[state].levelled ? level - 1 : 0;
+  const index = STATES[state].levelled || STATES[state].byAttempt ? level - 1 : 0;
   while (levels.length <= index) levels.push([]);
   return levels[index];
 }
@@ -490,6 +494,36 @@ function wordsEditor(app, sceneId, zone) {
   return box;
 }
 
+/** How the game begins: is the waiting screen the first question, and is NO argued with? */
+function startSection(app, rebuild) {
+  const game = app.project.game;
+  const opening = el('input', { type: 'checkbox' });
+  opening.checked = !!game.openingQuestion;
+  opening.addEventListener('change', () => {
+    app.pushUndo();
+    game.openingQuestion = opening.checked;
+    rebuild();
+  });
+  const tries = el('input', { type: 'number', min: '0', max: '5', step: '1' });
+  tries.value = persuadeCount(game);
+  tries.addEventListener('change', () => {
+    const v = Math.max(0, Math.min(5, Math.round(Number(tries.value) || 0)));
+    app.pushUndo();
+    game.persuade = v;
+    while ((game.scenes.persuade = game.scenes.persuade || []).length < v) game.scenes.persuade.push(null);
+    rebuild();
+  });
+  return el('section', { class: 'ge-section' }, [
+    el('h3', { text: 'How it starts' }),
+    el('label', { class: 'inline-check' }, [opening, 'The waiting screen asks the first question — YES goes straight to the first scare']),
+    el('label', { class: 'gstep-choose' }, [
+      el('span', { text: 'After a NO to it, ask again' }),
+      tries,
+      el('span', { class: 'unit', text: 'more times before giving up' }),
+    ]),
+  ]);
+}
+
 /** Every way out of this moment, as links along the tree. */
 function nextSection(app, state, level) {
   const game = app.project.game;
@@ -497,7 +531,8 @@ function nextSection(app, state, level) {
   const list = el('ul', { class: 'ge-next' });
   const timing = game.timing || {};
 
-  for (const [event, t] of eventsFrom(state, game, level)) {
+  const byTry = !!STATES[state].byAttempt;
+  for (const [event, t] of eventsFrom(state, game, byTry ? 1 : level, byTry ? level : 0)) {
     let when;
     if (event === 'timeout') {
       const key = STATES[state].timer;
@@ -507,9 +542,14 @@ function nextSection(app, state, level) {
     } else {
       when = `${EVENT_WORDS[event] || EVENT_LABELS[event] || event}`;
     }
-    const nextLevel = t.do === 'start' ? 1 : t.do === 'next' ? level + 1 : level;
+    // Where this leads, and which of its several it lands on.
+    const steps = String(t.do || '').split('+');
+    let nextLevel = byTry ? 1 : level;
+    if (steps.includes('start')) nextLevel = 1;
+    if (steps.includes('next')) nextLevel = level + 1;
+    if (STATES[t.to].byAttempt) nextLevel = steps.includes('start') ? 1 : byTry ? level + 1 : 1;
     const target = STATES[t.to];
-    const label = `${target.label}${target.levelled ? ` ${nextLevel}` : ''}`;
+    const label = `${target.label}${target.levelled ? ` ${nextLevel}` : target.byAttempt ? ` (try ${nextLevel})` : ''}`;
     list.appendChild(
       el('li', {}, [
         el('span', { class: `ge-when ev-${event}`, text: when }),

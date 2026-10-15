@@ -46,19 +46,26 @@ or it can be a fourth button somewhere a child will not find it.
    basket or window box **planter** for flowers. No chimney needed: the smoke
    uses one if it is tagged and rises across the house if not.
 2. Open the **Game** panel in the control tab and press **Build the example
-   game**:
+   game**. It is this script:
 
-   | Moment | The house |
-   | --- | --- |
-   | Waiting for visitors | Brick, smoke, flowers in bloom. *DARE YOU? PRESS YES* |
-   | YES | *SO… / YOU DARE.* — then question 1, *SOMETHING LIVES HERE. LOOK CLOSER?* |
-   | YES | *YOU ASKED FOR IT…* — then blood down the door, and the flowers wilt and die |
-   | Question 2 | Still bleeding, flowers dead. *IT'S BLEEDING. KEEP GOING?* |
-   | YES | *DON'T SAY WE DIDN'T WARN YOU…* — then people at the windows, and lightning |
-   | YES at question 3 | *TOO LATE / TO RUN…* — then tentacles through the brick |
-   | Come to the door | All of it, the door glowing. *NOW… COME TO THE DOOR* |
-   | The finale | Everything at once, eyes in every window, bats — no words |
-   | Reward | *THE HOUSE LETS YOU GO…* — then candlelight, fireworks, *YOU SURVIVED!* |
+   | The house says | YES | NO |
+   | --- | --- | --- |
+   | *TRICK OR TREAT? YES FOR A TRICK* | Lightning and smoke | *DID YOU SAY… TRICK?* |
+   | *DID YOU SAY… TRICK?* | Lightning and smoke | *BUT WE LOVE TO SCARE…* |
+   | *BUT WE LOVE TO SCARE…* | Lightning and smoke | *COME AND GET YOUR TREAT.* |
+   | after the lightning: *DO YOU WANT MORE?* | The flowers die, a creature at the windows | *COME AND GET YOUR TREAT.* |
+   | after the creature: *DO YOU WANT MORE?* | Tentacles from the walls, then *WE'RE ALL OUT OF TRICKS. COME AND GET YOUR TREAT.* | *COME AND GET YOUR TREAT.* |
+
+   The house keeps what each trick reveals: the flowers that die stay dead, and
+   the creature is still at the window when the tentacles come. Pressing DOOR
+   when invited up sets off a finale, everything at once with no words. Not
+   pressing it just moves on to waiting for the treat. For a real smoke machine
+   on the first trick, have Home Assistant listen for
+   `{"cue":"scare","level":1}` on `facade/game/cue`.
+
+   Two settings make this script possible, both on the editor's first box:
+   **the waiting screen asks the first question**, so YES goes straight to a
+   trick, and **after a NO, ask again** a number of times before giving up.
 
 3. Press **Open the game editor**. The whole game is a tree: each box is a
    moment, showing the words it puts on the wall, and each arrow is a press, or

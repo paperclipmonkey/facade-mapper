@@ -253,7 +253,7 @@ console.log('— all the way up the ladder, to the door, and home —');
   runtime.tick();
   advance(25.1);
   runtime.tick();
-  ok('nobody coming to the door is a NO', runtime.state === 'chicken');
+  ok('nobody pressing DOOR goes on to waiting for the treat — they were invited up', runtime.state === 'waiting');
 }
 
 {
@@ -505,6 +505,57 @@ console.log('— nobody answering, and resetting —');
 /* ------------------------------------------------------------------ *
  * Saved shows
  * ------------------------------------------------------------------ */
+
+console.log('— the waiting screen asks, and NO is not the end of it —');
+{
+  const { runtime, lastOf } = setup({
+    openingQuestion: true,
+    persuade: 2,
+    scenes: { ...createGame().scenes, attract: 'sAttract', ask: ['sAsk1', 'sAsk2'], persuade: ['sTrick', 'sLove'], chicken: ['sTreat'] },
+  });
+  ok('with the waiting screen as the question, YES is the first scare', runtime.press({ button: 'yes' }) === '→ scare' && runtime.level === 1 && lastOf('cue')?.[1] === 'r1');
+  advance(4.1);
+  runtime.tick();
+  ok('and the next question is question 2', runtime.state === 'ask' && runtime.level === 2 && lastOf('scene')?.[1] === 'sAsk2');
+  runtime.reset();
+
+  ok('NO to it asks again', runtime.press({ button: 'no' }) === '→ persuade' && runtime.attempt === 1);
+  ok('"did you say trick?"', lastOf('scene')?.[1] === 'sTrick');
+  settle();
+  answer(runtime, 'no');
+  ok('NO again asks once more', runtime.state === 'persuade' && runtime.attempt === 2 && lastOf('scene')?.[1] === 'sLove');
+  settle();
+  answer(runtime, 'no');
+  ok('and a third NO sends them for their treat', runtime.state === 'chicken' && lastOf('scene')?.[1] === 'sTreat');
+  runtime.reset();
+
+  runtime.press({ button: 'no' });
+  settle();
+  answer(runtime, 'yes');
+  ok('talked round, YES is the first scare', runtime.state === 'scare' && runtime.level === 1 && lastOf('cue')?.[1] === 'r1');
+  advance(4.1);
+  runtime.tick();
+  settle();
+  answer(runtime, 'no');
+  ok('a NO later on is not argued with', runtime.state === 'chicken');
+  ok('reset clears the tries', (runtime.reset(), runtime.attempt === 0));
+}
+
+{
+  const { runtime } = setup({ openingQuestion: true });
+  ok('with nobody to talk them round, NO to the opening question is the end of it', runtime.press({ button: 'no' }) === '→ chicken');
+}
+
+{
+  const { runtime } = setup({ persuade: 1 });
+  runtime.press({ button: 'yes' });
+  settle();
+  answer(runtime, 'no');
+  ok('without an opening question, NO at question 1 can be argued with too', runtime.state === 'persuade');
+  settle();
+  answer(runtime, 'yes');
+  ok('and YES from there is scare 1', runtime.state === 'scare' && runtime.level === 1);
+}
 
 console.log('— words first, like a dare —');
 {

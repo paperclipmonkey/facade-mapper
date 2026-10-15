@@ -82,6 +82,15 @@ export const STATES = {
     armed: true,
     note: 'Nobody answered the question',
   },
+  persuade: {
+    label: 'Talk them round',
+    zone: 'path',
+    scene: 'persuade',
+    timer: 'askTimeout',
+    armed: true,
+    byAttempt: true,
+    note: 'They said NO to the first question, so the house asks again',
+  },
   decide: {
     label: "Can't decide",
     zone: 'path',
@@ -147,7 +156,7 @@ export const STATES = {
 };
 
 /** Where TREAT is honoured: everywhere somebody is actually playing. */
-export const TREATABLE = ['ask', 'nudge', 'decide', 'scare', 'mercy', 'approach', 'finale', 'chicken', 'waiting'];
+export const TREATABLE = ['ask', 'persuade', 'nudge', 'decide', 'scare', 'mercy', 'approach', 'finale', 'chicken', 'waiting'];
 
 /**
  * Every transition the game can take.
@@ -160,15 +169,35 @@ export const TREATABLE = ['ask', 'nudge', 'decide', 'scare', 'mercy', 'approach'
  * nine arrows into Reward say less than one line of text does.
  */
 export const TRANSITIONS = [
-  { from: 'attract', on: 'yes', to: 'ask', do: 'start' },
-  { from: 'attract', on: 'no', to: 'ask', do: 'start' },
+  /**
+   * The first press. Either the waiting screen *is* the first question — "TRICK
+   * OR TREAT?", and YES goes straight to the first scare — or it only invites
+   * a press, and the first question comes after it.
+   */
+  { from: 'attract', on: 'yes', to: 'scare', when: 'opening', do: 'start' },
+  { from: 'attract', on: 'no', to: 'persuade', when: 'opening-plead', do: 'start+plead' },
+  { from: 'attract', on: 'no', to: 'chicken', when: 'opening', do: 'start' },
+  { from: 'attract', on: 'yes', to: 'ask', when: 'closed', do: 'start' },
+  { from: 'attract', on: 'no', to: 'ask', when: 'closed', do: 'start' },
   { from: 'attract', on: 'door', to: 'early' },
   { from: 'early', on: 'timeout', to: 'attract' },
 
   { from: 'ask', on: 'yes', to: 'scare' },
+  { from: 'ask', on: 'no', to: 'persuade', when: 'first-plead', do: 'plead' },
   { from: 'ask', on: 'no', to: 'chicken' },
   { from: 'ask', on: 'both', to: 'decide' },
   { from: 'ask', on: 'timeout', to: 'nudge' },
+
+  /**
+   * NO to the first question need not be the end of it: the house can ask
+   * again — "DID YOU SAY TRICK?", "BUT WE LOVE TO SCARE…" — as many times as
+   * `persuade` says, before it gives up and sends them for their treat.
+   */
+  { from: 'persuade', on: 'yes', to: 'scare' },
+  { from: 'persuade', on: 'no', to: 'persuade', when: 'plead', do: 'plead' },
+  { from: 'persuade', on: 'no', to: 'chicken' },
+  { from: 'persuade', on: 'both', to: 'decide' },
+  { from: 'persuade', on: 'timeout', to: 'nudge' },
 
   // No decision window here: a group that has gone quiet for fifteen seconds
   // is not about to press both buttons inside 150 ms of each other.
@@ -185,7 +214,9 @@ export const TRANSITIONS = [
 
   { from: 'approach', on: 'door', to: 'finale' },
   { from: 'approach', on: 'no', to: 'chicken' },
-  { from: 'approach', on: 'timeout', to: 'chicken' },
+  // Invited to the door and nobody pressed DOOR: they are on their way up the
+  // path for their treat, which is what the invitation was for.
+  { from: 'approach', on: 'timeout', to: 'waiting' },
 
   { from: 'finale', on: 'timeout', to: 'waiting' },
 
@@ -210,6 +241,11 @@ export const GUARD_LABELS = {
   more: 'more rungs',
   'top-door': 'top rung, door on',
   top: 'top rung, no door',
+  opening: 'the waiting screen asks',
+  closed: 'the waiting screen only invites',
+  'opening-plead': 'asks again after NO',
+  'first-plead': 'asks again after NO',
+  plead: 'more tries left',
 };
 
 export const EVENT_LABELS = {
@@ -227,29 +263,66 @@ export function topLevel(game) {
   return Math.max(1, game?.rungs?.length || 0);
 }
 
-/** Does a guard let this transition through, at this level? */
-export function guardPasses(when, game, level) {
+/** How many more times the house asks after a NO at the first question. */
+export function persuadeCount(game) {
+  return Math.max(0, Math.round(Number(game?.persuade) || 0));
+}
+
+/**
+ * Does a guard let this transition through, at this level and try?
+ *
+ * `attempt` is how many times the house has asked again after a NO — a count
+ * of its own, because talking somebody round does not climb the ladder.
+ */
+export function guardPasses(when, game, level, attempt = 0) {
   if (!when) return true;
   const top = topLevel(game);
+  const opening = !!game?.openingQuestion;
+  const tries = persuadeCount(game);
   if (when === 'more') return level < top;
   if (when === 'top-door') return level >= top && !!game?.door;
   if (when === 'top') return level >= top && !game?.door;
+  if (when === 'opening') return opening;
+  if (when === 'closed') return !opening;
+  if (when === 'opening-plead') return opening && tries > 0;
+  if (when === 'first-plead') return !opening && level <= 1 && tries > 0;
+  if (when === 'plead') return attempt < tries;
   return false;
 }
 
+/**
+ * Could a guard ever pass in this game, at any level? For the diagram, which
+ * draws a route this game will never take faint and dashed.
+ */
+export function guardPossible(when, game) {
+  if (!when) return true;
+  const tries = persuadeCount(game);
+  const opening = !!game?.openingQuestion;
+  if (when === 'more') return topLevel(game) > 1;
+  if (when === 'first-plead') return !opening && tries > 0;
+  if (when === 'plead') return tries > 1;
+  return guardPasses(when, game, topLevel(game), 0);
+}
+
 /** The transition `event` takes out of `state`, or null if it goes nowhere. */
-export function transitionFor(state, event, game, level) {
-  return TRANSITIONS.find((t) => t.from === state && t.on === event && guardPasses(t.when, game, level)) || null;
+export function transitionFor(state, event, game, level, attempt = 0) {
+  return TRANSITIONS.find((t) => t.from === state && t.on === event && guardPasses(t.when, game, level, attempt)) || null;
 }
 
 /** Which events do anything in this state right now — what the buttons will do. */
-export function eventsFrom(state, game, level) {
+export function eventsFrom(state, game, level, attempt = 0) {
   const out = new Map();
   for (const t of TRANSITIONS) {
     if (t.from !== state || out.has(t.on)) continue;
-    if (guardPasses(t.when, game, level)) out.set(t.on, t);
+    if (guardPasses(t.when, game, level, attempt)) out.set(t.on, t);
   }
   return out;
+}
+
+/** Which count picks a state's scene and words: its try, its level, or neither. */
+export function slotIndex(state, level, attempt) {
+  if (STATES[state]?.byAttempt) return Math.max(1, attempt || 1);
+  return Math.max(1, level || 1);
 }
 
 /**
@@ -281,7 +354,8 @@ export function sceneSlot(game, state, level = 1) {
 export function beatsFor(game, state, level = 1) {
   const levels = game?.beats?.[state];
   if (!Array.isArray(levels)) return [];
-  const list = STATES[state]?.levelled ? levels[Math.max(1, level) - 1] : levels[0];
+  const counted = STATES[state]?.levelled || STATES[state]?.byAttempt;
+  const list = counted ? levels[Math.max(1, level) - 1] : levels[0];
   return Array.isArray(list) ? list.filter((b) => b && String(b.text || '').trim()) : [];
 }
 

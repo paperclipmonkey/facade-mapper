@@ -381,6 +381,48 @@ console.log('\n— the transport —');
 
 {
   /**
+   * Moving between two scenes that both have a layer on must not restart it.
+   *
+   * Every layer a scene switched on used to restart whenever *any* scene was
+   * fired, including layers that were already on in the scene before — so a
+   * fog bank shared by two looks jumped back to its start at every change,
+   * and the dare game's house could not keep what it had shown: flowers that
+   * died in one scene came back to life in the next. Only the layers a scene
+   * brings *in* start from now; firing the same scene again still replays.
+   */
+  const probe = watch('shoal');
+  const project = makeShow(1);
+  const state = { L0: { enabled: true, opacity: 1, params: {} } };
+  project.scenes = [
+    { id: 'A', name: 'A', full: true, state },
+    { id: 'B', name: 'B', full: true, state },
+  ];
+  project.show.previousScene = null;
+  project.show.activeScene = 'A';
+  project.show.sceneChangeAt = Date.now();
+  const tab = openTab(project);
+  tab.run(4, 60);
+
+  project.show.previousScene = 'A';
+  project.show.activeScene = 'B';
+  project.show.sceneChangeAt = Date.now();
+  tab.run(1, 60);
+  const carried = probe.ages.get('L0');
+
+  project.show.previousScene = 'B';
+  project.show.sceneChangeAt = Date.now(); // B fired again over itself
+  tab.run(1, 60);
+  const refired = probe.ages.get('L0');
+  probe.restore();
+
+  ok('a layer on in both scenes carries on across the change',
+    carried > 4.5, `${carried.toFixed(2)} s old after the change`);
+  ok('but the same scene fired again still replays it',
+    refired < 1.5, `${refired.toFixed(2)} s old after the re-fire`);
+}
+
+{
+  /**
    * Seeking backwards. A step function cannot be run in reverse, so the only
    * honest answer is to replay it — and the wrong answer, sitting still until
    * show time catches back up, is indistinguishable on the wall from the

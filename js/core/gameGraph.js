@@ -17,7 +17,7 @@
  * marked so a press that did something can be told from one that was dropped.
  */
 
-import { STATES, TRANSITIONS, EVENT_LABELS, ROLE_LABELS, guardPasses, topLevel } from './game.js';
+import { STATES, TRANSITIONS, EVENT_LABELS, ROLE_LABELS, guardPasses, guardPossible, topLevel } from './game.js';
 
 const COL = 252;
 const ROW = 118;
@@ -40,6 +40,7 @@ export const LAYOUT = {
   attract: [0, 1],
   cooldown: [0, 3],
   decide: [1, 0],
+  persuade: [2, 0],
   ask: [1, 1],
   nudge: [1, 2],
   scare: [2, 1],
@@ -61,6 +62,13 @@ export const LAYOUT = {
 const ROUTES = {
   'scare>finale': [[2.5, 0.45], [3.5, 0.45]],
   'reward>cooldown': [[4, 3.62], [0, 3.62]],
+  // Under Ask, between it and "Anyone there?".
+  'attract>scare': [[0.55, 1.55], [1.5, 1.55]],
+  'attract>chicken': [[0.55, 2.5], [1.5, 2.5]],
+  // Down the gap between Scare and Come closer.
+  'persuade>chicken': [[2.5, 0], [2.5, 2.6]],
+  // Down the gap between Ask and Scare.
+  'persuade>nudge': [[1.5, 0.45], [1.5, 1.6]],
 };
 
 const COLS = 5;
@@ -103,7 +111,16 @@ function arrowHead(tip, from, size = 9) {
   return `${fixed(tip.x)},${fixed(tip.y)} ${p(a1)} ${p(a2)}`;
 }
 
-const GUARD_SHORT = { more: 'next rung', 'top-door': 'top rung', top: 'top rung' };
+const GUARD_SHORT = {
+  more: 'next rung',
+  'top-door': 'top rung',
+  top: 'top rung',
+  opening: '',
+  closed: '',
+  'opening-plead': '',
+  'first-plead': '',
+  plead: 'try again',
+};
 
 /**
  * The arrows: table rows grouped by where they go, so "YES or NO" from Attract
@@ -127,7 +144,8 @@ function edgeLabel(rows) {
     // A guarded timeout is named by its guard alone: "next rung" already says
     // the scare ended, and the gap between two boxes is only so wide.
     let text = EVENT_LABELS[row.on] || row.on;
-    if (row.when) text = row.on === 'timeout' ? GUARD_SHORT[row.when] || row.when : `${text} · ${GUARD_SHORT[row.when] || row.when}`;
+    const guard = row.when ? GUARD_SHORT[row.when] ?? row.when : '';
+    if (guard) text = row.on === 'timeout' ? guard : `${text} · ${guard}`;
     if (!parts.includes(text)) parts.push(text);
   }
   return parts.join(' / ');
@@ -200,11 +218,9 @@ export function renderGameGraph({ game = {}, snapshot = null, names = {}, missin
     const b = center(LAYOUT[edge.to]);
     // Could this arrow ever be taken in this game? Not "top rung, no door"
     // while the door is on, and not "next rung" on a ladder of one.
-    const applicable = edge.rows.some((row) =>
-      row.when === 'more' ? top > 1 : guardPasses(row.when, shape, top)
-    );
+    const applicable = edge.rows.some((row) => guardPossible(row.when, shape));
     const fromCurrent = current === edge.from;
-    const takeable = fromCurrent && edge.rows.some((row) => guardPasses(row.when, shape, level));
+    const takeable = fromCurrent && edge.rows.some((row) => guardPasses(row.when, shape, level, live?.attempt || 0));
     const justTaken = last && last.from === edge.from && last.to === edge.to;
 
     const cls = ['gg-edge'];
@@ -218,7 +234,15 @@ export function renderGameGraph({ game = {}, snapshot = null, names = {}, missin
     let tip;
     let mid;
     const route = ROUTES[edge.key];
-    if (route) {
+    if (edge.from === edge.to) {
+      // Back to itself — "ask again" — as a loop off the right-hand side.
+      const right = a.x + NODE_W / 2;
+      const start = { x: right, y: a.y - 14 };
+      tip = { x: right + 3, y: a.y + 14 };
+      tipFrom = { x: right + 40, y: a.y + 30 };
+      d = `M${fixed(start.x)},${fixed(start.y)} C${fixed(right + 44)},${fixed(a.y - 40)} ${fixed(right + 44)},${fixed(a.y + 40)} ${fixed(tip.x)},${fixed(tip.y)}`;
+      mid = { x: right + 40, y: a.y };
+    } else if (route) {
       const points = route.map(([col, row]) => ({
         x: PAD_X + NODE_W / 2 + col * COL,
         y: PAD_TOP + NODE_H / 2 + row * ROW,

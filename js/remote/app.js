@@ -616,7 +616,7 @@ function paintGame() {
   if (!game.enabled) text = 'The game is off. Switch it on to test it from here.';
   else if (!snapshot.active) text = 'Waiting for somebody to press a button.';
   else {
-    text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : ''}`;
+    text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : def.byAttempt ? ` (try ${snapshot.attempt})` : ''}`;
     if (snapshot.saying) text += ` · “${String(snapshot.saying.text).replace(/\s*\n\s*/g, ' ')}”`;
     else if (snapshot.remaining !== null && snapshot.remaining !== undefined) text += ` · ${Math.ceil(snapshot.remaining)} s`;
     if (snapshot.deciding) text += ` · listening for the other button`;

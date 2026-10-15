@@ -60,32 +60,32 @@ console.log('— building it —');
   ok('building it changes nothing on the wall', project.show.activeScene === 'mine' && mine.enabled === true);
   ok('and its layers are all off outside its own scenes',
     project.layers.filter((l) => l.example === EXAMPLE).every((l) => l.enabled === false));
-  ok('it says what it made', result.scenes === 18 && result.triggers === 4, `${result.scenes} scenes, ${result.triggers} scares`);
+  ok('it says what it made', result.scenes === 19 && result.triggers === 4, `${result.scenes} scenes, ${result.triggers} scares`);
 
   console.log('— the story it tells —');
-  const waiting = contents(project, 'Waiting for visitors');
-  ok('the house waits with just brick and smoke', ['Brick', 'Smoke'].every((n) => waiting.has(n)) &&
-    !['Blood down the door', 'People at the windows', 'Tentacles through the brick'].some((n) => waiting.has(n)), [...waiting].join(','));
-  ok('the first scare is blood on the door', contents(project, 'Scare: blood on the door').has('Blood down the door'));
-  ok('the second, people at the windows', contents(project, 'Scare: people at the windows').has('People at the windows'));
-  ok('the third, tentacles', contents(project, 'Scare: tentacles').has('Tentacles through the brick'));
-  ok('and the house keeps what it has shown: the second question is asked over the blood',
-    contents(project, 'Question 2').has('Blood down the door') && !contents(project, 'Question 2').has('People at the windows'));
-  ok('the third over the blood and the people',
-    ['Blood down the door', 'People at the windows'].every((n) => contents(project, 'Question 3').has(n)));
+  ok('the waiting screen is the first question', game.openingQuestion === true && game.scenes.ask[0] === game.scenes.attract);
+  ok('and NO to it is asked twice more', game.persuade === 2 && game.scenes.persuade.length === 2);
+  const waiting = contents(project, 'Trick or treat?');
+  ok('the house waits with brick and flowers, nothing scary yet', ['Brick', 'Hanging flowers'].every((n) => waiting.has(n)) &&
+    !['Lightning', 'Creature at the windows', 'Tentacles through the brick'].some((n) => waiting.has(n)), [...waiting].join(','));
+  const s1 = contents(project, 'Scare: lightning and smoke');
+  ok('the first scare is lightning and smoke', s1.has('Lightning') && s1.has('Smoke'));
+  const s2 = contents(project, 'Scare: the flowers die, a creature at the windows');
+  ok('the second, the flowers die and a creature is at the windows', s2.has('Hanging flowers dying') && s2.has('Creature at the windows') && !s2.has('Hanging flowers'));
+  ok('the third, tentacles from the walls', contents(project, 'Scare: tentacles from the walls').has('Tentacles through the brick'));
+  ok('and the house keeps what it has shown: "more?" after the creature is asked over it',
+    contents(project, 'More? (after the creature)').has('Creature at the windows') && contents(project, 'More? (after the creature)').has('Hanging flowers dying'));
   const finale = contents(project, 'Finale: the house wakes up');
-  ok('the finale is everything at once',
-    ['Blood down the door', 'People at the windows', 'Tentacles through the brick', 'Eyes in every window', 'Lightning', 'Bats'].every((n) => finale.has(n)));
+  ok('the finale at the door is everything at once',
+    ['Creature at the windows', 'Tentacles through the brick', 'Eyes in every window', 'Lightning', 'Bats'].every((n) => finale.has(n)));
   ok('my own layer is in none of it', !finale.has('My own layer') && !waiting.has('My own layer'));
 
-  console.log('— the flowers —');
-  ok('the flowers are in bloom while the house waits',
-    waiting.has('Hanging flowers') && !waiting.has('Hanging flowers dying'));
-  ok('and still at the first question', contents(project, 'Question 1').has('Hanging flowers'));
-  const scare1 = contents(project, 'Scare: blood on the door');
-  ok('the first scare swaps in the dying bunch', scare1.has('Hanging flowers dying') && !scare1.has('Hanging flowers'));
+console.log('— the flowers —');
+  ok('the flowers are in bloom while the house waits, and through the first scare',
+    waiting.has('Hanging flowers') && s1.has('Hanging flowers') && !s1.has('Hanging flowers dying'));
+  ok('the second scare swaps in the dying bunch', s2.has('Hanging flowers dying'));
   ok('and they stay dead to the end',
-    ['Question 2', 'Question 3', 'Scare: tentacles', 'Finale: the house wakes up', 'Waiting for a treat']
+    ['More? (after the creature)', 'Scare: tentacles from the walls', 'Out of tricks', 'Finale: the house wakes up', 'Waiting for a treat']
       .every((n) => contents(project, n).has('Hanging flowers dying') && !contents(project, n).has('Hanging flowers')));
   const dying = project.layers.find((l) => l.name === 'Hanging flowers dying');
   const fresh = project.layers.find((l) => l.name === 'Hanging flowers');
@@ -96,20 +96,22 @@ console.log('— building it —');
     JSON.stringify(fresh.params) === JSON.stringify(dying.params) && JSON.stringify(fresh.targetTags) === JSON.stringify(dying.targetTags));
 
 console.log('— the words —');
-  ok('the dare is on the wall while it waits', sceneMessage(project, game.scenes.attract)?.text === EXAMPLE_WORDS.attract);
-  ok('each question has its own words', game.scenes.ask.map((id) => sceneMessage(project, id)?.text).join('|') === EXAMPLE_WORDS.ask.join('|'));
-  ok('each send-off too', game.scenes.chicken.map((id) => sceneMessage(project, id)?.text).join('|') === EXAMPLE_WORDS.chicken.join('|'));
-  ok('the reward says so', sceneMessage(project, game.scenes.reward)?.text === EXAMPLE_WORDS.reward);
+  const say = (id) => sceneMessage(project, id)?.text;
+  ok('it asks trick or treat', say(game.scenes.attract) === EXAMPLE_WORDS.attract);
+  ok('NO is answered "did you say trick?", then "but we love to scare"', game.scenes.persuade.map(say).join('|') === EXAMPLE_WORDS.persuade.join('|'));
+  ok('after each scare, "do you want more?"', game.scenes.ask.slice(1).every((id) => say(id) === EXAMPLE_WORDS.more));
+  ok('at the top, out of tricks: come and get your treat', say(game.scenes.approach) === EXAMPLE_WORDS.approach);
+  ok('and NO for good is a treat too', game.scenes.chicken.every((id) => say(id) === EXAMPLE_WORDS.treat));
   const finaleTrigger = project.triggers.find((t) => t.id === game.finale);
   ok('nothing at the door has words — they could not read them',
     [game.scenes.waiting, game.scenes.early, finaleTrigger.sceneId].every((id) => sceneMessage(project, id) === null));
   ok('and nor does a scare', game.rungs.every((id) => sceneMessage(project, project.triggers.find((t) => t.id === id).sceneId) === null));
 
-  const q1 = game.scenes.ask[0];
+  const q1 = game.scenes.ask[1];
   const { layer } = sceneMessage(project, q1);
   setSceneMessage(project, q1, layer.id, 'BOO?');
   ok('rewording a question changes that question', sceneMessage(project, q1).text === 'BOO?');
-  ok('and no other', sceneMessage(project, game.scenes.ask[1]).text === EXAMPLE_WORDS.ask[1]);
+  ok('and no other', sceneMessage(project, game.scenes.ask[2]).text === EXAMPLE_WORDS.more);
   ok('and not the layer, while the scene is only shown', layer.params.content !== 'BOO?');
   activateScene(project, q1);
   applySceneToLayers(project, q1);
@@ -121,7 +123,7 @@ console.log('— the words —');
   const before = counts();
   buildExampleGame(project);
   ok('building it twice replaces the first, rather than doubling it', counts() === before, `${before} -> ${counts()}`);
-  ok('the rebuilt question has its words back', sceneMessage(project, project.game.scenes.ask[0]).text === EXAMPLE_WORDS.ask[0]);
+  ok('the rebuilt question has its words back', sceneMessage(project, project.game.scenes.ask[1]).text === EXAMPLE_WORDS.more);
 
   removeExampleGame(project);
   ok('removing it removes all of it', !hasExampleGame(project) && !project.scenes.some((s) => s.example) && !project.triggers.some((t) => t.example));
@@ -144,18 +146,17 @@ console.log('— the game\'s own scenes —');
   const { project } = house();
   buildExampleGame(project);
   const ids = gameSceneIds(project.game, project);
-  ok('the game knows which scenes are its own', ids.size === 18, String(ids.size));
+  ok('the game knows which scenes are its own', ids.size === 19, String(ids.size));
   ok('and that mine is not', !ids.has('mine'));
 }
 
-console.log('— playing it, with a brave group —');
+console.log('— playing the script —');
 {
   const { project } = house();
   buildExampleGame(project);
   let clock = 1_000_000;
   const now = () => clock;
   const name = () => project.scenes.find((s) => s.id === project.show.activeScene)?.name?.replace('Dare · ', '');
-  const said = [];
   const runtime = createGameRuntime({
     getGame: () => project.game,
     now,
@@ -167,9 +168,7 @@ console.log('— playing it, with a brave group —');
         return t.hold;
       },
       cueEnd: () => {},
-      caption: (text) => {
-        if (text) said.push(text);
-      },
+      caption: () => {},
       release: () => activateScene(project, 'mine', { fade: 0 }),
     },
   });
@@ -181,32 +180,37 @@ console.log('— playing it, with a brave group —');
   const hearOut = () => {
     for (let i = 0; i < 200 && runtime.snapshot().saying; i++) wait(0.1);
   };
-  const yes = () => {
-    runtime.press({ button: 'yes' });
-    wait(0.2);
-  };
 
+
+  const press = (button) => {
+    runtime.press({ button });
+    wait(0.2);
+    hearOut();
+  };
   const seen = [];
-  runtime.press({ button: 'yes' });
-  ok('the first YES is answered with words before the question', runtime.snapshot().saying?.text === 'SO…');
-  ok('and a press while they are said is dropped, not saved up', runtime.press({ button: 'yes' }) === 'wait for the words');
-  hearOut();
+  // The script, with a group that needs talking round.
+  press('no');
   seen.push(name());
-  for (let rung = 0; rung < 3; rung++) {
-    wait(1);
-    yes();
-    hearOut();
-    seen.push(name());
+  wait(1);
+  press('no');
+  seen.push(name());
+  wait(1);
+  press('yes');
+  seen.push(name());
+  for (let rung = 0; rung < 2; rung++) {
     wait(10);
-    hearOut();
+    seen.push(name());
+    wait(1);
+    press('yes');
     seen.push(name());
   }
+  wait(10);
+  seen.push(name());
   runtime.press({ button: 'door' });
   seen.push(name());
   wait(11);
   seen.push(name());
   runtime.press({ button: 'treat' });
-  hearOut();
   seen.push(name());
   wait(9);
   seen.push(name());
@@ -214,17 +218,22 @@ console.log('— playing it, with a brave group —');
   seen.push(name());
 
   const expected = [
-    'Question 1',
-    'Scare: blood on the door', 'Question 2',
-    'Scare: people at the windows', 'Question 3',
-    'Scare: tentacles', 'Come to the door',
+    'Said no 1', 'Said no 2',
+    'Scare: lightning and smoke', 'More? (after the lightning)',
+    'Scare: the flowers die, a creature at the windows', 'More? (after the creature)',
+    'Scare: tentacles from the walls', 'Out of tricks',
     'Finale: the house wakes up', 'Waiting for a treat',
-    'You survived', 'My scene', 'Waiting for visitors',
+    'Happy Halloween', 'My scene', 'Trick or treat?',
   ];
-  ok('every step of the walk shows the scene it should', seen.join(' > ') === expected.join(' > '), seen.join(' > '));
-  ok('with every line said, in order, on the way',
-    said.join(' | ') === ['SO…', 'YOU DARE.', 'YOU ASKED FOR IT…', "DON'T SAY WE\nDIDN'T WARN YOU…", 'TOO LATE', 'TO RUN…', 'THE HOUSE\nLETS YOU GO…'].join(' | '),
-    said.join(' | ').replace(/\n/g, ' '));
+  ok('every step of the script shows the scene it should', seen.join(' > ') === expected.join(' > '), seen.join(' > '));
+
+  // And a group that will not be talked round.
+  runtime.press({ button: 'no' });
+  wait(1);
+  press('no');
+  wait(1);
+  press('no');
+  ok('three NOs and it sends them for their treat', name() === 'Come and get your treat 1', name());
   ok('and the message layer is the one that says them', project.game.messageLayer === project.layers.find((l) => l.name === 'Message')?.id);
 }
 

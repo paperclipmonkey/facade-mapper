@@ -649,7 +649,7 @@ app.rehearse = () => {
       press('yes');
     } else if (snap.saying) {
       // Listening to the words, like a real group would.
-    } else if ((snap.state === 'ask' || snap.state === 'nudge') && snap.since > READ) press('yes');
+    } else if ((snap.state === 'ask' || snap.state === 'nudge' || snap.state === 'persuade') && snap.since > READ) press('yes');
     else if (snap.state === 'approach' && snap.since > READ) press('door');
     else if (snap.state === 'waiting' && snap.since > 3) press('treat');
   }, 250);

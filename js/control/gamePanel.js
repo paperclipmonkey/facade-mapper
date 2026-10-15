@@ -238,9 +238,10 @@ function starterCard(app) {
     el('strong', { text: 'Start with the example' }),
     el('p', {
       html:
-        'A complete game built from your tagged shapes. The house waits with <em>brick, smoke and a basket of flowers</em>; ' +
-        'each YES is answered with a dare — <em>"YOU ASKED FOR IT…"</em> — and a horror it keeps: <em>blood down the door</em> as the flowers die, ' +
-        'then <em>people at the windows</em>, then <em>tentacles through the brick</em>. The door button sets off everything at once.',
+        'A complete game built from your tagged shapes. The house asks <em>TRICK OR TREAT?</em> — and argues with a NO: ' +
+        '<em>DID YOU SAY TRICK?</em> <em>BUT WE LOVE TO SCARE…</em> Each YES is a trick it keeps: <em>lightning and smoke</em>, then ' +
+        '<em>the flowers die and a creature is at the windows</em>, then <em>tentacles from the walls</em>, and then ' +
+        '<em>WE\u2019RE ALL OUT OF TRICKS. COME AND GET YOUR TREAT.</em>',
     }),
     el('button', { type: 'button', class: 'btn primary', text: 'Build the example game', onclick: () => app.buildExampleGame() }),
   ]);
@@ -335,7 +336,7 @@ export function paintGameLive(node, app) {
     if (!game.enabled) text = 'Off — presses do nothing.';
     else if (!snapshot.active) text = 'Waiting for somebody to press a button.';
     else {
-      text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : ''}`;
+      text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : def.byAttempt ? ` (try ${snapshot.attempt})` : ''}`;
       if (snapshot.saying) text += ` · saying “${snapshot.saying.text.replace(/\s*\n\s*/g, ' ')}”`;
       else if (snapshot.remaining !== null) text += ` · ${Math.ceil(snapshot.remaining)} s`;
       if (snapshot.deciding) text += ' · listening for the other button…';

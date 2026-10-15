@@ -21,7 +21,7 @@
  * from the first rung to the fourth without seeing the two in between.
  */
 
-import { STATES, transitionFor, sceneSlot, cueSlot, roleOf, topLevel, beatsFor } from '../core/game.js';
+import { STATES, transitionFor, sceneSlot, cueSlot, roleOf, topLevel, beatsFor, slotIndex } from '../core/game.js';
 
 /** Press ids remembered for de-duplication. A broker redelivers recent ones. */
 const SEEN_LIMIT = 64;
@@ -51,6 +51,8 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
 
   let state = 'attract';
   let level = 0;
+  /** How many times the house has asked again after a NO. */
+  let attempt = 0;
   let enteredAt = now();
   let deadline = null;
   /** The trigger a cue state is playing, so its `after` hook fires on the way out. */
@@ -102,7 +104,10 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
     if (next === 'attract' || next === 'cooldown') {
       if (holding) io.release?.();
       holding = false;
-      if (next === 'attract') level = 0;
+      if (next === 'attract') {
+        level = 0;
+        attempt = 0;
+      }
     }
 
     /**
@@ -112,7 +117,7 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
      * on by itself. Nobody presses anything for it; presses during it are
      * dropped, the same as during a scare.
      */
-    const lines = next === 'attract' || next === 'cooldown' ? [] : beatsFor(game(), next, level);
+    const lines = next === 'attract' || next === 'cooldown' ? [] : beatsFor(game(), next, slotIndex(next, level, attempt));
     if (lines.length) {
       saying = { lines, index: 0 };
       say();
@@ -162,9 +167,9 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
       return;
     }
 
-    const scene = sceneSlot(g, next, level);
+    const scene = sceneSlot(g, next, slotIndex(next, level, attempt));
     if (scene && next !== 'cooldown') {
-      io.scene?.(scene, { state: next, level });
+      io.scene?.(scene, { state: next, level, attempt });
       // The attract prompt is the house's idle look, not the game holding the
       // stage — a playlist is free to move on from it.
       if (next !== 'attract') holding = true;
@@ -177,12 +182,18 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
 
   /** Take the transition `event` leads to from here, if there is one. */
   function dispatch(event) {
-    const t = transitionFor(state, event, game(), level);
+    const t = transitionFor(state, event, game(), level, attempt);
     if (!t) return null;
     const from = state;
     leave();
-    if (t.do === 'start') level = 1;
-    if (t.do === 'next') level += 1;
+    for (const step of String(t.do || '').split('+')) {
+      if (step === 'start') {
+        level = 1;
+        attempt = 0;
+      }
+      if (step === 'next') level += 1;
+      if (step === 'plead') attempt += 1;
+    }
     last = { from, on: event, to: t.to, at: now() };
     enter(t.to);
     return t;
@@ -248,7 +259,7 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
     const event = kind === 'long' ? (role === 'no' ? 'long-no' : null) : role;
     if (!event) return finish('held');
 
-    if (!transitionFor(state, event, g, level)) return finish('not now');
+    if (!transitionFor(state, event, g, level, attempt)) return finish('not now');
 
     // TREAT is an adult who means it, once; it skips both windows, and the
     // words being said.
@@ -265,7 +276,7 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
     // whichever packet happened to win.
     const answers = event === 'yes' || event === 'no';
     const window = ms('windowMs', 150);
-    if (answers && window > 0 && transitionFor(state, 'both', g, level)) {
+    if (answers && window > 0 && transitionFor(state, 'both', g, level, attempt)) {
       if (pending) {
         if (pending.event === event) return finish('same answer');
         pending = null;
@@ -333,6 +344,7 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
     return {
       state,
       level,
+      attempt,
       of: topLevel(game()),
       zone: STATES[state].zone,
       active: state !== 'attract',
@@ -358,6 +370,9 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
     },
     get level() {
       return level;
+    },
+    get attempt() {
+      return attempt;
     },
     /** Playing, rather than idling in Attract: playlist and triggers stand aside. */
     get active() {
