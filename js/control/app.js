@@ -78,7 +78,7 @@ import {
 import { GRADE_PRESETS, DEFAULT_GRADE } from '../render/postfx.js';
 import { createMediaPool, importMediaFile, removeMedia } from '../core/media.js';
 import { loadUserEffects, listByCategory, defaultParams, getEffect, getCompileErrors } from '../effects/registry.js';
-import { captureScene, activateScene as applyScene, applySceneToLayers, sceneDrift, tickPlaylist, transitionProgress, effectiveLayers } from '../core/scenes.js';
+import { captureScene, activateScene as applyScene, applySceneToLayers, unsavedChanges, restoreScene, tickPlaylist, transitionProgress, effectiveLayers } from '../core/scenes.js';
 import { createCamera } from './camera.js';
 import { feed as extraFeed, pruneFeeds } from './feeds.js';
 import { runCalibration, checkDrift, solveFromCorners, solveFromPointPairs, POINT_PAIRS_NEEDED } from './calibration.js';
@@ -105,6 +105,8 @@ import { createSoundPlayer } from './sound.js';
 import { createSoundscape, planSoundscape, soundFaders, soundOwners, VOICES } from '../core/soundscape.js';
 import { baseParams } from '../core/modulators.js';
 import { createTriggerRuntime } from './triggers.js';
+import { createGameRuntime } from './game.js';
+import { renderGamePanel, paintGameLive, gameNames, gameMissing } from './gamePanel.js';
 import { scheduleWantsOn, describeSchedule } from './schedule.js';
 import { el, clear, toast, paramRow } from './ui.js';
 import { HELP_SECTIONS, EFFECT_TEMPLATE } from './help.js';
@@ -180,6 +182,17 @@ const soundscape = createSoundscape({
 let soundKey = '';
 const motion = createMotionDetector();
 let triggerRuntime = null;
+/** The dare game. See control/game.js. */
+let gameRuntime = null;
+/**
+ * The scene that was up before the game first put one of its own up, so the
+ * end of a game can put it back. `undefined` while the game holds nothing —
+ * null is a real answer, "no scene was up".
+ */
+let beforeGame;
+/** Whether that scene was loaded — being worked on — so it comes back loaded. */
+let beforeGameLoaded = false;
+let gameWake = null;
 /** Motion is measured a few times a second, not every frame — it costs a readback. */
 let lastMotionAt = 0;
 let scheduleState = null;
@@ -562,6 +575,17 @@ app.fireTrigger = (triggerId) => {
   app.commit();
 };
 
+/**
+ * The dare game, as the panel and the remote see it. Every press arrives here,
+ * whichever button it came from, and goes through the runtime's rules.
+ */
+app.game = {
+  press: (press) => gameRuntime?.press(press) ?? 'not running',
+  reset: () => gameRuntime?.reset(),
+  snapshot: () =>
+    gameRuntime?.snapshot() ?? { state: 'attract', level: 0, of: 1, active: false, enabled: false, remaining: null, log: [], last: null },
+};
+
 app.triggerActivity = (id) => triggerRuntime?.activityFor(id) ?? 0;
 app.triggerArmedIn = (id, cooldown) => triggerRuntime?.gate.armedIn(id, cooldown) ?? 0;
 app.motionThreshold = (sensitivity) => triggerRuntime?.gate.threshold(sensitivity) ?? 0.05;
@@ -583,6 +607,7 @@ function refreshPanels() {
   renderSceneButtons($('sceneButtons'), app);
   renderMediaList($('mediaList'), app);
   renderTriggerList($('triggerList'), app);
+  renderGamePanel($('gamePanel'), app);
   refreshLookPanel();
   renderStorageInfo($('storageDetail'), app);
   updateScheduleNote();
@@ -1968,8 +1993,12 @@ app.activateScene = async (sceneId) => {
   toast(scene.name);
 };
 
-/** Layers whose current values differ from the scene that is live. */
-app.sceneDrift = (sceneId) => sceneDrift(app.project, sceneId);
+/**
+ * Layers whose current values differ from the scene that is live — when it is
+ * loaded. A scene a trigger, the playlist or the game put up has not been
+ * edited, whatever its layers say. See `unsavedChanges` in core/scenes.js.
+ */
+app.sceneDrift = (sceneId) => unsavedChanges(app.project, sceneId);
 
 /**
  * The scene that is live, and how far it has drifted from what was stored.
@@ -1980,7 +2009,7 @@ app.sceneDrift = (sceneId) => sceneDrift(app.project, sceneId);
 function liveScene() {
   const id = app.project.show?.activeScene;
   const scene = id ? app.project.scenes.find((s) => s.id === id) : null;
-  return scene ? { scene, drift: sceneDrift(app.project, scene.id).length } : null;
+  return scene ? { scene, drift: unsavedChanges(app.project, scene.id).length } : null;
 }
 
 /**
@@ -2056,7 +2085,7 @@ function refreshSceneGuard(force = false) {
  */
 function askAboutUnsaved(leavingId, goingTo) {
   const leaving = app.project.scenes.find((s) => s.id === leavingId);
-  const drift = leaving ? sceneDrift(app.project, leavingId).length : 0;
+  const drift = leaving ? unsavedChanges(app.project, leavingId).length : 0;
   if (!leaving || !drift) return Promise.resolve('discard');
 
   const dialog = $('sceneGuardDialog');
@@ -2571,6 +2600,27 @@ function showDigest() {
       note: describeSchedule(project.schedule),
     },
     health: { fps: Math.round(previewFps), tabs: presence.list().length },
+    game: gameDigest(),
+  };
+}
+
+/**
+ * The game, for a remote to draw and press: the snapshot, and just enough of
+ * the configuration for the diagram to describe this show rather than the
+ * abstract machine.
+ */
+function gameDigest() {
+  const game = app.project.game;
+  if (!game) return null;
+  const snapshot = app.game.snapshot();
+  return {
+    enabled: !!game.enabled,
+    door: !!game.door,
+    rungCount: game.rungs.length,
+    timing: game.timing,
+    names: gameNames(app.project, game, snapshot.active ? snapshot.level : 0),
+    missing: gameMissing(game),
+    snapshot: { ...snapshot, log: snapshot.log.slice(0, 6) },
   };
 }
 
@@ -2671,6 +2721,31 @@ const REMOTE_ACTIONS = {
   },
 
   trigger: ({ id } = {}) => app.fireTrigger(id),
+
+  /**
+   * A button press for the dare game — from the remote's test buttons today,
+   * and from the Home Assistant bridge, which sends exactly this. The game's
+   * own rules decide what it means, so nothing here can push it anywhere the
+   * diagram does not go.
+   */
+  press: ({ button, kind, id, at } = {}) => {
+    app.game.press({
+      button: typeof button === 'string' ? button : '',
+      kind: kind === 'long' ? 'long' : 'press',
+      id: typeof id === 'string' || typeof id === 'number' ? id : null,
+      at: Number.isFinite(at) ? at : null,
+    });
+  },
+
+  'game-reset': () => app.game.reset(),
+
+  'game-enabled': ({ on } = {}) => {
+    const game = app.project.game;
+    game.enabled = on === undefined ? !game.enabled : !!on;
+    if (!game.enabled) app.game.reset();
+    app.commit();
+    refreshPanels();
+  },
 
   master: ({ value } = {}) => {
     const level = Number(value);
@@ -3189,7 +3264,8 @@ function frame() {
   // The playlist and trigger runtimes mutate show state on their own. Both need
   // saving as well as broadcasting, or closing the tab mid-scare would reopen
   // stuck in it.
-  if (tickPlaylist(app.project)) {
+  // While the dare game is playing it has the stage, and the playlist waits.
+  if (!gameRuntime?.active && tickPlaylist(app.project)) {
     markDirty();
     broadcast(true);
     renderSceneButtons($('sceneButtons'), app);
@@ -3201,6 +3277,8 @@ function frame() {
     broadcast(true);
     renderSceneButtons($('sceneButtons'), app);
   }
+
+  gameRuntime?.tick();
 
   if (stampLayerSwitchOns()) {
     markDirty();
@@ -3327,7 +3405,7 @@ function tickTriggers() {
     }
   }
 
-  return triggerRuntime.tick(sample);
+  return triggerRuntime.tick(sample, { quiet: !!gameRuntime?.active });
 }
 
 /**
@@ -4401,6 +4479,64 @@ function renderShowsDialog() {
 }
 
 /* ------------------------------------------------------------------ *
+ * The dare game, on this tab
+ * ------------------------------------------------------------------ */
+
+/**
+ * The game is about to put something up. Remember what it is replacing, once,
+ * and finish any scare that is mid-hold — its restore must not land later on
+ * top of a question, and its `after` hook is what turns the fog off.
+ */
+function takeStageForGame() {
+  if (beforeGame !== undefined) return;
+  beforeGame = app.project.show?.activeScene ?? null;
+  beforeGameLoaded = !!beforeGame && app.project.show?.sceneLoaded === beforeGame;
+  triggerRuntime?.endHold();
+}
+
+/** The game is over: put back what was up before it started. */
+function releaseStageFromGame() {
+  if (beforeGame === undefined) return;
+  const show = app.project.show || (app.project.show = {});
+  const restore = beforeGame;
+  beforeGame = undefined;
+  if (restore && (app.project.scenes || []).some((s) => s.id === restore)) {
+    restoreScene(app.project, restore, { fade: 0.8, wasLoaded: beforeGameLoaded });
+  } else {
+    show.previousScene = show.activeScene ?? null;
+    show.activeScene = null;
+    show.sceneChangeAt = linkNow();
+    show.fade = 0.8;
+  }
+  // The playlist stood still for the whole game. Give the entry it comes back
+  // to its full length rather than skipping on at once because the clock ran.
+  if (show.running && show.playlistStartedAt) show.playlistStartedAt = linkNow();
+}
+
+function onGameChanged() {
+  markDirty();
+  broadcast(true);
+  renderSceneButtons($('sceneButtons'), app);
+  publishShowState(true);
+  paintGameLive($('gamePanel'), app);
+  armGameWake();
+}
+
+/**
+ * Wake for the game's next deadline even when nothing is drawing.
+ *
+ * The same lesson as the trigger runtime's `armWake`: the frame loop stops in
+ * a hidden tab, and a scare still has to end and a question still has to time
+ * out while somebody plays from the path with the laptop's lid half shut.
+ */
+function armGameWake() {
+  clearTimeout(gameWake);
+  const next = gameRuntime?.nextDeadline();
+  if (next === null || next === undefined) return;
+  gameWake = setTimeout(() => gameRuntime?.tick(), Math.max(0, next - Date.now()) + 5);
+}
+
+/* ------------------------------------------------------------------ *
  * Boot
  * ------------------------------------------------------------------ */
 
@@ -4450,6 +4586,30 @@ async function boot() {
       broadcast(true);
       renderSceneButtons($('sceneButtons'), app);
       publishShowState(true);
+    },
+  });
+
+  gameRuntime = createGameRuntime({
+    getGame: () => app.project.game,
+    now: () => Date.now(),
+    // A press is stamped in link time by whoever sent it; that is the only
+    // number this compares against it.
+    stamp: () => linkNow(),
+    io: {
+      scene: (sceneId) => {
+        takeStageForGame();
+        applyScene(app.project, sceneId, { fade: 0.4 });
+      },
+      cue: (triggerId) => {
+        takeStageForGame();
+        const trigger = (app.project.triggers || []).find((t) => t.id === triggerId);
+        return triggerRuntime.cue(trigger);
+      },
+      cueEnd: (triggerId) => {
+        triggerRuntime.cueEnd((app.project.triggers || []).find((t) => t.id === triggerId));
+      },
+      release: () => releaseStageFromGame(),
+      changed: () => onGameChanged(),
     },
   });
 
@@ -4523,6 +4683,12 @@ async function boot() {
    * listening.
    */
   setInterval(heartbeatShowState, 500);
+  // The countdowns on the Game panel, while a game is playing and it is open.
+  setInterval(() => {
+    if (!gameRuntime?.active) return;
+    if (!document.querySelector('.panel-page[data-page="game"]')?.classList.contains('active')) return;
+    paintGameLive($('gamePanel'), app);
+  }, 500);
 
   /**
    * Ask whoever is holding a pencil what is already on the wall.

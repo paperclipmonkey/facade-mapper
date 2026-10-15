@@ -25,6 +25,8 @@ import { createClock, formatTime } from '../core/clock.js';
 import { createLink } from '../core/link.js';
 import { now as linkNow } from '../core/time.js';
 import { createDrawPad } from '../draw/pad.js';
+import { renderGameGraph, holdable } from '../core/gameGraph.js';
+import { STATES, ROLE_LABELS } from '../core/game.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -56,7 +58,7 @@ const link = createLink(bus, {
 /** The last digest, and the moment it arrived, on this device's own clock. */
 let show = null;
 let showAt = 0;
-/** 'control' or 'draw'. Declared up here because the notice reads it. */
+/** 'control', 'game' or 'draw'. Declared up here because the notice reads it. */
 let mode = 'control';
 /** Structure of the last digest, so the DOM is rebuilt only when it changes. */
 let structure = '';
@@ -385,7 +387,8 @@ function updateNotice() {
 
   notice.hidden = !message || (drawing && !linkFault);
   notice.textContent = message;
-  $('main').hidden = !show || drawing;
+  $('main').hidden = !show || mode !== 'control';
+  $('gameRoot').hidden = !show || mode !== 'game';
   $('tabs').hidden = !show;
 }
 
@@ -430,25 +433,86 @@ function setMode(next) {
   if (next === mode) return;
   mode = next;
   const drawing = mode === 'draw';
-  $('tabControl').classList.toggle('on', !drawing);
-  $('tabControl').setAttribute('aria-pressed', String(!drawing));
-  $('tabDraw').classList.toggle('on', drawing);
-  $('tabDraw').setAttribute('aria-pressed', String(drawing));
+  for (const [id, name] of [['tabControl', 'control'], ['tabGame', 'game'], ['tabDraw', 'draw']]) {
+    $(id).classList.toggle('on', mode === name);
+    $(id).setAttribute('aria-pressed', String(mode === name));
+  }
   document.body.classList.toggle('drawing-mode', drawing);
   if (drawing) pad.open();
   else pad.close();
+  paintGame();
   updateNotice();
   // The address bar carries it, so a reload comes back where you were and the
   // control tab can hand somebody a link straight to the pencil.
   try {
-    history.replaceState(null, '', drawing ? '#draw' : ' ');
+    history.replaceState(null, '', mode === 'control' ? ' ' : `#${mode}`);
   } catch {
     /* A file: URL, or a browser that will not have it. Not worth saying. */
   }
 }
 
 $('tabControl').addEventListener('click', () => setMode('control'));
+$('tabGame').addEventListener('click', () => setMode('game'));
 $('tabDraw').addEventListener('click', () => setMode('draw'));
+
+/* ------------------------------------------------------------------ *
+ * The dare game
+ * ------------------------------------------------------------------ */
+
+/**
+ * Presses carry an id and a link-time stamp, like the ones from Home
+ * Assistant, so testing from here goes through the same de-duplication and
+ * staleness rules as the real buttons rather than around them.
+ */
+const pressPrefix = `remote-${Math.random().toString(36).slice(2, 8)}`;
+let pressCount = 0;
+function gamePress(button, kind = 'press') {
+  act('press', { button, kind, id: `${pressPrefix}-${++pressCount}`, at: linkNow() });
+}
+
+for (const button of document.querySelectorAll('.game-btn')) {
+  const role = button.dataset.role;
+  if (role === 'no') holdable(button, () => gamePress('no'), () => gamePress('no', 'long'));
+  else button.addEventListener('click', () => gamePress(role));
+}
+$('btnGameReset').addEventListener('click', () => act('game-reset'));
+$('btnGameOn').addEventListener('click', () => act('game-enabled'));
+
+function paintGame() {
+  const game = show?.game;
+  $('tabGame').hidden = !game;
+  if (!game || mode !== 'game') return;
+  const snapshot = game.snapshot || {};
+  const def = STATES[snapshot.state] || STATES.attract;
+
+  let text;
+  if (!game.enabled) text = 'The game is off. Switch it on to test it from here.';
+  else if (!snapshot.active) text = 'Waiting for somebody to press a button.';
+  else {
+    text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : ''}`;
+    if (snapshot.remaining !== null && snapshot.remaining !== undefined) text += ` · ${Math.ceil(snapshot.remaining)} s`;
+    if (snapshot.deciding) text += ` · listening for the other button`;
+  }
+  $('gameState').textContent = text;
+  $('gameState').classList.toggle('on', !!(game.enabled && snapshot.active));
+
+  $('btnGameOn').classList.toggle('on', game.enabled);
+  $('btnGameOn').querySelector('.big-sub').textContent = game.enabled ? 'presses are live' : 'off — presses do nothing';
+  for (const button of document.querySelectorAll('.game-btn')) button.disabled = !game.enabled;
+  document.querySelector('.game-door').hidden = !game.door;
+
+  $('gameGraph').innerHTML = renderGameGraph({ game, snapshot, names: game.names, missing: game.missing });
+
+  const log = $('gameLog');
+  log.replaceChildren();
+  for (const entry of snapshot.log || []) {
+    const row = document.createElement('div');
+    row.className = 'game-log-row';
+    const who = entry.role ? `${ROLE_LABELS[entry.role]}${entry.kind === 'long' ? ' held' : ''}` : entry.button;
+    row.textContent = `${who} — ${entry.result}`;
+    log.appendChild(row);
+  }
+}
 
 /* ------------------------------------------------------------------ *
  * The tick
@@ -491,6 +555,7 @@ bus.on(MSG.SHOW, (digest) => {
     build(digest);
   }
   paint();
+  paintGame();
   updateNotice();
 });
 
@@ -626,5 +691,6 @@ keepAwake();
 // `#draw` opens straight onto the pencil, so the control tab can hand a tablet
 // a link to the thing it is for and a reload comes back where you were.
 if (location.hash === '#draw') setMode('draw');
+else if (location.hash === '#game') setMode('game');
 updateNotice();
 requestAnimationFrame(tick);

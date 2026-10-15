@@ -15,7 +15,7 @@
  * the scene change stamp, which every tab reads, and that one is link time.
  */
 
-import { activateScene } from '../core/scenes.js';
+import { activateScene, restoreScene } from '../core/scenes.js';
 import { now as linkNow } from '../core/time.js';
 import { createMotionGate } from './motion.js';
 import { fireWebhook } from './webhooks.js';
@@ -53,6 +53,9 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange 
     // Remember what to go back to. If a hold is already running, keep the
     // original scene rather than nesting one scare inside another.
     const restoreTo = holding ? holding.restoreTo : show.activeScene ?? null;
+    // And whether it was loaded: a scene somebody was editing comes back as
+    // their edits, not as its stored values. See `restoreScene`.
+    const restoreLoaded = holding ? holding.restoreLoaded : !!restoreTo && show.sceneLoaded === restoreTo;
 
     if (trigger.sceneId) activateScene(app.project, trigger.sceneId, { fade: 0.12 });
 
@@ -82,7 +85,7 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange 
 
     const hold = Math.max(0, trigger.hold ?? 0);
     if (hold > 0) {
-      holding = { until: Date.now() + hold * 1000, restoreTo, triggerId: trigger.id };
+      holding = { until: Date.now() + hold * 1000, restoreTo, restoreLoaded, triggerId: trigger.id };
       armWake(hold * 1000 + 60);
     } else {
       holding = null;
@@ -96,6 +99,47 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange 
     if (!manual) scheduleTimer(trigger);
     onFired?.(trigger, { manual });
     return true;
+  }
+
+  /**
+   * Play a trigger without holding or restoring: its scene, its sound and its
+   * `before` hook, and back comes the hold it asked for.
+   *
+   * This is how the dare game plays a rung. A rung is a scare in every way but
+   * one — when it ends, the house goes on to the next question, not back to
+   * whatever was on before — so the game owns the timing and this owns
+   * everything else, and a scare built as a trigger plays the same either way.
+   *
+   * @returns {number|null} The hold in seconds, or null if it could not play.
+   */
+  function cue(trigger) {
+    if (!trigger) return null;
+    if (trigger.sceneId && !scenesById().has(trigger.sceneId)) return null;
+    if (!trigger.sceneId && !trigger.sound) return null;
+    if (trigger.sceneId) activateScene(app.project, trigger.sceneId, { fade: 0.12 });
+    if (trigger.sound) sound?.play(trigger.sound, { volume: trigger.soundVolume ?? 1 });
+    call(trigger, 'before');
+    return Math.max(0, trigger.hold ?? 0);
+  }
+
+  /** The other half of `cue`: the game has moved on, so put the house back. */
+  function cueEnd(trigger) {
+    call(trigger, 'after');
+  }
+
+  /**
+   * Finish a hold now, without putting anything back.
+   *
+   * For the game starting in the middle of a scare: the scene is about to be
+   * replaced anyway, but the scare's `after` hook is what turns the fog off,
+   * and the restore must not land later on top of a question.
+   */
+  function endHold() {
+    if (!holding) return;
+    const trigger = (app.project.triggers || []).find((t) => t.id === holding.triggerId);
+    holding = null;
+    clearTimeout(wakeTimer);
+    call(trigger, 'after');
   }
 
   /**
@@ -147,8 +191,14 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange 
    * Called once per frame from the control tab.
    *
    * @param {object} motionSample { activityFor(trigger) => number|null }
+   * @param {object} [options]
+   * @param {boolean} [options.quiet]  Measure, but fire nothing — the dare game
+   *   has the stage, and a timed lightning strike landing in the middle of
+   *   "are you SURE?" is a question answered by nobody. Timers that come due
+   *   are pushed on rather than saved up, so the game ending is not followed
+   *   by every scare that was due during it.
    */
-  function tick(motionSample) {
+  function tick(motionSample, { quiet = false } = {}) {
     const now = Date.now();
     let changed = false;
 
@@ -158,7 +208,7 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange 
       const scenes = scenesById();
       call((app.project.triggers || []).find((t) => t.id === holding.triggerId), 'after');
       if (holding.restoreTo && scenes.has(holding.restoreTo)) {
-        activateScene(app.project, holding.restoreTo, { fade: 0.8 });
+        restoreScene(app.project, holding.restoreTo, { fade: 0.8, wasLoaded: holding.restoreLoaded });
       } else {
         // Nothing to go back to: clear the scene so authored layer state returns.
         const show = app.project.show || {};
@@ -182,6 +232,10 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange 
           continue;
         }
         if (now >= timerNext.get(trigger.id)) {
+          if (quiet) {
+            scheduleTimer(trigger);
+            continue;
+          }
           // Reschedule whether or not it fired. `fire` returns false when the
           // scene has been deleted, and without this the due time stays in the
           // past — so a timer pointing at a missing scene re-enters `fire` on
@@ -196,6 +250,7 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange 
         const level = motionSample?.activityFor?.(trigger);
         if (level === null || level === undefined) continue;
         activity.set(trigger.id, level);
+        if (quiet) continue;
         if (gate.shouldFire(trigger.id, level, trigger, now)) {
           if (fire(trigger)) changed = true;
         }
@@ -222,6 +277,9 @@ export function createTriggerRuntime({ app, sound, onFired, onWebhook, onChange 
   return {
     tick,
     fire,
+    cue,
+    cueEnd,
+    endHold,
     fireByKey,
     cancelHold,
     gate,

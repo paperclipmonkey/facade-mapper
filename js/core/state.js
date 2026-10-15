@@ -274,6 +274,56 @@ export function createTrigger(overrides = {}) {
   };
 }
 
+/**
+ * The dare game: buttons on the path, a ladder of scares, a treat at the door.
+ * The machine itself is in core/game.js; this is only what one show configures.
+ */
+export function createGame(overrides = {}) {
+  return {
+    enabled: false,
+    /** Physical button id (as Home Assistant names it) → 'yes' | 'no' | 'door' | 'treat'. */
+    buttons: {},
+    /**
+     * End at the front door. On, the top of the ladder invites them up the path
+     * and the finale waits for the door button; off, it plays where they stand.
+     */
+    door: true,
+    /** Scene ids per state. `ask` and `chicken` are per level, last one repeating. */
+    scenes: {
+      attract: null,
+      early: null,
+      ask: [],
+      nudge: null,
+      decide: null,
+      approach: null,
+      chicken: [],
+      mercy: null,
+      waiting: null,
+      reward: null,
+    },
+    /** Trigger ids, one per rung, mildest first. */
+    rungs: [],
+    /** Trigger played at the door. */
+    finale: null,
+    /** Seconds, except the three press-handling windows in milliseconds. */
+    timing: {
+      askTimeout: 15,
+      nudgeTimeout: 10,
+      decideHold: 2.5,
+      scareHold: 5,
+      approachTimeout: 25,
+      waitForTreat: 30,
+      rewardHold: 8,
+      cooldown: 6,
+      earlyHold: 5,
+      armMs: 400,
+      windowMs: 150,
+      staleMs: 2000,
+    },
+    ...overrides,
+  };
+}
+
 export function createProject(name = 'Untitled show') {
   const projector = createProjector(0);
   return {
@@ -316,6 +366,9 @@ export function createProject(name = 'Untitled show') {
 
     /** Reactive and timed one-shots. See createTrigger. */
     triggers: [],
+
+    /** The dare game. See createGame and docs/button-game.md. */
+    game: createGame(),
 
     /** Unattended on/off times, so the show runs itself all evening. */
     schedule: {
@@ -468,6 +521,26 @@ export function migrateProject(raw) {
     };
     return merged;
   });
+
+  /**
+   * A level down for the same reason as the trigger hooks: a show saved before
+   * a timing or a scene slot existed must arrive with the default in the gap,
+   * not with `undefined` where the runtime expects a number.
+   */
+  const game = createGame();
+  const savedGame = raw.game && typeof raw.game === 'object' ? raw.game : {};
+  const list = (value) => (Array.isArray(value) ? value.map((v) => v || null) : value ? [value] : []);
+  p.game = {
+    ...game,
+    ...savedGame,
+    buttons: { ...(savedGame.buttons || {}) },
+    scenes: { ...game.scenes, ...(savedGame.scenes || {}) },
+    timing: { ...game.timing, ...(savedGame.timing || {}) },
+    rungs: list(savedGame.rungs).filter(Boolean),
+    finale: savedGame.finale || null,
+  };
+  p.game.scenes.ask = list(p.game.scenes.ask);
+  p.game.scenes.chicken = list(p.game.scenes.chicken);
 
   p.userEffects = Array.isArray(raw.userEffects) ? raw.userEffects : [];
   p.media = Array.isArray(raw.media) ? raw.media : [];

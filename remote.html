@@ -25,6 +25,7 @@
 
     <nav class="remote-tabs" id="tabs" hidden aria-label="What this device is doing">
       <button type="button" class="tab on" id="tabControl" aria-pressed="true">Control</button>
+      <button type="button" class="tab" id="tabGame" aria-pressed="false">Game</button>
       <button type="button" class="tab" id="tabDraw" aria-pressed="false">Draw</button>
     </nav>
 
@@ -83,6 +84,31 @@
         <h2>This device</h2>
         <p class="remote-note" id="linkNote"></p>
       </details>
+    </main>
+
+    <!--
+      The dare game, from the garden: the same YES / NO / DOOR / TREAT the real
+      buttons send, and the diagram lit up with where the game is. For testing
+      a ladder without walking to each button, and for the adult at the door
+      who has the TREAT button in their pocket.
+    -->
+    <main class="remote-main game-root" id="gameRoot" hidden>
+      <p class="game-state" id="gameState">The game is off.</p>
+      <div class="game-pad">
+        <button type="button" class="big game-btn game-yes" data-role="yes"><span class="big-label">YES</span></button>
+        <button type="button" class="big game-btn game-no" data-role="no"><span class="big-label">NO</span><span class="big-sub">hold for mercy</span></button>
+        <button type="button" class="big game-btn game-door" data-role="door"><span class="big-label">DOOR</span></button>
+        <button type="button" class="big game-btn game-treat" data-role="treat"><span class="big-label">TREAT</span></button>
+      </div>
+      <div class="row">
+        <button type="button" class="big" id="btnGameReset"><span class="big-label">Reset</span><span class="big-sub">back to the start</span></button>
+        <button type="button" class="big" id="btnGameOn"><span class="big-label">Game on</span><span class="big-sub"></span></button>
+      </div>
+      <div class="game-graph-scroll"><div class="game-graph" id="gameGraph"></div></div>
+      <section class="remote-section">
+        <h2>Presses</h2>
+        <div class="game-log" id="gameLog"></div>
+      </section>
     </main>
 
     <!--

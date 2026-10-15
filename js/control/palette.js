@@ -32,6 +32,7 @@ export const PANELS = [
   ['layers', 'Effects'],
   ['scenes', 'Scenes'],
   ['triggers', 'Triggers'],
+  ['game', 'Game'],
   ['look', 'Look'],
   ['media', 'Media'],
   ['code', 'Code'],

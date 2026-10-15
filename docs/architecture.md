@@ -8,6 +8,7 @@ projector.html      output tab, one per projector
 remote.html         phone or second-laptop remote
 draw.html           redirect to remote.html#draw, for links already in the wild
 server.mjs          optional: static files + the cross-device link
+mqtt.mjs            optional: the link server's bridge to an MQTT broker
 js/core/            project model, storage, cross-tab bus, maths, clock, modulation
 js/effects/         effect registry and the built-in library
 js/render/          world renderer (2D), projective warp and post-processing (WebGL)
@@ -160,6 +161,7 @@ plausible-looking output:
 node test/geometry.test.mjs    # homography, marker detection, region and mesh maths
 node test/runtime.test.mjs     # motion, gating, scheduling, grading, the show clock, feeds
 node test/triggers.test.mjs    # holds, restores, timers, hotkeys and the HTTP hooks
+node test/game.test.mjs        # the dare game: its table, every press rule, and its diagram
 node test/migrate.test.mjs     # every project ever saved, arriving at a newer copy
 node test/bus.test.mjs         # cross-tab messages, the mirror, and who is alive
 node test/picker.test.mjs      # the effect gallery: cards, search, and letting go
@@ -172,6 +174,7 @@ node test/collide.test.mjs     # heightfields, landing, slumping, shedding
 node test/obstacles.test.mjs   # facade collision, automatic edge blending
 node test/figures.test.mjs     # the drawn figures
 node test/link.test.mjs        # clock offset, WebSocket framing, the relay
+node test/mqtt.test.mjs        # the MQTT bridge: packets, presses in, game state out
 node test/underwater.test.mjs  # absorption, wave dispersion, buoyancy, shoaling
 node test/bees.test.mjs        # the flight, the ring buffer, and the stitched line
 node test/drawing.test.mjs     # live drawing: strokes, undo, late joiners

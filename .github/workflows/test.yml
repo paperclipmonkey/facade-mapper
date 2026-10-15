@@ -27,6 +27,7 @@ jobs:
         run: |
           status=0
           node --check server.mjs || exit 1
+          node --check mqtt.mjs || exit 1
           for file in $(find js -name '*.js' | sort); do
             cp "$file" /tmp/check.mjs
             if ! node --check /tmp/check.mjs; then
