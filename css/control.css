@@ -1092,70 +1092,6 @@
 .gstarter em { color: var(--text); font-style: normal; }
 .gstarter .btn { width: 100%; padding: 8px; }
 
-.gtl { list-style: none; margin: 0 0 14px; padding: 0 0 0 14px; position: relative; }
-.gtl::before {
-  content: '';
-  position: absolute;
-  left: 5px;
-  top: 10px;
-  bottom: 10px;
-  width: 2px;
-  background: var(--line-strong);
-  border-radius: 1px;
-}
-.gtl-side::before { background: repeating-linear-gradient(var(--line-strong) 0 4px, transparent 4px 8px); }
-
-.gstep {
-  position: relative;
-  margin: 0 0 8px;
-  padding: 7px 8px 8px 10px;
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--text-faint);
-  border-radius: var(--radius);
-  background: var(--bg-raised);
-  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
-}
-.gstep::before {
-  /* The bead on the rail. */
-  content: '';
-  position: absolute;
-  left: -14px;
-  top: 12px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--bg-panel);
-  border: 2px solid var(--line-strong);
-}
-.gstep.zone-path { border-left-color: var(--accent); }
-.gstep.zone-door { border-left-color: var(--accent-2); }
-.gstep.live {
-  border-color: var(--accent);
-  background: #2a1a0c;
-  box-shadow: 0 0 0 1px var(--accent), 0 0 18px rgba(255, 122, 24, 0.25);
-}
-.gstep.live::before { background: var(--accent); border-color: var(--accent); }
-.gstep.flash { animation: game-flash 1.4s ease-out; }
-@keyframes game-flash {
-  from { box-shadow: 0 0 0 2px var(--accent-2); }
-  to { box-shadow: 0 0 0 0 transparent; }
-}
-
-.gstep-head { display: flex; align-items: center; gap: 6px; }
-.gstep-num {
-  flex: none;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--bg-input);
-  color: var(--text-dim);
-  font-size: 10.5px;
-  font-weight: 700;
-  display: grid;
-  place-items: center;
-}
-.gstep-num.side { background: none; }
-.gstep-title { flex: 1 1 auto; min-width: 0; font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gstep-zone {
   flex: none;
   font-size: 9.5px;
@@ -1164,14 +1100,10 @@
   color: var(--text-faint);
   cursor: help;
 }
-.zone-path .gstep-zone { color: var(--accent); }
-.zone-door .gstep-zone { color: var(--accent-2); }
 .gstep-play { flex: none; color: var(--good); }
-.gstep-hint { margin: 2px 0 5px 24px; color: var(--text-faint); font-size: 11px; line-height: 1.35; }
 
 .gstep-what { display: flex; flex-wrap: wrap; gap: 3px; margin: 0 0 6px; }
 .gstep-what .chip { font-size: 10.5px; padding: 0 6px; }
-.gstep-same { color: var(--text-faint); font-size: 11px; font-style: italic; }
 
 .gstep-words {
   display: block;
@@ -1198,8 +1130,6 @@
 .gstep-choose input[type='number'] { width: 52px; flex: none; }
 .gstep-choose .unit { flex: none; color: var(--text-faint); font-size: 11px; }
 
-.gstep-add { margin: -2px 0 10px; }
-.gstep-add select { width: 100%; font-size: 11.5px; color: var(--text-dim); }
 
 .game-problems {
   margin: 0 0 10px;
@@ -1258,3 +1188,96 @@
 }
 .glive-rehearse { grid-column: 1 / -1; }
 .glive-rehearse.on { border-color: var(--accent); color: var(--accent); }
+
+/* ------------------------------------------------------------------ *
+ * Game editor (js/control/gameEditor.js): the tree, and the moment
+ * clicked on it, over the stage.
+ * ------------------------------------------------------------------ */
+
+.gopen { margin: 0 0 12px; }
+.gopen-graph { cursor: zoom-in; margin-bottom: 8px; }
+.gopen .btn.primary { width: 100%; padding: 8px; }
+
+.geditor {
+  position: fixed;
+  inset: 16px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+}
+.geditor-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.geditor-head strong { font-size: 15px; }
+.geditor-head .glive-status { flex: 1 1 200px; }
+.geditor-head .glive-pad { flex: 0 0 auto; }
+.geditor-head .glive-pad .btn { flex: none; min-width: 64px; padding: 6px 10px; }
+.geditor-head .btn.on { border-color: var(--accent); color: var(--accent); }
+
+.geditor-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 400px; }
+.geditor-map { overflow: auto; padding: 14px; }
+.geditor-graph { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); }
+.geditor-graph .gg-node { cursor: pointer; }
+.geditor-hint { color: var(--text-faint); font-size: 12px; margin: 8px 2px; }
+.geditor-side { overflow-y: auto; padding: 14px 16px 30px; border-left: 1px solid var(--line); background: var(--bg-raised); }
+
+.ge-title { display: flex; align-items: baseline; gap: 10px; }
+.ge-title h2 { margin: 0; font-size: 18px; }
+.ge-title.ge-title.ge-note { color: var(--text-dim); margin: 4px 0 10px; }
+.ge-levels { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.ge-levels .chip { cursor: pointer; }
+
+.ge-section { border-top: 1px solid var(--line); padding: 12px 0 6px; }
+.ge-section h3 { margin: 0 0 6px; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.ge-help { color: var(--text-faint); font-size: 11.5px; margin: 0 0 8px; }
+
+.ge-beat { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 4px 6px; margin-bottom: 8px; }
+.ge-beat-n { color: var(--text-faint); font-weight: 700; padding-top: 8px; text-align: right; }
+.ge-beat .gstep-words { margin: 0; }
+.ge-beat-tools { grid-column: 2; display: flex; align-items: center; gap: 5px; }
+.ge-beat-tools input { width: 60px; }
+.ge-beat-tools .unit { color: var(--text-faint); font-size: 11px; flex: 1 1 auto; }
+
+.ge-ladder { margin-top: 10px; display: grid; gap: 3px; }
+.ge-rung { display: flex; align-items: center; gap: 4px; }
+.ge-rung-name {
+  flex: 1 1 auto;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  padding: 3px 6px;
+  cursor: pointer;
+}
+.ge-rung.on .ge-rung-name { border-color: var(--accent); color: var(--text); }
+.ge-ladder select { margin-top: 4px; }
+
+.ge-next { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; }
+.ge-next li { display: flex; align-items: center; gap: 6px; }
+.ge-when { flex: 0 1 auto; font-size: 12px; color: var(--text-dim); }
+.ge-when.ev-yes { color: var(--good); font-weight: 700; }
+.ge-when.ev-no, .ge-when.ev-long-no { color: var(--bad); font-weight: 700; }
+.ge-when.ev-door { color: var(--accent-2); font-weight: 700; }
+.ge-when.ev-treat { color: var(--warn); font-weight: 700; }
+.ge-arrow { color: var(--text-faint); }
+.ge-to {
+  background: var(--bg-input);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--text);
+  padding: 2px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.ge-to:hover { border-color: var(--accent-2); }

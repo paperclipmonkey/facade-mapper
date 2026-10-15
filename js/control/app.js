@@ -109,6 +109,7 @@ import { createGameRuntime } from './game.js';
 import { gameSceneIds } from '../core/game.js';
 import { renderGamePanel, paintGameLive, gameNames, gameMissing } from './gamePanel.js';
 import { buildExampleGame } from './gameStarter.js';
+import { openGameEditor, refreshGameEditor, paintGameEditor, isGameEditorOpen, graphWords, graphNotes } from './gameEditor.js';
 import { scheduleWantsOn, describeSchedule } from './schedule.js';
 import { el, clear, toast, paramRow } from './ui.js';
 import { HELP_SECTIONS, EFFECT_TEMPLATE } from './help.js';
@@ -629,6 +630,7 @@ app.rehearse = () => {
     clearInterval(rehearsal.timer);
     rehearsal = null;
     paintGameLive($('gamePanel'), app);
+    paintGameEditor();
     return;
   }
   if (!app.project.game.enabled) {
@@ -645,11 +647,39 @@ app.rehearse = () => {
       if (rehearsal.started) return app.rehearse(); // the visit is over
       rehearsal.started = true;
       press('yes');
+    } else if (snap.saying) {
+      // Listening to the words, like a real group would.
     } else if ((snap.state === 'ask' || snap.state === 'nudge') && snap.since > READ) press('yes');
     else if (snap.state === 'approach' && snap.since > READ) press('door');
     else if (snap.state === 'waiting' && snap.since > 3) press('treat');
   }, 250);
   paintGameLive($('gamePanel'), app);
+  paintGameEditor();
+};
+
+app.openGameEditor = (state = null) => openGameEditor(app, state);
+
+/**
+ * Say a line on the wall for a moment, the way the game will — over whatever
+ * is up — from a ▶ in the game editor.
+ */
+let captionPreview = null;
+app.previewCaption = (text) => {
+  const layerId = gameMessageLayer();
+  if (!layerId) {
+    toast('There is no text layer to say it with — add a Text layer, or build the example game.', 'bad');
+    return;
+  }
+  const show = app.project.show || (app.project.show = {});
+  show.caption = { text, layerId };
+  app.commitLive();
+  clearTimeout(captionPreview);
+  captionPreview = setTimeout(() => {
+    if (show.caption?.text === text && !gameRuntime?.snapshot().saying) {
+      show.caption = null;
+      app.commitLive();
+    }
+  }, 2500);
 };
 
 /** Build — or rebuild — the example dare game. See control/gameStarter.js. */
@@ -696,6 +726,7 @@ function refreshPanels() {
   renderMediaList($('mediaList'), app);
   renderTriggerList($('triggerList'), app);
   renderGamePanel($('gamePanel'), app);
+  refreshGameEditor();
   refreshLookPanel();
   renderStorageInfo($('storageDetail'), app);
   updateScheduleNote();
@@ -2712,6 +2743,8 @@ function gameDigest() {
     timing: game.timing,
     names: gameNames(app.project, game, snapshot.active ? snapshot.level : 0),
     missing: gameMissing(game),
+    words: graphWords(app.project, game),
+    notes: graphNotes(game),
     snapshot: { ...snapshot, log: snapshot.log.slice(0, 6) },
   };
 }
@@ -4586,10 +4619,24 @@ function takeStageForGame() {
   triggerRuntime?.endHold();
 }
 
+/**
+ * The text layer the game says its lines with: the one the game names, or
+ * failing that the first text layer in the show. None means the lines still
+ * take their time but nothing is written — better than writing them with a
+ * layer that was never meant to say them.
+ */
+function gameMessageLayer() {
+  const layers = app.project.layers || [];
+  const named = app.project.game?.messageLayer;
+  if (named && layers.some((l) => l.id === named)) return named;
+  return layers.find((l) => l.effect === 'text')?.id || null;
+}
+
 /** The game is over: put back what was up before it started. */
 function releaseStageFromGame() {
-  if (beforeGame === undefined) return;
   const show = app.project.show || (app.project.show = {});
+  show.caption = null;
+  if (beforeGame === undefined) return;
   const restore = beforeGame;
   beforeGame = undefined;
   if (restore && (app.project.scenes || []).some((s) => s.id === restore)) {
@@ -4611,6 +4658,7 @@ function onGameChanged() {
   renderSceneButtons($('sceneButtons'), app);
   publishShowState(true);
   paintGameLive($('gamePanel'), app);
+  paintGameEditor();
   armGameWake();
 }
 
@@ -4700,6 +4748,11 @@ async function boot() {
       cueEnd: (triggerId) => {
         triggerRuntime.cueEnd((app.project.triggers || []).find((t) => t.id === triggerId));
       },
+      caption: (text) => {
+        const show = app.project.show || (app.project.show = {});
+        const layerId = gameMessageLayer();
+        show.caption = text !== null && text !== undefined && layerId ? { text, layerId } : null;
+      },
       release: () => releaseStageFromGame(),
       changed: () => onGameChanged(),
     },
@@ -4778,6 +4831,7 @@ async function boot() {
   // The countdowns on the Game panel, while a game is playing and it is open.
   setInterval(() => {
     if (!gameRuntime?.active) return;
+    if (isGameEditorOpen()) paintGameEditor();
     if (!document.querySelector('.panel-page[data-page="game"]')?.classList.contains('active')) return;
     paintGameLive($('gamePanel'), app);
   }, 500);

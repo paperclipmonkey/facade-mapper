@@ -478,6 +478,133 @@ for (const button of document.querySelectorAll('.game-btn')) {
 $('btnGameReset').addEventListener('click', () => act('game-reset'));
 $('btnGameOn').addEventListener('click', () => act('game-enabled'));
 
+/* --- Alerts: so the game can be run from indoors --- */
+
+/**
+ * What this phone does when the game moves on, chosen here and kept here: the
+ * phone in the kitchen wants the sound, the one in a pocket on the path wants
+ * the buzz and not the noise.
+ */
+const ALERTS_KEY = 'facade.remote.gameAlerts';
+const alerts = (() => {
+  try {
+    return { sound: false, flash: true, buzz: true, ...JSON.parse(localStorage.getItem(ALERTS_KEY) || '{}') };
+  } catch {
+    return { sound: false, flash: true, buzz: true };
+  }
+})();
+
+function paintAlertToggles() {
+  for (const button of document.querySelectorAll('[data-alert]')) {
+    const on = !!alerts[button.dataset.alert];
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-pressed', String(on));
+  }
+}
+for (const button of document.querySelectorAll('[data-alert]')) {
+  button.addEventListener('click', () => {
+    const key = button.dataset.alert;
+    alerts[key] = !alerts[key];
+    try {
+      localStorage.setItem(ALERTS_KEY, JSON.stringify(alerts));
+    } catch {
+      /* Private browsing: it lasts as long as the page, which is fine. */
+    }
+    // A browser will only make a sound after a tap, so the tap that turns the
+    // sound on is the one that unlocks it — and plays it, so you know.
+    if (key === 'sound' && alerts.sound) chime('step');
+    paintAlertToggles();
+  });
+}
+paintAlertToggles();
+
+/** Where the game is, as the kind of moment it is. The door is its own. */
+function alertKind(state) {
+  if (state === 'approach' || state === 'finale' || state === 'waiting' || state === 'early') return 'door';
+  if (state === 'scare' || state === 'decide') return 'scare';
+  if (state === 'reward') return 'treat';
+  if (state === 'attract' || state === 'cooldown') return 'quiet';
+  return 'step';
+}
+
+let audio = null;
+/** A few notes, made rather than loaded: nothing to fetch, nothing to fail. */
+function chime(kind) {
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === 'suspended') audio.resume();
+  } catch {
+    return;
+  }
+  const notes = {
+    step: [[880, 0, 0.09]],
+    scare: [[196, 0, 0.25], [185, 0.12, 0.3]],
+    // Ding-dong, twice: a doorbell, because that is what it means.
+    door: [[659, 0, 0.4], [523, 0.38, 0.6], [659, 1.1, 0.4], [523, 1.48, 0.6]],
+    treat: [[523, 0, 0.12], [659, 0.1, 0.12], [784, 0.2, 0.12], [1047, 0.3, 0.3]],
+  }[kind] || [];
+  const t0 = audio.currentTime + 0.02;
+  for (const [freq, at, dur] of notes) {
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.type = kind === 'scare' ? 'sawtooth' : 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t0 + at);
+    gain.gain.exponentialRampToValueAtTime(0.25, t0 + at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + dur);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(t0 + at);
+    osc.stop(t0 + at + dur + 0.05);
+  }
+}
+
+const FLASH_COLOURS = { step: '#ff7a18', scare: '#ff4d6a', door: '#4cc2ff', treat: '#ffc14d' };
+function flash(kind) {
+  const node = $('gameFlash');
+  node.style.background = FLASH_COLOURS[kind] || '#ffffff';
+  node.hidden = false;
+  node.classList.remove('go');
+  void node.offsetWidth;
+  node.classList.add('go');
+  clearTimeout(flash.timer);
+  flash.timer = setTimeout(() => (node.hidden = true), kind === 'door' ? 1600 : 700);
+}
+
+let lastMoment = null;
+/** Called with every digest; acts only when the game has actually moved. */
+function alertOnMove(game) {
+  const snap = game?.snapshot;
+  if (!game?.enabled || !snap) {
+    lastMoment = null;
+    paintDoorBanner(null);
+    return;
+  }
+  const moment = `${snap.state}|${snap.level}`;
+  paintDoorBanner(snap.state);
+  if (lastMoment === null || moment === lastMoment) {
+    lastMoment = moment;
+    return;
+  }
+  lastMoment = moment;
+  const kind = alertKind(snap.state);
+  if (kind === 'quiet') return;
+  if (alerts.flash) flash(kind);
+  if (alerts.sound) chime(kind);
+  if (alerts.buzz) navigator.vibrate?.(kind === 'door' ? [300, 150, 300, 150, 600] : kind === 'scare' ? [120, 60, 120] : 60);
+}
+
+/** The banner that stays up while somebody is at the door: the moment to get up. */
+function paintDoorBanner(state) {
+  const banner = $('gameDoor');
+  const text = {
+    approach: 'COMING TO THE DOOR',
+    finale: 'AT THE DOOR — the finale',
+    waiting: 'AT THE DOOR — press TREAT when they have their sweets',
+  }[state];
+  banner.hidden = !text;
+  if (text) banner.textContent = text;
+}
+
 function paintGame() {
   const game = show?.game;
   $('tabGame').hidden = !game;
@@ -490,7 +617,8 @@ function paintGame() {
   else if (!snapshot.active) text = 'Waiting for somebody to press a button.';
   else {
     text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : ''}`;
-    if (snapshot.remaining !== null && snapshot.remaining !== undefined) text += ` · ${Math.ceil(snapshot.remaining)} s`;
+    if (snapshot.saying) text += ` · “${String(snapshot.saying.text).replace(/\s*\n\s*/g, ' ')}”`;
+    else if (snapshot.remaining !== null && snapshot.remaining !== undefined) text += ` · ${Math.ceil(snapshot.remaining)} s`;
     if (snapshot.deciding) text += ` · listening for the other button`;
   }
   $('gameState').textContent = text;
@@ -501,7 +629,7 @@ function paintGame() {
   for (const button of document.querySelectorAll('.game-btn')) button.disabled = !game.enabled;
   document.querySelector('.game-door').hidden = !game.door;
 
-  $('gameGraph').innerHTML = renderGameGraph({ game, snapshot, names: game.names, missing: game.missing });
+  $('gameGraph').innerHTML = renderGameGraph({ game, snapshot, names: game.names, missing: game.missing, words: game.words, notes: game.notes });
 
   const log = $('gameLog');
   log.replaceChildren();
@@ -556,6 +684,7 @@ bus.on(MSG.SHOW, (digest) => {
   }
   paint();
   paintGame();
+  alertOnMove(digest.game);
   updateNotice();
 });
 

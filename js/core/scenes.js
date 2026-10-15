@@ -192,6 +192,31 @@ function blendLayerState(from, to, f) {
  * shows the blended ones.
  */
 export function effectiveLayers(project, at = now()) {
+  return withCaption(project, sceneLayers(project, at));
+}
+
+/**
+ * A caption: one text layer, switched on and saying something, on top of
+ * whatever the scene is showing.
+ *
+ * This is how the dare game says a line and moves on — "YOU ASKED FOR IT…"
+ * over the question that was just answered, and then the scare. Not a scene of
+ * its own: the point is that the picture does not change, only the words, and
+ * a scene per line would have to copy the picture it was said over. It lives
+ * in the show state like a scene change does, so every tab draws the same
+ * words at the same moment.
+ */
+function withCaption(project, layers) {
+  const caption = project.show?.caption;
+  if (!caption?.layerId || typeof caption.text !== 'string') return layers;
+  return layers.map((layer) =>
+    layer.id === caption.layerId
+      ? { ...layer, enabled: true, opacity: 1, params: { ...layer.params, content: caption.text } }
+      : layer
+  );
+}
+
+function sceneLayers(project, at) {
   const show = project.show || {};
   const scenes = new Map((project.scenes || []).map((s) => [s.id, s]));
   const active = scenes.get(show.activeScene);

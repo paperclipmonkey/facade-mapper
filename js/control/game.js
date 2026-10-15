@@ -21,7 +21,7 @@
  * from the first rung to the fourth without seeing the two in between.
  */
 
-import { STATES, transitionFor, sceneSlot, cueSlot, roleOf, topLevel } from '../core/game.js';
+import { STATES, transitionFor, sceneSlot, cueSlot, roleOf, topLevel, beatsFor } from '../core/game.js';
 
 /** Press ids remembered for de-duplication. A broker redelivers recent ones. */
 const SEEN_LIMIT = 64;
@@ -39,6 +39,7 @@ const MAX_HOPS = 8;
  *   - `cue(triggerId, { state, level })` play a trigger; returns its hold in
  *     seconds, or null if it could not be played
  *   - `cueEnd(triggerId)` the trigger's hold is over (its `after` hook)
+ *   - `caption(text | null)` say a line over whatever is up, or stop saying it
  *   - `release()` hand the stage back to whatever was on before the game
  *   - `changed(snapshot)` something moved; repaint and publish
  * @param {() => number} options.now  Local milliseconds, for every duration.
@@ -60,6 +61,11 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
   let last = null;
   /** Whether the game has put anything on the stage that needs handing back. */
   let holding = false;
+  /**
+   * Words first: the lines being said before this state shows what it shows,
+   * and which one is up. Null once they are done, or when there are none.
+   */
+  let saying = null;
 
   const seen = [];
   const seenSet = new Set();
@@ -77,6 +83,10 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
    * ------------------------------------------------------------------ */
 
   function leave() {
+    if (saying) {
+      saying = null;
+      io.caption?.(null);
+    }
     if (playing) {
       io.cueEnd?.(playing);
       playing = null;
@@ -88,14 +98,55 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
     state = next;
     enteredAt = now();
     deadline = null;
-    const def = STATES[next];
-    const g = game();
 
     if (next === 'attract' || next === 'cooldown') {
       if (holding) io.release?.();
       holding = false;
       if (next === 'attract') level = 0;
     }
+
+    /**
+     * Words first. Like a dare — "SO… YOU DARE." and then the question, or
+     * "YOU ASKED FOR IT…" and then the scare — the line is said over the
+     * picture that is already up, held for its few seconds, and the game moves
+     * on by itself. Nobody presses anything for it; presses during it are
+     * dropped, the same as during a scare.
+     */
+    const lines = next === 'attract' || next === 'cooldown' ? [] : beatsFor(game(), next, level);
+    if (lines.length) {
+      saying = { lines, index: 0 };
+      say();
+      return;
+    }
+    show();
+  }
+
+  function say() {
+    const line = saying.lines[saying.index];
+    holding = true;
+    io.caption?.(String(line.text));
+    deadline = now() + Math.max(0.3, Number(line.seconds) || 2.5) * 1000;
+  }
+
+  /** The next line, or — after the last — what the state is actually for. */
+  function sayNext() {
+    saying.index += 1;
+    if (saying.index < saying.lines.length) {
+      say();
+      return;
+    }
+    saying = null;
+    io.caption?.(null);
+    enteredAt = now();
+    deadline = null;
+    show();
+  }
+
+  /** Put up what this state shows, and start its clock. */
+  function show() {
+    const next = state;
+    const def = STATES[next];
+    const g = game();
 
     if (def.cue) {
       const id = cueSlot(g, next, level);
@@ -199,7 +250,9 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
 
     if (!transitionFor(state, event, g, level)) return finish('not now');
 
-    // TREAT is an adult who means it, once; it skips both windows.
+    // TREAT is an adult who means it, once; it skips both windows, and the
+    // words being said.
+    if (saying && event !== 'treat') return finish('wait for the words');
     if (event === 'treat') {
       dispatch(event);
       return finish(`→ ${state}`);
@@ -244,6 +297,11 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
       if (dispatch(event)) changed = true;
     }
     for (let hop = 0; hop < MAX_HOPS && deadline !== null && now() >= deadline; hop++) {
+      if (saying) {
+        sayNext();
+        changed = true;
+        continue;
+      }
       if (!dispatch('timeout')) {
         deadline = null;
         break;
@@ -282,6 +340,7 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
       since: (t - enteredAt) / 1000,
       remaining: deadline !== null ? Math.max(0, (deadline - t) / 1000) : null,
       deciding: pending ? pending.event : null,
+      saying: saying ? { text: String(saying.lines[saying.index].text), index: saying.index, of: saying.lines.length } : null,
       next: next !== null ? Math.max(0, next - t) : null,
       last: last ? { from: last.from, on: last.on, to: last.to, ago: (t - last.at) / 1000 } : null,
       log: log.map((e) => ({ ...e, ago: (t - e.at) / 1000 })),

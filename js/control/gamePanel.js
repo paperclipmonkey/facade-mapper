@@ -1,28 +1,14 @@
 /**
- * The Game panel: the dare game, told as the visit it is.
+ * The Game panel: play the dare game, and get to its editor.
  *
- * The first version of this panel was the machine's settings in the machine's
- * order — a diagram, then a dropdown per state — and it was hard to use for the
- * reason that kind of panel always is: nobody thinks of a game as states. They
- * think of it as what happens to a group of children walking up the path. So
- * this is a timeline of that walk, a card for each moment in the order they
- * meet it, and everything about a moment is on its card:
+ * The panel is narrow and the game is a tree, so editing happens in the game
+ * editor (control/gameEditor.js), which opens over the stage with the tree big
+ * enough to read and click. What stays here is what is wanted while the game
+ * is running: on or off, where it is, the four buttons that play it, a
+ * rehearsal, the tree in miniature, and the settings nobody needs every day.
  *
- * - what the house shows then, as the names of the effects in it;
- * - the **words**, editable right there, because rewording a question is the
- *   thing people most want to do and it used to mean finding a text layer,
- *   loading a scene, editing a parameter and saving the scene again;
- * - whether it happens on the path or at the door, because words at the door
- *   cannot be read and the card says so if there are any;
- * - **▶**, which puts that moment on the wall so it can be seen from outside.
- *
- * While a game is playing, the moment it is in lights up on the timeline, so
- * the same cards are the live view. The things that happen off the main line —
- * saying no, being scared, going quiet — are their own short list underneath,
- * and the buttons, the timings and the machine's diagram fold away below that.
- *
- * An empty game starts with one button that builds a complete example, because
- * a filled-in game explains itself and an empty one explains nothing.
+ * The helpers that say what a scene shows and what it says are here too, and
+ * shared with the editor.
  */
 
 import { el, clear } from './ui.js';
@@ -44,13 +30,6 @@ const TIMINGS = [
   ['windowMs', 'Both buttons within', 'ms', 'YES and NO within this long of each other is "can’t decide".'],
   ['staleMs', 'Too late after', 'ms', 'A press older than this when it arrives is ignored, so a reconnect cannot replay it.'],
 ];
-
-const ZONE_LABEL = { path: 'PATH', door: 'DOOR', street: 'STREET' };
-const ZONE_HINT = {
-  path: 'They are on the path, far enough back to read the wall.',
-  door: 'They are at the door — too close to read anything on the house.',
-  street: 'Seen from the street, coming or going.',
-};
 
 /* ------------------------------------------------------------------ *
  * What a scene is
@@ -133,68 +112,14 @@ export function gameNames(project, game, level = 0) {
 }
 
 /* ------------------------------------------------------------------ *
- * The visit, as steps
- * ------------------------------------------------------------------ */
-
-/**
- * Every moment of a visit, in order, and the ones off to the side.
- *
- * Each step says which state and level it is (so the live view can find it),
- * and where its content lives: a scene slot, or a trigger.
- */
-export function visitSteps(game) {
-  const levels = Math.max(1, game.rungs.length);
-  const main = [
-    { state: 'attract', title: 'Waiting for visitors', hint: 'Between groups: the dare that invites the first press.', slot: ['attract'] },
-  ];
-  for (let i = 1; i <= levels; i++) {
-    main.push({
-      state: 'ask',
-      level: i,
-      title: `Question ${i}`,
-      hint: i === 1 ? 'Asked the moment somebody presses a button.' : 'Asked over everything they have seen so far.',
-      slot: ['ask', i - 1],
-      inherits: i > 1 ? `Question ${i - 1}` : null,
-    });
-    main.push({ state: 'scare', level: i, title: `Scare ${i}`, hint: 'Their YES, answered.', rung: i - 1 });
-  }
-  if (game.door) {
-    main.push({ state: 'approach', title: 'Come to the door', hint: 'The last words they will read: an invitation up the path.', slot: ['approach'] });
-  }
-  main.push({
-    state: 'finale',
-    title: game.door ? 'At the door: the finale' : 'The finale',
-    hint: game.door ? 'They pressed the door button. Sound and light — no words.' : 'The top of the ladder, where they stand.',
-    finale: true,
-  });
-  main.push({ state: 'waiting', title: 'Waiting for a treat', hint: 'The door opens. If nobody presses TREAT the reward plays anyway.', slot: ['waiting'] });
-  main.push({ state: 'reward', title: 'Reward', hint: 'Read on the walk back down the path.', slot: ['reward'] });
-
-  const side = [];
-  for (let i = 1; i <= levels; i++) {
-    side.push({
-      state: 'chicken',
-      level: i,
-      title: `Said NO at question ${i}`,
-      hint: i === 1 ? 'Before anything happened.' : `After ${i - 1} scare${i === 2 ? '' : 's'}.`,
-      slot: ['chicken', i - 1],
-      inherits: i > 1 ? `Said NO at question ${i - 1}` : null,
-    });
-  }
-  side.push({ state: 'mercy', title: 'Held NO down during a scare', hint: 'Somebody is frightened. Stop at once, kindly.', slot: ['mercy'] });
-  side.push({ state: 'nudge', title: 'Went quiet', hint: 'Nobody answered the question.', slot: ['nudge'] });
-  side.push({ state: 'decide', title: 'Pressed YES and NO together', hint: 'Two children disagreed — the house picks YES.', slot: ['decide'] });
-  side.push({ state: 'early', title: 'Ran straight to the door', hint: 'Before playing. Send them back to the path.', slot: ['early'] });
-  return { main, side };
-}
-
-/* ------------------------------------------------------------------ *
  * The panel
  * ------------------------------------------------------------------ */
 
 /**
- * Build the panel. `app.game` is the runtime's face (press, reset, snapshot);
- * `app.previewScene`, `app.fireTrigger` and `app.buildExampleGame` do the rest.
+ * Build the panel: the strip that plays the game, the tree in miniature (which
+ * opens the editor), and the settings nobody needs every day, folded away.
+ * Editing happens in the game editor (control/gameEditor.js), where the tree
+ * is big enough to read and every moment on it can be clicked.
  */
 export function renderGamePanel(node, app) {
   // Folds that were open stay open across a rebuild, which happens on every edit.
@@ -210,62 +135,29 @@ export function renderGamePanel(node, app) {
   node.appendChild(liveBar(app));
 
   const empty = !game.rungs.length && !sceneSlot(game, 'ask', 1);
-  if (empty) {
-    node.appendChild(starterCard(app));
-  }
+  if (empty) node.appendChild(starterCard(app));
+
+  const editor = el('div', { class: 'gopen' }, [
+    el('div', { class: 'game-graph gopen-graph', id: 'gameGraph', title: 'Open the game editor' }),
+    el('button', { type: 'button', class: 'btn primary', text: 'Open the game editor', onclick: () => app.openGameEditor() }),
+    el('p', {
+      class: 'panel-note',
+      text: 'The whole game as a tree. Click any moment in it to change what it says, what it shows, the words said first, and where it goes next.',
+    }),
+  ]);
+  editor.querySelector('#gameGraph').addEventListener('click', (ev) => {
+    const target = ev.target.closest?.('[data-state]');
+    app.openGameEditor(target?.dataset.state || null);
+  });
+  node.appendChild(editor);
 
   const problems = gameProblems(game, project);
   if (problems.length && !empty) {
     node.appendChild(el('ul', { class: 'game-problems' }, problems.map((p) => el('li', { text: p }))));
   }
 
-  /* --- The visit --- */
-
-  const { main, side } = visitSteps(game);
-  const timeline = el('ol', { class: 'gtl' });
-  main.forEach((step, i) => {
-    timeline.appendChild(stepCard(app, step, i + 1, commit));
-    // The ladder's own controls sit after its last scare.
-    if (step.state === 'scare' && step.level === Math.max(1, game.rungs.length)) {
-      timeline.appendChild(addScareRow(app, commit));
-    }
-  });
-  node.append(el('h3', { class: 'panel-heading', text: 'The visit' }), timeline);
-
-  node.append(el('h3', { class: 'panel-heading', text: 'If they…' }));
-  const branches = el('ol', { class: 'gtl gtl-side' });
-  for (const step of side) branches.appendChild(stepCard(app, step, null, commit));
-  node.appendChild(branches);
-
-  /* --- Folded away --- */
-
   node.appendChild(fold('setup', 'How it ends, and the buttons', open, (body) => buttonsSection(app, body, commit)));
   node.appendChild(fold('timing', 'Timing', open, (body) => timingSection(app, body)));
-  node.appendChild(
-    fold('flow', 'The whole thing as a diagram', open, (body) => {
-      const graph = el('div', { class: 'game-graph', id: 'gameGraph', title: 'Click a state to find its card' });
-      graph.addEventListener('click', (ev) => {
-        const target = ev.target.closest?.('[data-state]');
-        if (!target) return;
-        const card = node.querySelector(`.gstep[data-state="${target.dataset.state}"]`);
-        if (!card) return;
-        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        card.classList.remove('flash');
-        void card.offsetWidth;
-        card.classList.add('flash');
-      });
-      const enlarge = el('button', {
-        type: 'button',
-        class: 'btn small',
-        text: 'Enlarge',
-        onclick: () => {
-          const wide = graph.classList.toggle('wide');
-          enlarge.textContent = wide ? 'Shrink' : 'Enlarge';
-        },
-      });
-      body.append(el('div', { class: 'panel-actions' }, [enlarge]), graph);
-    })
-  );
   node.appendChild(fold('log', 'Recent presses', open, (body) => body.appendChild(el('div', { class: 'game-log', id: 'gameLog' }))));
 
   if (hasExampleGame(project)) {
@@ -275,7 +167,7 @@ export function renderGamePanel(node, app) {
           type: 'button',
           class: 'btn small',
           text: 'Rebuild the example',
-          title: 'Throw away the example game’s scenes and scares, and build them again as new',
+          title: 'Throw away the example game\u2019s scenes and scares, and build them again as new',
           onclick: () => {
             if (!confirm('Rebuild the example game? Its scenes, scares and words go back to how they started.')) return;
             app.buildExampleGame();
@@ -346,190 +238,12 @@ function starterCard(app) {
     el('strong', { text: 'Start with the example' }),
     el('p', {
       html:
-        'A complete game built from your tagged shapes. The house waits with just <em>brick and smoke</em>; ' +
-        'each YES adds a horror and keeps it — <em>blood down the door</em>, then <em>people at the windows</em>, ' +
-        'then <em>tentacles through the brick</em> — and the door button sets off everything at once. ' +
-        'Every question, send-off and reward is filled in, ready to reword.',
+        'A complete game built from your tagged shapes. The house waits with <em>brick, smoke and a basket of flowers</em>; ' +
+        'each YES is answered with a dare — <em>"YOU ASKED FOR IT…"</em> — and a horror it keeps: <em>blood down the door</em> as the flowers die, ' +
+        'then <em>people at the windows</em>, then <em>tentacles through the brick</em>. The door button sets off everything at once.',
     }),
     el('button', { type: 'button', class: 'btn primary', text: 'Build the example game', onclick: () => app.buildExampleGame() }),
   ]);
-}
-
-/** One moment of the visit. */
-function stepCard(app, step, number, commit) {
-  const project = app.project;
-  const game = project.game;
-  const def = STATES[step.state];
-  const zone = def.zone;
-
-  const card = el('li', {
-    class: `gstep zone-${zone}`,
-    dataset: { state: step.state, ...(step.level ? { level: String(step.level) } : {}) },
-  });
-
-  let sceneId = null;
-  let trigger = null;
-  if (step.slot) {
-    const [key, index] = step.slot;
-    const value = game.scenes[key];
-    sceneId = Array.isArray(value) ? value[index] || null : value || null;
-  } else if (step.rung !== undefined) {
-    trigger = triggerOf(project, game.rungs[step.rung]);
-    sceneId = trigger?.sceneId || null;
-  } else if (step.finale) {
-    trigger = triggerOf(project, game.finale);
-    sceneId = trigger?.sceneId || null;
-  }
-  // A blank per-level slot shows the one before it, and says so.
-  const effective = step.slot ? sceneSlot(game, step.state, step.level || 1) : sceneId;
-
-  const preview = el('button', {
-    type: 'button',
-    class: 'icon-btn gstep-play',
-    title: trigger ? 'Play this scare on the wall' : 'Show this on the wall',
-    text: '▶',
-    disabled: !(trigger || effective),
-    onclick: () => (trigger ? app.fireTrigger(trigger.id) : app.previewScene(effective)),
-  });
-
-  card.appendChild(
-    el('div', { class: 'gstep-head' }, [
-      number ? el('span', { class: 'gstep-num', text: String(number) }) : el('span', { class: 'gstep-num side', text: '↳' }),
-      el('span', { class: 'gstep-title', text: step.title }),
-      el('span', { class: 'gstep-zone', text: ZONE_LABEL[zone], title: ZONE_HINT[zone] }),
-      preview,
-    ])
-  );
-  card.appendChild(el('div', { class: 'gstep-hint', text: step.hint }));
-
-  // What the house is doing.
-  const contents = effective ? sceneContents(project, effective) : [];
-  const what = el('div', { class: 'gstep-what' });
-  if (!effective && !trigger) {
-    what.appendChild(el('span', { class: 'chip warn', text: 'nothing chosen' }));
-  } else if (trigger && !trigger.sceneId) {
-    what.appendChild(el('span', { class: 'chip', text: trigger.sound ? 'a sound only' : 'nothing to play' }));
-  } else {
-    for (const name of contents) what.appendChild(el('span', { class: 'chip', text: name }));
-    if (!sceneId && step.inherits) what.appendChild(el('span', { class: 'gstep-same', text: `same as ${step.inherits}` }));
-  }
-  card.appendChild(what);
-
-  // The words, editable in place — for the scene this step actually uses.
-  const message = effective && (sceneId || !step.inherits) ? sceneMessage(project, effective) : null;
-  if (message) {
-    // Sized to its content where the browser can (field-sizing), and given
-    // room for a wrapped line where it cannot.
-    const words = el('textarea', { class: 'gstep-words', rows: String(Math.min(4, message.text.split('\n').length + 1)), spellcheck: 'false', title: 'What the wall says. A new line here is a new line there.' });
-    words.value = message.text;
-    // Saved and broadcast as you type. Deliberately no full commit when it
-    // loses focus: that rebuilds the panel, and the click that took the focus
-    // away would land on a button that no longer exists.
-    words.addEventListener('focus', () => app.pushUndo());
-    words.addEventListener('input', () => {
-      setSceneMessage(project, effective, message.layer.id, words.value);
-      app.commitLive();
-    });
-    card.appendChild(words);
-    if (zone === 'door') {
-      card.appendChild(el('div', { class: 'gstep-warn', text: 'They are at the door: these words will be too close to read.' }));
-    }
-  }
-
-  // Choosing what it is.
-  const choose = el('div', { class: 'gstep-choose' });
-  if (step.slot) {
-    const [key, index] = step.slot;
-    const select = el('select', { title: 'Which scene this moment shows' }, [
-      el('option', { value: '', text: step.inherits ? `— same as ${step.inherits} —` : '— nothing —' }),
-      ...(project.scenes || []).map((s) => el('option', { value: s.id, text: s.name })),
-    ]);
-    select.value = sceneId || '';
-    select.addEventListener('change', () => {
-      const value = select.value || null;
-      if (Array.isArray(game.scenes[key])) {
-        while (game.scenes[key].length <= index) game.scenes[key].push(null);
-        game.scenes[key][index] = value;
-      } else {
-        game.scenes[key] = value;
-      }
-      commit();
-    });
-    choose.append(el('span', { text: 'Scene' }), select);
-  } else {
-    const select = el('select', { title: 'Which trigger plays here' }, [
-      el('option', { value: '', text: '— nothing —' }),
-      ...(project.triggers || []).map((t) => el('option', { value: t.id, text: t.name })),
-    ]);
-    select.value = trigger?.id || '';
-    select.addEventListener('change', () => {
-      const value = select.value || null;
-      if (step.finale) game.finale = value;
-      else if (value) game.rungs[step.rung] = value;
-      else game.rungs.splice(step.rung, 1);
-      commit();
-    });
-    choose.append(el('span', { text: 'Scare' }), select);
-    card.appendChild(choose);
-
-    // How long it lasts, and where it sits on the ladder: a row of its own, so
-    // the name of the scare keeps the whole width above it.
-    const tools = el('div', { class: 'gstep-choose gstep-tools' });
-    if (trigger) {
-      const hold = el('input', { type: 'number', min: '1', max: '60', step: '0.5', title: 'How long it lasts, in seconds' });
-      hold.value = trigger.hold ?? 6;
-      hold.addEventListener('change', () => {
-        const value = Number(hold.value);
-        if (!Number.isFinite(value) || value <= 0) return;
-        trigger.hold = value;
-        app.commit();
-      });
-      tools.append(el('span', { text: 'Lasts' }), hold, el('span', { class: 'unit', text: 's' }));
-    }
-    if (step.rung !== undefined && game.rungs.length) {
-      const move = (delta) => {
-        const i = step.rung;
-        const j = i + delta;
-        if (j < 0 || j >= game.rungs.length) return;
-        [game.rungs[i], game.rungs[j]] = [game.rungs[j], game.rungs[i]];
-        commit();
-      };
-      tools.append(
-        el('span', { class: 'gstep-spacer' }),
-        el('button', { type: 'button', class: 'icon-btn', title: 'Earlier in the ladder', text: '↑', disabled: step.rung === 0, onclick: () => move(-1) }),
-        el('button', { type: 'button', class: 'icon-btn', title: 'Later in the ladder', text: '↓', disabled: step.rung >= game.rungs.length - 1, onclick: () => move(1) }),
-        el('button', {
-          type: 'button',
-          class: 'icon-btn',
-          title: 'Take this scare out of the ladder',
-          text: '✕',
-          onclick: () => {
-            game.rungs.splice(step.rung, 1);
-            commit();
-          },
-        })
-      );
-    }
-    if (tools.childNodes.length) card.appendChild(tools);
-    return card;
-  }
-  card.appendChild(choose);
-  return card;
-}
-
-/** "Add a scare", at the end of the ladder. */
-function addScareRow(app, commit) {
-  const project = app.project;
-  const select = el('select', {}, [
-    el('option', { value: '', text: project.triggers?.length ? '+ add a scare…' : '+ make a trigger first' }),
-    ...(project.triggers || []).map((t) => el('option', { value: t.id, text: t.name })),
-  ]);
-  select.addEventListener('change', () => {
-    if (!select.value) return;
-    project.game.rungs.push(select.value);
-    commit();
-  });
-  return el('li', { class: 'gstep-add' }, [select]);
 }
 
 function buttonsSection(app, body, commit) {
@@ -622,30 +336,17 @@ export function paintGameLive(node, app) {
     else if (!snapshot.active) text = 'Waiting for somebody to press a button.';
     else {
       text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : ''}`;
-      if (snapshot.remaining !== null) text += ` · ${Math.ceil(snapshot.remaining)} s`;
+      if (snapshot.saying) text += ` · saying “${snapshot.saying.text.replace(/\s*\n\s*/g, ' ')}”`;
+      else if (snapshot.remaining !== null) text += ` · ${Math.ceil(snapshot.remaining)} s`;
       if (snapshot.deciding) text += ' · listening for the other button…';
     }
     status.textContent = text;
     status.classList.toggle('on', playing);
   }
 
-  // Light the card for the moment the game is in.
-  for (const card of node.querySelectorAll('.gstep')) {
-    const sameState = card.dataset.state === snapshot.state;
-    const sameLevel = !card.dataset.level || Number(card.dataset.level) === snapshot.level ||
-      // A level beyond the cards written falls on the last one.
-      (sameState && !node.querySelector(`.gstep[data-state="${snapshot.state}"][data-level="${snapshot.level}"]`) &&
-        card === [...node.querySelectorAll(`.gstep[data-state="${snapshot.state}"]`)].at(-1));
-    const live = !!(game.enabled && sameState && sameLevel && (snapshot.active || snapshot.state === 'attract'));
-    // During a rehearsal nobody is editing, so the timeline follows the game.
-    if (live && !card.classList.contains('live') && app.rehearsing?.()) {
-      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
-    card.classList.toggle('live', live);
-  }
-
+  // The tree in miniature, lit like the big one.
   const graph = node.querySelector('#gameGraph');
-  if (graph && graph.closest('details')?.open) {
+  if (graph) {
     graph.innerHTML = renderGameGraph({
       game,
       snapshot,

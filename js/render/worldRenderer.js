@@ -831,8 +831,6 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
           stable,
         };
 
-        ctx.p = resolveParams(effect, layer, ctx);
-
         /**
          * The moment it came on — shifted by the stagger, like `t` itself, so a
          * row of windows still comes up in sequence.
@@ -858,6 +856,14 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
         }
         inst.enabledAt = (onWall ? (showTimeOf(onWall, time) ?? 0) : 0) - stagger;
         ctx.age = Math.max(0, t - inst.enabledAt);
+
+        /**
+         * Resolved once `age` is known, not before it: an expression can ask
+         * how long the layer has been on — flowers wilting over the six seconds
+         * after a scene brings them up — and an effect that only draws would
+         * otherwise only ever be asked about its first instant.
+         */
+        ctx.p = resolveParams(effect, layer, ctx);
 
         if (!inst.initialised) {
           inst.initialised = true;

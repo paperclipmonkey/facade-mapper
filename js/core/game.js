@@ -272,6 +272,19 @@ export function sceneSlot(game, state, level = 1) {
   return slot || null;
 }
 
+/**
+ * The lines said as a state begins, at a level: "words first". By level for a
+ * levelled state, and the first list for any other. An empty list is none —
+ * unlike scenes these do not carry on from the level before, because a line
+ * like "YOU ASKED FOR IT…" said before every scare stops meaning anything.
+ */
+export function beatsFor(game, state, level = 1) {
+  const levels = game?.beats?.[state];
+  if (!Array.isArray(levels)) return [];
+  const list = STATES[state]?.levelled ? levels[Math.max(1, level) - 1] : levels[0];
+  return Array.isArray(list) ? list.filter((b) => b && String(b.text || '').trim()) : [];
+}
+
 /** The trigger a cue state plays, at a level. */
 export function cueSlot(game, state, level = 1) {
   const cue = STATES[state]?.cue;

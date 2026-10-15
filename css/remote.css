@@ -393,3 +393,39 @@ body { --remote-chrome: 96px; }
 .game-graph-scroll .game-graph { min-width: 760px; }
 
 .game-log-row { font-size: 13px; color: var(--text-dim); padding: 2px 0; }
+
+.game-alerts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-dim); font-size: 13px; }
+.game-alerts .chip { font-size: 14px; padding: 6px 10px; cursor: pointer; }
+
+.game-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0;
+}
+.game-flash.go { animation: game-flash-out 0.7s ease-out; }
+@keyframes game-flash-out {
+  0% { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+
+.game-door-banner {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 55;
+  padding: 16px 18px calc(16px + env(safe-area-inset-bottom));
+  background: var(--accent-2);
+  color: #04121c;
+  font-size: 18px;
+  font-weight: 800;
+  text-align: center;
+  letter-spacing: 0.03em;
+  animation: door-pulse 1.2s ease-in-out infinite alternate;
+}
+@keyframes door-pulse {
+  from { filter: brightness(0.85); }
+  to { filter: brightness(1.15); }
+}

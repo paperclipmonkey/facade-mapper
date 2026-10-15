@@ -506,6 +506,47 @@ console.log('— nobody answering, and resetting —');
  * Saved shows
  * ------------------------------------------------------------------ */
 
+console.log('— words first, like a dare —');
+{
+  const beats = { ask: [[{ text: 'SO…', seconds: 1 }, { text: 'YOU DARE.', seconds: 2 }]], scare: [[], [{ text: 'TOO LATE', seconds: 1.5 }]] };
+  const { runtime, calls, lastOf } = setup({ beats });
+  runtime.press({ button: 'yes' });
+  ok('a question with words first says them before it asks', runtime.snapshot().saying?.text === 'SO…');
+  ok('over whatever was up, without changing the scene yet', lastOf('scene')?.[1] !== 'sAsk1');
+  ok('presses are dropped while it speaks', runtime.press({ button: 'yes' }) === 'wait for the words');
+  advance(1.05);
+  runtime.tick();
+  ok('then the next line, by itself', runtime.snapshot().saying?.text === 'YOU DARE.');
+  advance(2.05);
+  runtime.tick();
+  ok('then the question itself', runtime.snapshot().saying === null && lastOf('scene')?.[1] === 'sAsk1');
+  ok('armed from when it appeared, not from when the words began', runtime.press({ button: 'yes' }) === 'not armed');
+  ok('and its own clock started then too', Math.abs(runtime.snapshot().remaining - 15) < 1e-9);
+  settle();
+  answer(runtime, 'yes');
+  ok('a level with no words goes straight to its scare', runtime.state === 'scare' && runtime.snapshot().saying === null && lastOf('cue')?.[1] === 'r1');
+  advance(4.1);
+  runtime.tick();
+  settle();
+  answer(runtime, 'yes');
+  ok('the next level has its own words', runtime.snapshot().saying?.text === 'TOO LATE');
+  ok('and TREAT does not wait for them', runtime.press({ button: 'treat' }) === '→ reward' && runtime.snapshot().saying === null);
+}
+
+{
+  const said = [];
+  const game = createGame({ enabled: true, rungs: ['r1'], beats: { ask: [[{ text: 'HELLO', seconds: 1 }]] } });
+  const runtime = createGameRuntime({
+    getGame: () => game,
+    now,
+    io: { caption: (text) => said.push(text), cue: () => 3, scene: () => {}, release: () => {} },
+  });
+  runtime.press({ button: 'yes' });
+  runtime.reset();
+  ok('the line is put up as a caption', said[0] === 'HELLO');
+  ok('and taken down when the game moves on, even by a reset', said.at(-1) === null);
+}
+
 console.log('— the game in a saved show —');
 {
   const project = createProject('t');

@@ -305,6 +305,15 @@ export function createGame(overrides = {}) {
     rungs: [],
     /** Trigger played at the door. */
     finale: null,
+    /**
+     * Words first: lines said over whatever is on the wall as a moment begins,
+     * each for a few seconds, before it shows what it shows — and then it
+     * moves on by itself. `{ [state]: [[{ text, seconds }, …] per level] }`;
+     * a state that is not by level uses the first list.
+     */
+    beats: {},
+    /** The text layer that says them. The example's Message layer. */
+    messageLayer: null,
     /** Seconds, except the three press-handling windows in milliseconds. */
     timing: {
       askTimeout: 15,
@@ -322,6 +331,21 @@ export function createGame(overrides = {}) {
     },
     ...overrides,
   };
+}
+
+/** Beats as saved, made safe to walk: lists of lists of `{ text, seconds }`. */
+function normaliseBeats(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [state, levels] of Object.entries(raw)) {
+    if (!Array.isArray(levels)) continue;
+    out[state] = levels.map((list) =>
+      (Array.isArray(list) ? list : [])
+        .filter((b) => b && typeof b.text === 'string')
+        .map((b) => ({ text: b.text, seconds: Number(b.seconds) > 0 ? Number(b.seconds) : 2.5 }))
+    );
+  }
+  return out;
 }
 
 export function createProject(name = 'Untitled show') {
@@ -538,6 +562,8 @@ export function migrateProject(raw) {
     timing: { ...game.timing, ...(savedGame.timing || {}) },
     rungs: list(savedGame.rungs).filter(Boolean),
     finale: savedGame.finale || null,
+    beats: normaliseBeats(savedGame.beats),
+    messageLayer: typeof savedGame.messageLayer === 'string' ? savedGame.messageLayer : null,
   };
   p.game.scenes.ask = list(p.game.scenes.ask);
   p.game.scenes.chicken = list(p.game.scenes.chicken);

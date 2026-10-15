@@ -546,3 +546,6 @@ input[type="checkbox"] {
 .gg-node:focus-visible > rect:first-of-type { stroke: var(--accent-2); stroke-width: 2.4; }
 
 .gg-legend { fill: var(--text-faint); font-size: 11px; }
+.gg-sub.gg-words { fill: #ffb26b; font-style: italic; }
+.gg-node.gg-selected > rect:first-of-type { stroke: var(--accent-2); stroke-width: 2.6; }
+.gg-node:hover > rect:first-of-type { stroke: var(--text-dim); }

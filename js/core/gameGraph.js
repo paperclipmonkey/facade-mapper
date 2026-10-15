@@ -154,8 +154,13 @@ function describe(state, game, names) {
  * @param {object} [options.names]  Per state, what it shows: a scene or trigger
  *   name, so the boxes describe *this* show rather than the abstract machine.
  * @param {object} [options.missing]  Per state, true when it has nothing to show.
+ * @param {object} [options.words]  Per state, what it says on the wall. Shown in
+ *   quotes in place of the scene's name: the words are what make the tree read
+ *   as a game rather than a list of scenes.
+ * @param {object} [options.notes]  Per state, a third line — "words first", say.
+ * @param {string} [options.selected]  The state being edited, outlined.
  */
-export function renderGameGraph({ game = {}, snapshot = null, names = {}, missing = {} } = {}) {
+export function renderGameGraph({ game = {}, snapshot = null, names = {}, missing = {}, words = {}, notes = {}, selected = null } = {}) {
   const live = snapshot && snapshot.enabled !== false ? snapshot : null;
   const current = live?.state || null;
   const level = live?.level || 1;
@@ -279,15 +284,21 @@ export function renderGameGraph({ game = {}, snapshot = null, names = {}, missin
     if (last && last.to === state && state !== current) cls.push('gg-was');
     if (missing[state]) cls.push('gg-missing');
     if (state === 'approach' && !game.door) cls.push('gg-off');
+    if (state === selected) cls.push('gg-selected');
 
     let title = def.label;
     if (def.levelled) title += state === current ? ` ${level}/${top}` : ` ×${top}`;
-    const sub = describe(state, game, names);
+    const said = words[state] ? `“${String(words[state]).replace(/\s*\n\s*/g, ' ')}”` : '';
+    const sub = said || describe(state, game, names);
     let foot = '';
-    if (state === current && live?.remaining !== null && live?.remaining !== undefined) {
+    if (state === current && live?.saying) {
+      foot = `saying “${String(live.saying.text).replace(/\s*\n\s*/g, ' ')}”`;
+    } else if (state === current && live?.remaining !== null && live?.remaining !== undefined) {
       foot = `${Math.ceil(live.remaining)} s left`;
     } else if (missing[state]) {
       foot = 'nothing set';
+    } else if (notes[state]) {
+      foot = notes[state];
     }
 
     out.push(
@@ -296,8 +307,8 @@ export function renderGameGraph({ game = {}, snapshot = null, names = {}, missin
         `<rect x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="10" />` +
         `<rect class="gg-stripe" x="${x}" y="${y}" width="5" height="${NODE_H}" rx="2" />` +
         `<text class="gg-title" x="${x + 14}" y="${y + 22}">${esc(title)}</text>` +
-        `<text class="gg-sub" x="${x + 14}" y="${y + 40}">${esc(clip(sub, 26))}</text>` +
-        (foot ? `<text class="gg-foot" x="${x + 14}" y="${y + 58}">${esc(foot)}</text>` : '') +
+        `<text class="gg-sub${said ? ' gg-words' : ''}" x="${x + 14}" y="${y + 40}">${esc(clip(sub, 26))}</text>` +
+        (foot ? `<text class="gg-foot" x="${x + 14}" y="${y + 58}">${esc(clip(foot, 28))}</text>` : '') +
         `</g>`
     );
   }

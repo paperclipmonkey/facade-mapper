@@ -14,10 +14,12 @@
 import { createProject, createLayer, createScene } from '../js/core/state.js';
 import { demoShapes } from '../js/control/demoHouse.js';
 import { buildExampleGame, removeExampleGame, hasExampleGame, EXAMPLE, EXAMPLE_WORDS } from '../js/control/gameStarter.js';
-import { sceneContents, sceneMessage, setSceneMessage, visitSteps } from '../js/control/gamePanel.js';
+import { sceneContents, sceneMessage, setSceneMessage } from '../js/control/gamePanel.js';
 import { gameProblems, gameSceneIds, sceneSlot } from '../js/core/game.js';
 import { createGameRuntime } from '../js/control/game.js';
 import { activateScene, applySceneToLayers } from '../js/core/scenes.js';
+import { resolveParams } from '../js/core/modulators.js';
+import { getEffect } from '../js/effects/registry.js';
 
 let failures = 0;
 const ok = (name, cond, detail = '') => {
@@ -76,7 +78,24 @@ console.log('— building it —');
     ['Blood down the door', 'People at the windows', 'Tentacles through the brick', 'Eyes in every window', 'Lightning', 'Bats'].every((n) => finale.has(n)));
   ok('my own layer is in none of it', !finale.has('My own layer') && !waiting.has('My own layer'));
 
-  console.log('— the words —');
+  console.log('— the flowers —');
+  ok('the flowers are in bloom while the house waits',
+    waiting.has('Hanging flowers') && !waiting.has('Hanging flowers dying'));
+  ok('and still at the first question', contents(project, 'Question 1').has('Hanging flowers'));
+  const scare1 = contents(project, 'Scare: blood on the door');
+  ok('the first scare swaps in the dying bunch', scare1.has('Hanging flowers dying') && !scare1.has('Hanging flowers'));
+  ok('and they stay dead to the end',
+    ['Question 2', 'Question 3', 'Scare: tentacles', 'Finale: the house wakes up', 'Waiting for a treat']
+      .every((n) => contents(project, n).has('Hanging flowers dying') && !contents(project, n).has('Hanging flowers')));
+  const dying = project.layers.find((l) => l.name === 'Hanging flowers dying');
+  const fresh = project.layers.find((l) => l.name === 'Hanging flowers');
+  const wiltAt = (age) => resolveParams(getEffect('flowers'), dying, { t: 100 + age, age, beat: 0, bpm: 120 }).wilt;
+  ok('dying, they wilt as the layer ages', wiltAt(0) === 0 && Math.abs(wiltAt(3) - 0.5) < 1e-9 && wiltAt(6) === 1 && wiltAt(60) === 1,
+    [0, 3, 6, 60].map(wiltAt).join(','));
+  ok('and start exactly as the fresh bunch is, so the swap cannot be seen',
+    JSON.stringify(fresh.params) === JSON.stringify(dying.params) && JSON.stringify(fresh.targetTags) === JSON.stringify(dying.targetTags));
+
+console.log('— the words —');
   ok('the dare is on the wall while it waits', sceneMessage(project, game.scenes.attract)?.text === EXAMPLE_WORDS.attract);
   ok('each question has its own words', game.scenes.ask.map((id) => sceneMessage(project, id)?.text).join('|') === EXAMPLE_WORDS.ask.join('|'));
   ok('each send-off too', game.scenes.chicken.map((id) => sceneMessage(project, id)?.text).join('|') === EXAMPLE_WORDS.chicken.join('|'));
@@ -111,24 +130,19 @@ console.log('— building it —');
   ok('and no scene pointing at a layer that is gone', project.scenes.every((s) => Object.keys(s.state || {}).every((id) => project.layers.some((l) => l.id === id))));
 }
 
-console.log('— the visit as the panel tells it —');
+console.log('— a house with nowhere for flowers —');
+{
+  const project = createProject('bare');
+  project.shapes = demoShapes().filter((sh) => !(sh.tags || []).includes('planter'));
+  buildExampleGame(project);
+  ok('no planter, no flowers — they would fill the whole picture', !project.layers.some((l) => l.effect === 'flowers'));
+  ok('and the game is still whole', gameProblems(project.game, project).length === 0);
+}
+
+console.log('— the game\'s own scenes —');
 {
   const { project } = house();
   buildExampleGame(project);
-  const { main, side } = visitSteps(project.game);
-  ok('it starts with the house waiting', main[0].state === 'attract');
-  ok('then a question and a scare for each rung, in turn',
-    main.slice(1, 7).map((s) => `${s.state}${s.level}`).join(',') === 'ask1,scare1,ask2,scare2,ask3,scare3');
-  ok('then the door, the finale, the wait and the reward',
-    main.slice(7).map((s) => s.state).join(',') === 'approach,finale,waiting,reward');
-  ok('saying no is told once per question', side.filter((s) => s.state === 'chicken').length === 3);
-  ok('alongside mercy, going quiet, both buttons and rushing the door',
-    ['mercy', 'nudge', 'decide', 'early'].every((st) => side.some((s) => s.state === st)));
-  project.game.door = false;
-  ok('without the door stage there is no invitation to it', !visitSteps(project.game).main.some((s) => s.state === 'approach'));
-  ok('an empty game still has a first question and a first scare to fill in',
-    visitSteps({ ...project.game, rungs: [] }).main.map((s) => s.state).slice(0, 3).join(',') === 'attract,ask,scare');
-
   const ids = gameSceneIds(project.game, project);
   ok('the game knows which scenes are its own', ids.size === 18, String(ids.size));
   ok('and that mine is not', !ids.has('mine'));
@@ -141,6 +155,7 @@ console.log('— playing it, with a brave group —');
   let clock = 1_000_000;
   const now = () => clock;
   const name = () => project.scenes.find((s) => s.id === project.show.activeScene)?.name?.replace('Dare · ', '');
+  const said = [];
   const runtime = createGameRuntime({
     getGame: () => project.game,
     now,
@@ -152,12 +167,19 @@ console.log('— playing it, with a brave group —');
         return t.hold;
       },
       cueEnd: () => {},
+      caption: (text) => {
+        if (text) said.push(text);
+      },
       release: () => activateScene(project, 'mine', { fade: 0 }),
     },
   });
   const wait = (s) => {
     clock += s * 1000;
     runtime.tick();
+  };
+  /** Let any words being said finish, a tenth of a second at a time. */
+  const hearOut = () => {
+    for (let i = 0; i < 200 && runtime.snapshot().saying; i++) wait(0.1);
   };
   const yes = () => {
     runtime.press({ button: 'yes' });
@@ -166,12 +188,17 @@ console.log('— playing it, with a brave group —');
 
   const seen = [];
   runtime.press({ button: 'yes' });
+  ok('the first YES is answered with words before the question', runtime.snapshot().saying?.text === 'SO…');
+  ok('and a press while they are said is dropped, not saved up', runtime.press({ button: 'yes' }) === 'wait for the words');
+  hearOut();
   seen.push(name());
   for (let rung = 0; rung < 3; rung++) {
     wait(1);
     yes();
+    hearOut();
     seen.push(name());
     wait(10);
+    hearOut();
     seen.push(name());
   }
   runtime.press({ button: 'door' });
@@ -179,6 +206,7 @@ console.log('— playing it, with a brave group —');
   wait(11);
   seen.push(name());
   runtime.press({ button: 'treat' });
+  hearOut();
   seen.push(name());
   wait(9);
   seen.push(name());
@@ -194,6 +222,10 @@ console.log('— playing it, with a brave group —');
     'You survived', 'My scene', 'Waiting for visitors',
   ];
   ok('every step of the walk shows the scene it should', seen.join(' > ') === expected.join(' > '), seen.join(' > '));
+  ok('with every line said, in order, on the way',
+    said.join(' | ') === ['SO…', 'YOU DARE.', 'YOU ASKED FOR IT…', "DON'T SAY WE\nDIDN'T WARN YOU…", 'TOO LATE', 'TO RUN…', 'THE HOUSE\nLETS YOU GO…'].join(' | '),
+    said.join(' | ').replace(/\n/g, ' '));
+  ok('and the message layer is the one that says them', project.game.messageLayer === project.layers.find((l) => l.name === 'Message')?.id);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');

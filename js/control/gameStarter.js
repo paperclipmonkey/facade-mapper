@@ -6,7 +6,7 @@
  * So this builds a complete, playable game out of the built-in effects:
  *
  *   waiting   brick and smoke, and the dare
- *   rung 1    blood down the door
+ *   rung 1    blood down the door, and the flowers beside it wilt and die
  *   rung 2    people at the windows
  *   rung 3    tentacles out of the brickwork
  *   the door  everything at once — and no words, because they are too close
@@ -43,6 +43,22 @@ const FINALE_HOLD = 10;
  * by people who are also deciding whether to run, and in capitals because
  * that is the only case that survives being projected onto brick.
  */
+/**
+ * Words first: lines said over whatever is already on the wall, each for a
+ * moment, before the next thing happens by itself — the dare before the
+ * question, the warning before the scare. Nothing at the door: they could not
+ * read it from there.
+ */
+export const EXAMPLE_BEATS = {
+  ask: [[{ text: 'SO…', seconds: 1.4 }, { text: 'YOU DARE.', seconds: 2 }], [], []],
+  scare: [
+    [{ text: 'YOU ASKED FOR IT…', seconds: 2.2 }],
+    [{ text: "DON'T SAY WE\nDIDN'T WARN YOU…", seconds: 2.4 }],
+    [{ text: 'TOO LATE', seconds: 1.2 }, { text: 'TO RUN…', seconds: 1.6 }],
+  ],
+  reward: [[{ text: 'THE HOUSE\nLETS YOU GO…', seconds: 2.4 }]],
+};
+
 export const EXAMPLE_WORDS = {
   attract: 'DARE YOU?\nPRESS YES',
   ask: ['SOMETHING LIVES HERE.\nLOOK CLOSER?', "IT'S BLEEDING.\nKEEP GOING?", "THEY'VE SEEN YOU.\nCLOSER?"],
@@ -64,6 +80,13 @@ function layer(effect, name, { tags = [], params = {}, ...rest } = {}) {
     ...rest,
   });
 }
+
+/** A hanging basket of something cheerful, before the house gets to it. */
+const FLOWERS = {
+  color: '#e4557a', color2: '#f0b33c', centre: '#ffe9a8', stem: '#4f8b3b', dry: '#7d5a33',
+  count: 9, height: 0.8, size: 0.11, petals: 5, spread: 0.45, leaves: 0.6, wind: 0.5, gust: 0.6,
+  wilt: 0, fly: 1.4, seed: 7,
+};
 
 /** The cast. Every scene below is some of these, switched on. */
 function buildLayers(tagsPresent) {
@@ -117,6 +140,22 @@ function buildLayers(tagsPresent) {
       params: { color: '#12040f', count: 24, size: 0.08, speed: 0.3, flap: 8, spread: 0.8, wander: 0.5, direction: 'right', interval: 4, crossing: 4 },
     }),
     fireworks: layer('fireworks', 'Fireworks'),
+    /**
+     * Flowers, twice: the same bunch, fresh and dying.
+     *
+     * The dying one wilts as it ages — `age` is seconds since the layer came
+     * on — so the scene that swaps one for the other is the moment they die:
+     * six seconds of drooping heads, greying stems and petals blowing down the
+     * wall, and then dead for the rest of the visit. Same seed and the same
+     * values, so at its first instant the dying bunch *is* the fresh one and
+     * the swap itself is invisible.
+     */
+    flowers: layer('flowers', 'Hanging flowers', { tags: ['planter'], params: FLOWERS }),
+    flowersDying: layer('flowers', 'Hanging flowers dying', {
+      tags: ['planter'],
+      params: FLOWERS,
+      bindings: { wilt: { type: 'expr', code: 'clamp(age / 6, 0, 1)' } },
+    }),
     smoke: layer('smoke', 'Smoke', {
       tags: tagsPresent.has('chimney') ? ['chimney'] : [],
       opacity: 0.8,
@@ -151,7 +190,11 @@ export function buildExampleGame(project) {
   const cast = buildLayers(tagsPresent);
   const maxOrder = project.layers.reduce((max, l) => Math.max(max, l.order || 0), -1);
   // Draw order: the wash first and the words last, everything else as listed.
-  const order = ['wash', 'brick', 'candles', 'people', 'blood', 'tentacles', 'eyes', 'doorGlow', 'bats', 'fireworks', 'smoke', 'fog', 'lightning', 'message'];
+  // Flowers only where something is tagged to grow them from: with nothing to
+  // target they would fill the whole frame.
+  const hasPlanter = tagsPresent.has('planter');
+  const order = ['wash', 'brick', 'candles', 'people', 'blood', 'tentacles', 'eyes', 'doorGlow', 'bats', 'fireworks',
+    ...(hasPlanter ? ['flowers', 'flowersDying'] : []), 'smoke', 'fog', 'lightning', 'message'];
   order.forEach((key, i) => {
     cast[key].order = maxOrder + 1 + i;
     project.layers.push(cast[key]);
@@ -185,15 +228,20 @@ export function buildExampleGame(project) {
     return built;
   };
 
-  const base = ['wash', 'brick', 'smoke', 'fog'];
-  const afterRung = [base, [...base, 'blood'], [...base, 'blood', 'people'], [...base, 'blood', 'people', 'tentacles']];
+  // The house before anything has happened — flowers in bloom — and after the
+  // first scare, when they have died. Every later scene keeps them dead.
+  const fresh = hasPlanter ? ['flowers'] : [];
+  const dead = hasPlanter ? ['flowersDying'] : [];
+  const base = ['wash', 'brick', 'smoke', 'fog', ...fresh];
+  const ruined = ['wash', 'brick', 'smoke', 'fog', ...dead];
+  const afterRung = [base, [...ruined, 'blood'], [...ruined, 'blood', 'people'], [...ruined, 'blood', 'people', 'tentacles']];
   const W = EXAMPLE_WORDS;
 
   const scenes = {
     attract: scene('Waiting for visitors', base, { words: W.attract, fade: 1.2 }),
     ask: W.ask.map((words, i) => scene(`Question ${i + 1}`, afterRung[i], { words })),
     approach: scene('Come to the door', [...afterRung[3], 'doorGlow'], { words: W.approach }),
-    waiting: scene('Waiting for a treat', [...base, 'candles', 'doorGlow', 'eyes'], { fade: 1 }),
+    waiting: scene('Waiting for a treat', [...ruined, 'candles', 'doorGlow', 'eyes'], { fade: 1 }),
     reward: scene('You survived', ['wash', 'brick', 'candles', 'fireworks'], { words: W.reward, fade: 0.4, tweak: { message: { animation: 'pop', color: '#ffd23a' } } }),
     chicken: W.chicken.map((words, i) => scene(`Said no ${i + 1}`, afterRung[i], { words, tweak: { message: { animation: 'wave' } } })),
     nudge: scene('Anyone there?', base, { words: W.nudge, tweak: { message: { animation: 'typewriter' } } }),
@@ -205,6 +253,8 @@ export function buildExampleGame(project) {
   };
 
   const scares = [
+    // Blood down the door, and the flowers beside it die: the dying bunch
+    // comes on here, so its six seconds of wilting start with the scare.
     scene('Scare: blood on the door', afterRung[1], { fade: 0.15 }),
     scene('Scare: people at the windows', [...afterRung[2], 'lightning'], { fade: 0.15 }),
     scene('Scare: tentacles', afterRung[3], { fade: 0.15 }),
@@ -245,6 +295,9 @@ export function buildExampleGame(project) {
     reward: scenes.reward.id,
   };
 
+  game.beats = JSON.parse(JSON.stringify(EXAMPLE_BEATS));
+  game.messageLayer = cast.message.id;
+
   const missing = ['wall', 'door', 'window'].filter((t) => !tagsPresent.has(t));
   return {
     scenes: project.scenes.filter((s) => s.example === EXAMPLE).length,
@@ -283,6 +336,10 @@ export function removeExampleGame(project) {
   if (game) {
     game.rungs = game.rungs.filter((id) => !triggerIds.has(id));
     if (triggerIds.has(game.finale)) game.finale = null;
+    if (layerIds.has(game.messageLayer)) {
+      game.messageLayer = null;
+      game.beats = {};
+    }
     for (const [key, slot] of Object.entries(game.scenes)) {
       if (Array.isArray(slot)) game.scenes[key] = slot.filter((id) => !sceneIds.has(id));
       else if (sceneIds.has(slot)) game.scenes[key] = null;

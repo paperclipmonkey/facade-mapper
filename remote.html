@@ -94,6 +94,12 @@
     -->
     <main class="remote-main game-root" id="gameRoot" hidden>
       <p class="game-state" id="gameState">The game is off.</p>
+      <div class="game-alerts" role="group" aria-label="Tell me when the game moves on">
+        <span>Tell me when it moves on:</span>
+        <button type="button" class="chip" data-alert="sound" aria-pressed="false">🔔 Sound</button>
+        <button type="button" class="chip" data-alert="flash" aria-pressed="false">⚡ Flash</button>
+        <button type="button" class="chip" data-alert="buzz" aria-pressed="false">📳 Buzz</button>
+      </div>
       <div class="game-pad">
         <button type="button" class="big game-btn game-yes" data-role="yes"><span class="big-label">YES</span></button>
         <button type="button" class="big game-btn game-no" data-role="no"><span class="big-label">NO</span><span class="big-sub">hold for mercy</span></button>
@@ -147,6 +153,11 @@
         </div>
       </footer>
     </section>
+
+    <!-- The flash, and the banner that says somebody is at the door. Over
+         everything, on every tab, because that is the moment to get up. -->
+    <div class="game-flash" id="gameFlash" hidden></div>
+    <div class="game-door-banner" id="gameDoor" hidden></div>
 
     <div class="toast" id="toast" hidden></div>
 

@@ -107,6 +107,8 @@ function expressionScope(ctx, base, def, key) {
   return {
     t: ctx.t,
     time: ctx.t,
+    /** Seconds since the layer was switched on: `clamp(age / 6, 0, 1)` ramps once, on cue. */
+    age: ctx.age ?? ctx.t ?? 0,
     dt: ctx.dt,
     beat: ctx.beat,
     beatPhase: ctx.beatPhase,
