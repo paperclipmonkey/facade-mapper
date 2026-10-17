@@ -465,9 +465,14 @@ console.log('\n— the transport —');
   // catch up fades back in, and that fade used to run on show time — which,
   // stopped, does not move, so it stayed faded out for good.
   // The fade is a third of a second of *real* time, which the faked wall clock
-  // above does not move; so wait one out.
-  const until = performance.now() + 400;
-  while (performance.now() < until);
+  // above does not move; so wait it out. A frame counts at most a quarter of a
+  // second however long it took, so it takes a few frames with real gaps
+  // between them — three, for room to spare on a slow machine.
+  for (let i = 0; i < 3; i++) {
+    const until = performance.now() + 300;
+    while (performance.now() < until);
+    tab.frame();
+  }
   const alphas = [];
   const blit = tab.g.drawImage;
   tab.g.drawImage = function (...args) { alphas.push(this.globalAlpha); return blit.apply(this, args); };
@@ -479,7 +484,7 @@ console.log('\n— the transport —');
   ok('and then holds still, like everything else while stopped',
     later === shown && stepsLater === steps, `${later.toFixed(2)} s, ${stepsLater - steps} more steps`);
   ok('fully faded in, not left invisible by a fade that runs on a stopped clock',
-    alphas.every((a) => a > 0.95), alphas.slice(-3).join(', '));
+    alphas.every((a) => a > 0.999), alphas.slice(-3).join(', '));
 }
 
 {
