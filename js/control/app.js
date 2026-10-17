@@ -42,6 +42,8 @@ import {
   createTrigger,
   migrateProject,
   worldSize,
+  clearScenes,
+  clearShow,
 } from '../core/state.js';
 import { createWorldRenderer } from '../render/worldRenderer.js';
 import { createWarpRenderer, computeEdgeBlends, projectorsOverlap, computeRegion, resampleMesh } from '../render/warp.js';
@@ -524,6 +526,29 @@ app.clearLayers = () => {
   app.select(null);
   app.commit();
   toast(`Removed ${count} effect${count === 1 ? '' : 's'}. Ctrl+Z to undo.`);
+};
+
+app.clearScenes = () => {
+  const count = app.project.scenes.length;
+  if (!count) return;
+  if (!confirm(`Delete all ${count} scene${count === 1 ? '' : 's'}? What is on the wall stays as it is, and Ctrl+Z puts them back.`)) return;
+  app.pushUndo();
+  gameRuntime?.reset();
+  clearScenes(app.project);
+  app.select(null);
+  app.commit();
+  toast(`Deleted ${count} scene${count === 1 ? '' : 's'}. Ctrl+Z to undo.`);
+};
+
+app.clearShow = () => {
+  if (!confirm('Clear everything but the house? Every effect, scene, trigger and the game go. The traced shapes, the projectors and their alignment, the photo of the house and your media stay. Ctrl+Z puts it all back.')) return;
+  app.pushUndo();
+  gameRuntime?.reset();
+  for (const layer of app.project.layers) worldRenderer.resetLayer(layer.id);
+  clearShow(app.project);
+  app.select(null);
+  app.commit();
+  toast('Cleared. The house is as you traced it; build an example or add effects to start again.');
 };
 
 app.resetLayerState = (layerId) => worldRenderer.resetLayer(layerId);
@@ -3957,6 +3982,8 @@ function wire() {
 
   $('btnDeleteLayer').addEventListener('click', deleteSelection);
   $('btnClearLayers').addEventListener('click', () => app.clearLayers());
+  $('btnClearScenes').addEventListener('click', () => app.clearScenes());
+  $('btnClearShow').addEventListener('click', () => app.clearShow());
 
   const presetActions = $('presetActions');
   for (const preset of PRESETS) {

@@ -338,6 +338,49 @@ export function createGame(overrides = {}) {
   };
 }
 
+/**
+ * Delete every scene, and everything that pointed at one.
+ *
+ * What is on the wall stays on the wall: scenes are snapshots of the layers,
+ * not the layers themselves. The playlist empties, the game forgets the scenes
+ * it showed, and a trigger that fired one now fires nothing — each still
+ * there, only waiting to be pointed at something new.
+ *
+ * @returns {number} how many scenes went.
+ */
+export function clearScenes(project) {
+  const count = (project.scenes || []).length;
+  project.scenes = [];
+  const show = project.show || (project.show = {});
+  show.playlist = [];
+  show.running = false;
+  show.activeScene = null;
+  show.previousScene = null;
+  show.sceneLoaded = false;
+  show.caption = null;
+  for (const trigger of project.triggers || []) trigger.sceneId = null;
+  if (project.game) project.game.scenes = createGame().scenes;
+  return count;
+}
+
+/**
+ * Everything but the house.
+ *
+ * Effects, scenes, triggers and the game go; the traced shapes, the projectors
+ * and their alignment, the photo of the house, uploaded media and the look
+ * stay — the slow, physical part of setting up, which nobody wants to do twice.
+ * For starting again from the examples without starting again from the
+ * ladder. The game keeps which button is which, because that is about the
+ * hardware too.
+ */
+export function clearShow(project) {
+  clearScenes(project);
+  project.layers = [];
+  project.triggers = [];
+  project.game = createGame({ buttons: { ...(project.game?.buttons || {}) } });
+  return project;
+}
+
 /** Beats as saved, made safe to walk: lists of lists of `{ text, seconds }`. */
 function normaliseBeats(raw) {
   const out = {};
