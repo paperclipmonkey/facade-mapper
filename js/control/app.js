@@ -771,12 +771,46 @@ function refreshInspector() {
   node.scrollTop = top;
 }
 
+/**
+ * Which panel each drawing tool belongs to.
+ *
+ * The toolbar above the stage used to offer all of them on every tab: tools
+ * for tracing shapes, for aligning a projector by its corners and for
+ * squaring up the wall, side by side, whatever you were doing. Each now shows
+ * only on its own tab. Select is on every tab, because clicking a shape on
+ * the house selects it from anywhere; a tool not listed here (the scan's and
+ * the point alignment's) is opened by its own panel and not on the toolbar.
+ */
+const TOOL_PANELS = {
+  polygon: 'shapes',
+  path: 'shapes',
+  rect: 'shapes',
+  corners: 'projectors',
+  square: 'settings',
+};
+
+let currentPanel = 'start';
+
 function switchPanel(name) {
+  currentPanel = name;
   for (const tab of document.querySelectorAll('.panel-tab')) {
     tab.classList.toggle('active', tab.dataset.panel === name);
   }
   for (const page of document.querySelectorAll('.panel-page')) {
     page.classList.toggle('active', page.dataset.page === name);
+  }
+  syncToolbar();
+  // A tool whose button has just gone is put down, rather than left armed
+  // with nothing on screen to say so.
+  const home = TOOL_PANELS[app.tool];
+  if (home && home !== name) setTool('select');
+}
+
+/** Show the tools that belong to the panel that is open. */
+function syncToolbar() {
+  for (const button of document.querySelectorAll('.stage-toolbar .tool')) {
+    const home = TOOL_PANELS[button.dataset.tool];
+    button.hidden = !!home && home !== currentPanel;
   }
 }
 
@@ -864,6 +898,10 @@ function setTool(tool) {
     app.rectifyDraft = null;
   }
   renderSquaringPanel();
+  // From a keyboard shortcut, the tool's own tab comes with it: its button,
+  // and whatever the tool needs from the panel.
+  const home = TOOL_PANELS[tool];
+  if (home && home !== currentPanel) switchPanel(home);
   // The manual alignment button doubles as this tool's way out, so it has to
   // know which state it is in.
   refreshInspector();
@@ -3773,6 +3811,7 @@ function wire() {
   for (const button of document.querySelectorAll('.tool')) {
     button.addEventListener('click', () => setTool(button.dataset.tool));
   }
+  syncToolbar();
 
   $('projectName').addEventListener('change', (ev) => {
     app.pushUndo();

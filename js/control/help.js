@@ -165,7 +165,7 @@ export const HELP_SECTIONS = [
 </p>
 <p>
   When neither is possible, tell the app the shape of the wall. Press <kbd>W</kbd> or pick
-  <strong>Square up</strong> from the toolbar, drag the four handles onto something you know is
+  <strong>Square up</strong> from the toolbar on the Setup tab, drag the four handles onto something you know is
   rectangular — a window, the door, a run of brick courses — and type its real width and height into
   Setup. Any units, as long as they match; only the ratio is used. The grid ruled inside the quad is
   what to judge by: get the marking right and its lines lie along the courses.
