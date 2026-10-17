@@ -151,16 +151,16 @@ console.log('— another machine\'s clock —');
 console.log('— the game, for Home Assistant —');
 {
   const watch = createGameWatcher();
-  const digest = (state, level, last = null) => ({ enabled: true, door: true, snapshot: { state, level, of: 3, zone: 'path', active: state !== 'attract', last } });
-  const first = watch(digest('attract', 0));
-  ok('the first digest is a state', first?.state.state === 'attract' && first.state.enabled);
+  const digest = (step, name, last = null) => ({ enabled: true, snapshot: { step, name, atStart: step === 's1', alert: false, last } });
+  const first = watch(digest('s1', 'Trick or treat?'));
+  ok('the first digest is a state', first?.state.step === 'Trick or treat?' && first.state.enabled);
   ok('but not a move', first.cue === null);
-  ok('the same digest again is nothing', watch(digest('attract', 0)) === null);
-  const moved = watch(digest('ask', 1, { from: 'attract', on: 'yes', to: 'ask' }));
-  ok('a move is a state and a cue', moved.state.state === 'ask' && moved.cue?.cue === 'ask');
-  ok('saying where from and why', moved.cue.from === 'attract' && moved.cue.on === 'yes');
-  const climbed = watch(digest('ask', 2, { from: 'scare', on: 'timeout', to: 'ask' }));
-  ok('the next level of the same state is a move too', climbed?.cue?.level === 2);
+  ok('the same digest again is nothing', watch(digest('s1', 'Trick or treat?')) === null);
+  const moved = watch(digest('s2', 'Lightning and smoke', { from: 's1', on: 'yes', to: 's2' }));
+  ok('a move is a state and a cue', moved.state.step === 'Lightning and smoke' && moved.cue?.step === 'Lightning and smoke');
+  ok('saying where from and why', moved.cue.from === 'Trick or treat?' && moved.cue.on === 'yes');
+  const timed = watch(digest('s3', 'Scared yet?', { from: 's2', on: 'timeout', to: 's3' }));
+  ok('a step moved on by its timer is a move too', timed?.cue?.on === 'timeout');
   ok('nothing that is not a game is anything', watch(null) === null && watch('x') === null);
 }
 
@@ -343,20 +343,20 @@ if (typeof WebSocket === 'undefined') {
   ok('a retained press is never a press', actions().length === 3);
   ok('and the log says why, once', logs.filter((l) => l.includes('retained')).length === 1);
 
-  console.log('— the game, back to Home Assistant —');
-  const digest = (state, level, last = null) =>
-    JSON.stringify({ type: 'show', payload: { name: 'house', game: { enabled: true, door: true, snapshot: { state, level, of: 3, zone: 'path', active: state !== 'attract', last } } }, device: 'laptop' });
-  control.send(digest('attract', 0));
+  console.log('— the automation, back to Home Assistant —');
+  const digest = (step, name, last = null) =>
+    JSON.stringify({ type: 'show', payload: { name: 'house', game: { enabled: true, snapshot: { step, name, atStart: step === 's1', last } } }, device: 'laptop' });
+  control.send(digest('s1', 'Trick or treat?'));
   ok('the game state is published, retained', await until(() => broker.published.some((m) => m.topic === 'facade/game' && m.retain)));
   const published = () => broker.published.filter((m) => m.topic.startsWith('facade/game'));
-  control.send(digest('attract', 0));
+  control.send(digest('s1', 'Trick or treat?'));
   await wait(100);
   ok('the same state is not published again', published().length === 1);
-  control.send(digest('ask', 1, { from: 'attract', on: 'yes', to: 'ask' }));
+  control.send(digest('s2', 'Lightning and smoke', { from: 's1', on: 'yes', to: 's2' }));
   ok('a move publishes the new state and a cue', await until(() => published().length === 3));
   const cue = published().find((m) => m.topic === 'facade/game/cue');
   ok('the cue is not retained — it is a moment', cue && !cue.retain);
-  ok('and says what happened', JSON.parse(cue.payload).cue === 'ask' && JSON.parse(cue.payload).on === 'yes');
+  ok('and says what happened', JSON.parse(cue.payload).step === 'Lightning and smoke' && JSON.parse(cue.payload).on === 'yes');
 
   // A remote cannot speak for the game: only the control tab's digests count.
   const remote = await new Promise((resolve) => {
@@ -367,9 +367,9 @@ if (typeof WebSocket === 'undefined') {
     };
   });
   await wait(60);
-  remote.send(JSON.stringify({ type: 'show', payload: { game: { enabled: true, snapshot: { state: 'finale', level: 3 } } }, device: 'phone' }));
+  remote.send(JSON.stringify({ type: 'show', payload: { game: { enabled: true, snapshot: { step: 's9', name: 'At the door' } } }, device: 'phone' }));
   await wait(120);
-  ok('a digest from anything but the control tab is not the game', !published().some((m) => m.payload.includes('finale')));
+  ok('a digest from anything but the control tab is not the automation', !published().some((m) => m.payload.includes('At the door')));
 
   console.log('— presses over HTTP —');
   const base = `http://127.0.0.1:${address.port}`;

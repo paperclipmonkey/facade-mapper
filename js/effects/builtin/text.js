@@ -735,6 +735,69 @@ function settledPx(m, px, trackingRatio, length, fitting) {
  */
 const bakedGlow = (base, px) => (base.glow > 0 ? base.glow : Math.max(8, px * 0.25));
 
+/** Line spacing for text on more than one line, in multiples of the font size. */
+const LINE_HEIGHT = 1.12;
+
+/**
+ * Lay out text that has line breaks in it, in a box.
+ *
+ * Words that have to be read from the end of a path are better as two short
+ * lines than one long one: "SOMETHING LIVES HERE. LOOK CLOSER?" on a single
+ * line is half the height it could be, because the width of the wall is what
+ * limits it. So a line break in the content means one, and the lines are
+ * stacked about the same point a single line is centred on.
+ *
+ * Several lines also have a height, which one line never had to worry about,
+ * so here — and only here — the size is brought down until the widest line
+ * fits across the shape and the stack fits inside it. A single line keeps the
+ * behaviour it has always had, so no existing show changes by a pixel.
+ *
+ * The line breaks stay in the run as glyphs that are never painted, which
+ * keeps every per-glyph animation counting characters the way it always has.
+ *
+ * @returns {number} The font size actually used.
+ */
+function layoutLines(m, p, t, px, bbox) {
+  const n = m.chars.length;
+  // Each line as a [start, end) range of glyph indices.
+  const lines = [];
+  let start = 0;
+  for (let i = 0; i <= n; i++) {
+    if (i === n || m.chars[i] === '\n') {
+      lines.push([start, i]);
+      start = i + 1;
+    }
+  }
+  const widthAt = ([a, b], size) => {
+    let w = p.tracking * size * Math.max(0, b - a - 1);
+    for (let i = a; i < b; i++) w += m.w[i] * size;
+    return w;
+  };
+  const widest = Math.max(1e-6, ...lines.map((line) => widthAt(line, 1)));
+  const fitW = (bbox.w * 0.94) / widest;
+  const fitH = (bbox.h * 0.94) / (lines.length * LINE_HEIGHT);
+  px = Math.max(4, Math.min(px, fitW, fitH));
+
+  const tracking = p.tracking * px;
+  const centreY = bbox.cy + p.offsetY * bbox.h;
+  lines.forEach((line, k) => {
+    const width = widthAt(line, px);
+    let x = p.align === 'left' ? bbox.x : p.align === 'right' ? bbox.x + bbox.w - width : bbox.cx - width / 2;
+    x += p.offsetX * bbox.w;
+    const y = centreY + (k - (lines.length - 1) / 2) * LINE_HEIGHT * px;
+    for (let i = line[0]; i < line[1]; i++) {
+      const adv = m.w[i] * px;
+      const st = charState(p, i, n, t);
+      if (st) setGlyph(i, m.chars[i], st, 0, 0, 0, x + st.dx * px, y + st.dy * px, adv);
+      else setGlyph(i, m.chars[i], null, 0, 0, 0, x, y, adv);
+      x += adv + tracking;
+    }
+    // The break itself: a glyph that is never painted.
+    if (line[1] < n) setGlyph(line[1], m.chars[line[1]], null, 0, 0, 0, x, y, 0);
+  });
+  return px;
+}
+
 const text = {
   id: 'text',
   name: 'Text',
@@ -762,6 +825,16 @@ const text = {
       const laid = layoutOnPath(shape, m, p, t, px, p.tracking * px);
       px = laid.px;
       fit = laid.scale;
+    } else if (p.mode !== 'marquee' && content.includes('\n')) {
+      px = layoutLines(m, p, t, px, bbox);
+      g.beginPath();
+      g.rect(bbox.x - px, bbox.y - px, bbox.w + px * 2, bbox.h + px * 2);
+      g.clip();
+      if (p.rotate) {
+        g.translate(bbox.cx, bbox.cy);
+        g.rotate((p.rotate * Math.PI) / 180);
+        g.translate(-bbox.cx, -bbox.cy);
+      }
     } else {
       const tracking = p.tracking * px;
       let totalWidth = tracking * (n - 1);

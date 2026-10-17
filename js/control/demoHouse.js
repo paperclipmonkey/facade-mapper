@@ -8,7 +8,7 @@
  * is worth setting up at all.
  *
  * So: a synthetic facade, drawn here in code, installed as the tracing backdrop
- * with its windows, door, roofline and chimney already traced and tagged. It
+ * with its windows, door and roofline already traced and tagged. It
  * makes the whole application explorable at two in the afternoon, indoors, with
  * no hardware — browse effects, build a look, learn where everything lives —
  * and the work carries over, because a real show differs only in which picture
@@ -33,6 +33,13 @@ import { createShape } from '../core/state.js';
 export const DEMO_ASPECT = 16 / 9;
 
 /**
+ * Bumped whenever the house itself changes — something painted or traced
+ * added or taken away — so a demo show saved before the change can bring its
+ * backdrop and shapes up to date when it is next opened. 2: no chimney.
+ */
+export const DEMO_VERSION = 2;
+
+/**
  * A 1930s rendered semi, because that is what most of the houses this gets
  * pointed at actually are.
  *
@@ -55,8 +62,6 @@ const L = {
   /** Roof overhangs, and the hip starts where the ridge does. */
   rakeL: 0.232,
   hip: 0.44,
-
-  chimney: { x: 0.664, w: 0.062, top: 0.036, base: 0.186 },
 
   door: { x: 0.395, w: 0.078, top: 0.585 },
   /** The brick reveal round the door — one of the two real brick details. */
@@ -102,7 +107,7 @@ const rect = (x, y, w, h) => [
  * The traced scene that ships with the demo.
  *
  * Tagged the way the starter presets expect (`window`, `door`, `roof`,
- * `chimney`, `wall`, `trim`, `sign`, `path`), which is what lets "Halloween
+ * `wall`, `trim`, `sign`, `path`), which is what lets "Halloween
  * starter" land a complete look on it without a single click of setup.
  */
 export function demoShapes() {
@@ -137,12 +142,6 @@ export function demoShapes() {
     'Roofline',
     ['roof'],
     { type: 'path', closed: false }
-  );
-
-  add(
-    rect(L.chimney.x, L.chimney.top, L.chimney.w, L.chimney.base - L.chimney.top),
-    'Chimney',
-    ['chimney']
   );
 
   for (const w of L.upper) add(rect(w.x, w.y, w.w, w.h), w.name, ['window']);
@@ -721,7 +720,7 @@ function brickwork(g, rng, clip, box, base, course) {
 }
 
 /* ------------------------------------------------------------------ *
- * Roof, gutter, chimney
+ * Roof and gutter
  * ------------------------------------------------------------------ */
 
 /**
@@ -849,102 +848,6 @@ function roof(g, rng, W, H) {
   // Its end, and the return of the gutter round the hip.
   g.fillStyle = '#0c0d10';
   g.fillRect((L.rakeL - 0.004) * W, gTop, 0.006 * W, gH * 1.2);
-}
-
-/**
- * The stack on the party wall: brick, with an oversailing course near the top,
- * a cement cap, two clay pots, and an aerial strapped to it — which every
- * house on a street like this still has, and which is the one silhouette that
- * says "a house" against the sky better than anything else.
- */
-function chimney(g, rng, W, H) {
-  const s = H / 900;
-  const c = L.chimney;
-  const x = c.x * W;
-  const w = c.w * W;
-  const top = c.top * H;
-  const base = c.base * H;
-  brickwork(
-    g, rng,
-    rectPath(c.x, c.top, c.w, c.base - c.top, W, H),
-    { x, y: top, w, h: base - top },
-    [70, 40, 32],
-    H * 0.0125
-  );
-  // Light from the right; the left face of the stack falls into shadow.
-  const shade = g.createLinearGradient(x, 0, x + w, 0);
-  shade.addColorStop(0, 'rgba(0,0,0,0.45)');
-  shade.addColorStop(0.5, 'rgba(0,0,0,0.12)');
-  shade.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = shade;
-  g.fillRect(x, top, w, base - top);
-  // Oversailing course and the cement cap above it.
-  g.fillStyle = '#3a2219';
-  g.fillRect(x - 3 * s, top + 10 * s, w + 6 * s, 6 * s);
-  shadowBelow(g, x, top + 16 * s, w, 8 * s, 0.5);
-  const cap = g.createLinearGradient(0, top - 2 * s, 0, top + 6 * s);
-  cap.addColorStop(0, '#5a5c60');
-  cap.addColorStop(1, '#2c2e31');
-  g.fillStyle = cap;
-  g.fillRect(x - 2 * s, top - 2 * s, w + 4 * s, 8 * s);
-  // Lead flashing where it meets the roof.
-  g.fillStyle = '#2c2f33';
-  g.fillRect(x - 2 * s, base - 5 * s, w + 4 * s, 6 * s);
-
-  for (const u of [0.3, 0.7]) {
-    const px = x + w * u;
-    const potW = w * 0.2;
-    const potH = 0.024 * H;
-    const pot = g.createLinearGradient(px - potW, 0, px + potW, 0);
-    pot.addColorStop(0, '#24130e');
-    pot.addColorStop(0.6, '#5a3020');
-    pot.addColorStop(1, '#3a1f15');
-    g.fillStyle = pot;
-    g.beginPath();
-    g.moveTo(px - potW * 0.5, top - 1 * s);
-    g.lineTo(px - potW * 0.38, top - potH);
-    g.lineTo(px + potW * 0.38, top - potH);
-    g.lineTo(px + potW * 0.5, top - 1 * s);
-    g.closePath();
-    g.fill();
-    g.fillStyle = '#4a2a1d';
-    g.fillRect(px - potW * 0.48, top - potH - 3 * s, potW * 0.96, 3.5 * s);
-  }
-
-  // The aerial: a pole up the side of the stack and a Yagi on top of it.
-  g.save();
-  g.strokeStyle = '#0a0c10';
-  g.lineCap = 'round';
-  g.lineWidth = 2.2 * s;
-  const poleX = x + w + 4 * s;
-  const poleTop = Math.max(5 * s, top - 0.03 * H);
-  g.beginPath();
-  g.moveTo(poleX, base - 0.06 * H);
-  g.lineTo(poleX, poleTop);
-  g.stroke();
-  g.lineWidth = 1.6 * s;
-  for (const yy of [base - 0.05 * H, top + 0.03 * H]) {
-    g.beginPath();
-    g.moveTo(poleX, yy);
-    g.lineTo(x + w, yy);
-    g.stroke();
-  }
-  const boomL = poleX - 0.03 * W;
-  const boomR = poleX + 0.012 * W;
-  g.beginPath();
-  g.moveTo(boomL, poleTop + 2 * s);
-  g.lineTo(boomR, poleTop + 2 * s);
-  g.stroke();
-  g.lineWidth = 1.2 * s;
-  for (let i = 0; i < 8; i++) {
-    const ex = boomL + (boomR - boomL) * (i / 7);
-    const half = (i === 6 ? 12 : 7 - i * 0.4) * s;
-    g.beginPath();
-    g.moveTo(ex, poleTop + 2 * s - half);
-    g.lineTo(ex, poleTop + 2 * s + half);
-    g.stroke();
-  }
-  g.restore();
 }
 
 /* ------------------------------------------------------------------ *
@@ -1569,7 +1472,6 @@ export function renderDemoFacade(W = 1600, H = Math.round(1600 / DEMO_ASPECT)) {
   );
   occlusion(g, W, H);
 
-  chimney(g, rng, W, H);
   downpipe(g, L.wallL + 0.008, W, H);
   for (const w of L.upper) {
     window_(g, rng, w.x, w.y, w.w, w.h, W, H, {

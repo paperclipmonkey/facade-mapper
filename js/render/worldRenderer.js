@@ -138,6 +138,19 @@ function frameShape(world) {
 const SIM_HZ = 60;
 
 /**
+ * How far in a layer switched on while the show is stopped is shown.
+ *
+ * Stopped, show time stands still, so a scene fired then has, honestly, been
+ * on for no time at all — and most of what makes a scene is something that
+ * has to happen first: smoke rising, blood running, a hole in the wall, bats
+ * arriving. At no time at all none of it has, so firing a scene with the clock
+ * stopped looked like half its effects were missing. Shown a couple of seconds
+ * in instead, it is a picture of the scene, which is what somebody building
+ * one with the clock stopped is looking for.
+ */
+const STOPPED_PREVIEW_AGE = 2;
+
+/**
  * Catching up, when a tab joins a show that has been running for hours.
  *
  * This used to be a single frame's allowance — ten seconds of steps — and
@@ -524,12 +537,24 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
      * Only layers the scene explicitly *enables*, so re-firing a scene cannot
      * quietly wipe the ivy or the frost that some other layer has spent the
      * evening accumulating.
+     *
+     * And, moving from one scene to another, only the layers the new scene
+     * brings *in*. A layer that was already on in the scene before carries on
+     * where it was: moving between two looks that share a fog bank must not
+     * restart the fog, and an automation's house keeps what it has shown — the
+     * flowers that died in one scene stay dead in the next, the tentacles stay
+     * out of the wall — only because their clocks keep running across the
+     * change. A scene fired again over itself is the exception: that is the
+     * doorbell pressed twice, and everything in it replays.
      */
     const sceneAt = project.show?.sceneChangeAt ?? null;
-    const active = (project.scenes || []).find((s) => s.id === project.show?.activeScene);
+    const sceneList = project.scenes || [];
+    const active = sceneList.find((s) => s.id === project.show?.activeScene);
+    const before = sceneList.find((s) => s.id === project.show?.previousScene);
+    const refired = !!active && before === active;
     const sceneEnables = new Set(
       Object.entries(active?.state || {})
-        .filter(([, layerState]) => layerState?.enabled)
+        .filter(([layerId, layerState]) => layerState?.enabled && (refired || !before?.state?.[layerId]?.enabled))
         .map(([layerId]) => layerId)
     );
 
@@ -831,8 +856,6 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
           stable,
         };
 
-        ctx.p = resolveParams(effect, layer, ctx);
-
         /**
          * The moment it came on — shifted by the stagger, like `t` itself, so a
          * row of windows still comes up in sequence.
@@ -853,11 +876,29 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
          */
         const onWall = enabledWallFor(layer);
         if (inst.onWall !== onWall) {
+          // Switched on again: from scratch, state and all. Restarting only the
+          // clock replayed the run over whatever the last one left behind — the
+          // blood began from drips already at the bottom of the door.
+          if (inst.onWall !== null) {
+            inst.state = {};
+            inst.initialised = false;
+            ctx.state = inst.state;
+          }
           inst.onWall = onWall;
           inst.step = 0;
         }
         inst.enabledAt = (onWall ? (showTimeOf(onWall, time) ?? 0) : 0) - stagger;
+        // Switched on after the clock stopped: see `STOPPED_PREVIEW_AGE`.
+        if (time.running === false && onWall && onWall / 1000 > time.wall) inst.enabledAt = t - STOPPED_PREVIEW_AGE;
         ctx.age = Math.max(0, t - inst.enabledAt);
+
+        /**
+         * Resolved once `age` is known, not before it: an expression can ask
+         * how long the layer has been on — flowers wilting over the six seconds
+         * after a scene brings them up — and an effect that only draws would
+         * otherwise only ever be asked about its first instant.
+         */
+        ctx.p = resolveParams(effect, layer, ctx);
 
         if (!inst.initialised) {
           inst.initialised = true;
@@ -1057,7 +1098,11 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
           continue;
         }
         if (inst.settled < 1) {
-          inst.settled = Math.min(1, inst.settled + Math.max(0, time.dt || 0) / SETTLE_SECONDS);
+          // Real time, not show time: a fade that runs on show time never
+          // finishes while the show is stopped, and a layer that had to catch
+          // up stayed invisible until somebody pressed play.
+          const elapsed = time.frameDt ?? time.dt;
+          inst.settled = Math.min(1, inst.settled + Math.max(0, elapsed || 0) / SETTLE_SECONDS);
           if (inst.settled < 1) nextSettling.add(layer.id);
         }
         layerSettled = Math.min(layerSettled, inst.settled);

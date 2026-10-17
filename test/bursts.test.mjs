@@ -162,9 +162,9 @@ for (const preset of PRESETS) {
     want.every((b) => effects.includes(b.effect)),
     effects.join(', '));
 
-  ok(`${preset.name} gives each of them a scene and a trigger`,
-    project.scenes.length === want.length && project.triggers.length === want.length,
-    `${project.scenes.length} scenes, ${project.triggers.length} triggers`);
+  ok(`${preset.name} gives each of them a scene on its own key`,
+    project.scenes.length === want.length && want.every((b) => project.scenes.some((s) => s.hotkey === b.key)),
+    `${project.scenes.length} scenes`);
 }
 
 console.log('\n— the chain from key to burst —');
@@ -183,7 +183,7 @@ console.log('\n— the chain from key to burst —');
    * And none of them is one the editor has already taken. The first draft used
    * B for bats, which is Blackout — the editor's handler runs first and does
    * not fall through, so pressing it blacked the show out and never reached the
-   * trigger. It looked configured and did nothing.
+   * scene. It looked configured and did nothing.
    */
   const clash = added.filter((a) => RESERVED_KEYS[a.key]);
   ok('and none is a key the editor already uses', clash.length === 0,
@@ -196,9 +196,8 @@ console.log('\n— the chain from key to burst —');
   const idle = effectiveLayers(project).filter((l) => l.enabled !== false);
   ok('so nothing bursts on its own', !idle.some((l) => burstLayers.includes(l)));
 
-  // Fire the first trigger's scene.
-  const trigger = project.triggers[0];
-  const scene = project.scenes.find((s) => s.id === trigger.sceneId);
+  // Fire the first one's scene, as its key does.
+  const scene = project.scenes.find((s) => s.hotkey === added[0].key);
   project.show.activeScene = scene.id;
   project.show.sceneChangeAt = Date.now();
   project.show.fade = 0;
@@ -214,19 +213,19 @@ console.log('\n— the chain from key to burst —');
    */
   ok('and changes nothing else', Object.keys(scene.state).length === 1);
 
-  // The hold ends and the show goes back to what it was doing.
+  // Another scene, and the burst is not part of it.
   project.show.activeScene = null;
   const back = effectiveLayers(project).filter((l) => l.enabled !== false);
   ok('and it goes away again afterwards', !back.some((l) => burstLayers.includes(l)));
 }
 
-console.log('\n— firing the same trigger again replays it —');
+console.log('\n— pressing the same key again replays it —');
 
 {
   const project = createProject('t');
   project.shapes = [{ ...shape, id: 'door', tags: ['door'] }];
-  addDemoBursts(project);
-  const trigger = project.triggers[0];
+  const [burst] = addDemoBursts(project);
+  const trigger = { sceneId: project.scenes.find((s) => s.hotkey === burst.key).id };
 
   activateScene(project, trigger.sceneId, { fade: 0 });
   const first = project.show.sceneChangeAt;

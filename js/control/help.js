@@ -165,7 +165,7 @@ export const HELP_SECTIONS = [
 </p>
 <p>
   When neither is possible, tell the app the shape of the wall. Press <kbd>W</kbd> or pick
-  <strong>Square up</strong> from the toolbar, drag the four handles onto something you know is
+  <strong>Square up</strong> from the toolbar on the Setup tab, drag the four handles onto something you know is
   rectangular — a window, the door, a run of brick courses — and type its real width and height into
   Setup. Any units, as long as they match; only the ratio is used. The grid ruled inside the quad is
   what to judge by: get the marking right and its lines lie along the courses.
@@ -346,29 +346,18 @@ export const HELP_SECTIONS = [
     id: 'react',
     label: 'Make it react',
     html: `
-<h2>Triggers</h2>
+<h2>Automation</h2>
 <p>
-  A trigger jumps to a scene, optionally plays a sound, holds it for a few seconds, then puts back
-  whatever was playing. That last part is what makes it a scare rather than a scene change: the
-  ambient loop resumes on its own and the next group gets the same surprise.
-</p>
-<table>
-  <tr><th>Motion</th><td>Something moves in a region of the camera view.</td></tr>
-  <tr><th>Key</th><td>You press a key.</td></tr>
-  <tr><th>Timer</th><td>On an interval, with randomness so it does not become predictable.</td></tr>
-  <tr><th>Manual</th><td>Only when you press the button.</td></tr>
-</table>
-<h3>Aiming a motion trigger</h3>
-<p>
-  The camera is pointed at a building you are actively projecting onto, so the fastest-moving thing
-  in frame is your own show. <strong>Watch ground your projectors do not light</strong> — the path,
-  the drive, the gate. The background model adapts continuously, so a parked car stops registering
-  within seconds, and a change covering nearly the whole region is treated as a light switching on
-  rather than a person.
+  The <strong>Automation</strong> panel moves the show through <strong>steps</strong>. A step puts a
+  scene on the house, words on the wall, or both — words alone keep the house as it is — and can
+  play a sound or ring the remote indoors. From each step, <strong>YES</strong>, <strong>NO</strong>
+  or <strong>DOOR</strong> leads to another step, and so can a timer.
 </p>
 <p>
-  The Triggers panel shows a live reading of how much of the region is moving and the level it has
-  to beat. That is the only sane way to aim one.
+  The buttons are Matter buttons by way of Home Assistant, the phone remote, or the panel's own
+  buttons. <strong>Build the example</strong> makes a whole trick-or-treat evening to start from;
+  <strong>Open the editor</strong> shows it as a diagram, and clicking a step edits it.
+  <strong>↺ Start again</strong> goes back to the first step at once.
 </p>
 <p class="muted">
   Sounds are imported into the media library like anything else and play from this tab only —
@@ -397,8 +386,8 @@ export const HELP_SECTIONS = [
   lose. A scene pressed from the phone does not ask, because nobody is at the laptop to answer.
 </p>
 <p>
-  Triggers and the playlist deliberately do <em>not</em> load: an evening of scares must not slowly
-  rewrite the show with whatever the last one happened to look like.
+  The automation and the playlist deliberately do <em>not</em> load: an evening of scares must not
+  slowly rewrite the show with whatever the last one happened to look like.
 </p>
 
 <h2>Running it every night</h2>
@@ -438,7 +427,7 @@ export const HELP_SECTIONS = [
 <h2>The remote</h2>
 <p>
   <code>remote.html</code> on a phone is the show in your hand: blackout big enough to hit without
-  looking, one tap per scene, a button per trigger with its cooldown counting down, transport and
+  looking, one tap per scene and <strong>↩ Back</strong> to the one before, the automation's buttons, transport and
   master. Behind a disclosure it also carries effects on and off, and per-projector blackout with a
   <strong>Flash</strong> button — which is the only practical way to tell three projectors apart
   from the end of the path.
@@ -490,9 +479,9 @@ export const HELP_SECTIONS = [
 <h2>What does not cross</h2>
 <p>
   Media stays in the browser it was imported to, so a video effect on a second computer draws
-  nothing and says so. The camera belongs to the tab that opened it. Trigger sounds play from this
+  nothing and says so. The camera belongs to the tab that opened it. Step sounds play from this
   tab only. And <strong>leave this tab visible</strong> — a browser stops rendering a hidden tab,
-  and this is what advances the playlist and watches for motion. Buttons on a remote work either
+  and this is what advances the playlist and runs the automation. Buttons on a remote work either
   way; it is the show's own clockwork that stops.
 </p>
 <p class="muted">
@@ -526,16 +515,15 @@ export const HELP_SECTIONS = [
 </table>
 <p>In a projector tab: <kbd>F</kbd> fullscreen, <kbd>I</kbd> status, <kbd>T</kbd> cycle test patterns.</p>
 <p class="muted">
-  Any other single key can be bound to a trigger — the ones above and 1–9 are taken, and the trigger
-  inspector says so if you pick one. Anything that can type can press a key, including a doorbell
-  wired to a USB button.
+  Scenes have keys: 1–9 for looks, and a letter for a one-shot. Anything that can type can press a
+  key, including a doorbell wired to a USB button.
 </p>
 <p>
   Each demo house ships with one to three one-shots on <kbd>X</kbd>, <kbd>G</kbd> and <kbd>F</kbd>,
   chosen to suit the night it is: bats out of the door on Halloween, a rocket over the roof and
   confetti out of the door on New Year's Eve, a catherine wheel and a collapsing log on Bonfire
-  Night. Each is a bypassed layer, a scene that switches only that layer on, and a key trigger
-  pointed at the scene — copy the pattern for your own.
+  Night. Each is a bypassed layer and a scene on its own key that switches only that layer on —
+  copy the pattern for your own.
 </p>
 `,
   },

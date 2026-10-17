@@ -58,8 +58,7 @@
           <button type="button" class="panel-tab" data-panel="shapes" role="tab">Shapes</button>
           <button type="button" class="panel-tab" data-panel="layers" role="tab">Effects</button>
           <button type="button" class="panel-tab" data-panel="scenes" role="tab">Scenes</button>
-          <button type="button" class="panel-tab" data-panel="triggers" role="tab">Triggers</button>
-          <button type="button" class="panel-tab" data-panel="game" role="tab">Game</button>
+          <button type="button" class="panel-tab" data-panel="game" role="tab">Automation</button>
           <button type="button" class="panel-tab" data-panel="look" role="tab">Look</button>
           <button type="button" class="panel-tab" data-panel="media" role="tab">Media</button>
           <button type="button" class="panel-tab" data-panel="code" role="tab">Code</button>
@@ -111,6 +110,7 @@
           <section class="panel-page" data-page="scenes">
             <div class="panel-actions">
               <button type="button" class="btn small primary" id="btnCaptureScene">Save current as scene</button>
+              <button type="button" class="btn small danger" id="btnClearScenes">Delete all</button>
             </div>
             <div id="sceneList" class="list"></div>
             <h3 class="panel-heading">Unattended playlist</h3>
@@ -121,20 +121,6 @@
               <label class="inline-check"><input type="checkbox" id="playlistShuffle" /> Shuffle</label>
             </div>
             <button type="button" class="btn" id="btnRunShow">Run show</button>
-          </section>
-
-          <section class="panel-page" data-page="triggers">
-            <p class="panel-note">
-              A trigger jumps to a scene, holds it for a few seconds and then puts back whatever was
-              playing. Point <strong>motion</strong> at the path and the house reacts when somebody
-              walks up it.
-            </p>
-            <div class="panel-actions">
-              <button type="button" class="btn small primary" id="btnAddTrigger">Add trigger</button>
-              <button type="button" class="btn small danger" id="btnDeleteTrigger">Delete</button>
-            </div>
-            <div id="triggerList" class="list"></div>
-            <div id="motionStatus" class="panel-note"></div>
           </section>
 
           <section class="panel-page" data-page="game">
@@ -159,7 +145,7 @@
             <p class="panel-note">
               Files stay on this machine, stored in the browser. Every projector tab reads video and
               images from the same local store, so nothing is uploaded and nothing is re-encoded.
-              Sounds play from this tab only — pick them from a trigger.
+              Sounds play from this tab only — pick one for a step in the Automation editor.
             </p>
             <div id="mediaList" class="list"></div>
             <div id="storageInfo" class="panel-note"></div>
@@ -317,6 +303,7 @@
             <h3 class="panel-heading">Storage</h3>
             <div id="storageDetail" class="panel-note"></div>
             <div class="panel-actions">
+              <button type="button" class="btn small danger" id="btnClearShow" title="Remove every effect, scene and the automation; keep the traced house, projectors, photo and media">Clear everything but the house</button>
               <button type="button" class="btn small danger" id="btnResetProject">Start a new show</button>
             </div>
           </section>

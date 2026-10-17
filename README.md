@@ -102,10 +102,11 @@ is for.
   after everything, by every projector identically, in linear light. This is the
   difference between light that appears to fall on brickwork and shapes that
   look stuck to it.
-- **It reacts.** Point a motion trigger at the path and the house does something
-  when somebody walks up it.
+- **It reacts.** Buttons on the path — Matter buttons by way of Home Assistant,
+  or a phone — move the show through steps you design: a question, a scare,
+  another question, the front door. See [automation](docs/automation.md).
 - **Run it from your pocket.** `node server.mjs` puts a phone or a second laptop
-  on the same show — big scene buttons, blackout and triggers in your hand,
+  on the same show — big scene buttons, blackout and the automation in your hand,
   where the show is actually seen. The same link lets a second computer drive
   projectors of its own, on a clock shared with the first, so two machines paint
   the same frame of the same animation rather than two.
@@ -179,7 +180,8 @@ different order, it is work you will lose.
 | --- | --- |
 | [Setting up a house](docs/setting-up.md) | Cameras, projector tabs, alignment, walls that aren't flat, overlapping projectors, running it every night |
 | [More than one device](docs/multi-device.md) | The phone remote, a second computer driving projectors, and the shared clock |
-| [The effect library](docs/effects.md) | Targeting, paths, the look, modulation, triggers, and how the effects are built |
+| [The effect library](docs/effects.md) | Targeting, paths, the look, modulation, and how the effects are built |
+| [Automation](docs/automation.md) | Steps, buttons and timers: Matter buttons via Home Assistant driving the show, and Home Assistant hearing back |
 | [The effect gallery](docs/gallery.md) | Every effect, one frame each, on the demo house |
 | [Writing your own effects](docs/writing-effects.md) | The `draw` contract, the `fx` helpers, and the three rules |
 | [Performance](docs/performance.md) | The budget, the benchmark, and the traps that cost more than a frame |

@@ -22,7 +22,7 @@ import {
   createProject,
   createLayer,
   createShape,
-  createTrigger,
+  createStep,
   createScene,
   PROJECT_VERSION,
   resolveTargets,
@@ -49,7 +49,7 @@ console.log('— a project that has been saved and loaded again —');
     id: 'w1', name: 'Window 1', tags: ['window'],
   }));
   original.layers.push(createLayer('fill', { id: 'l1', targets: ['w1'], params: { level: 0.8 } }));
-  original.triggers.push(createTrigger({ id: 't1' }));
+  original.game.steps.push(createStep({ id: 'step1', name: 'Hello', on: { yes: 'step1' } }));
   original.scenes.push(createScene({ id: 's1', state: { l1: { enabled: true, opacity: 1, params: {} } } }));
 
   const back = migrated(JSON.parse(JSON.stringify(original)));
@@ -57,7 +57,7 @@ console.log('— a project that has been saved and loaded again —');
     back.name === original.name
       && back.shapes.length === 1
       && back.layers[0].params.level === 0.8
-      && back.triggers.length === 1);
+      && back.game.steps.length === 1 && back.game.steps[0].on.yes === 'step1');
   ok('and stamps the current version', back.version === PROJECT_VERSION);
   ok('a show left running does not restart itself on load', back.show.running === false);
 }
@@ -75,12 +75,12 @@ console.log('\n— a file with holes in it —');
     Object.keys(createProject()).every((key) => key in migrated({})));
 
   const wrong = migrated({
-    projectors: 'nope', shapes: null, layers: 42, scenes: {}, triggers: 'x',
+    projectors: 'nope', shapes: null, layers: 42, scenes: {}, game: { steps: 'x' },
     media: 1, userEffects: false, settings: 'bad', show: null, schedule: [],
   });
   ok('every list that is not a list becomes an empty one',
     Array.isArray(wrong.shapes) && Array.isArray(wrong.layers)
-      && Array.isArray(wrong.scenes) && Array.isArray(wrong.triggers)
+      && Array.isArray(wrong.scenes) && Array.isArray(wrong.game.steps)
       && Array.isArray(wrong.media) && Array.isArray(wrong.userEffects));
   ok('and there is always at least one projector to render into',
     wrong.projectors.length === 1 && wrong.projectors[0].calibration.mode === 'none');
@@ -139,34 +139,6 @@ console.log('\n— the layer with no effect, and the half-configured hook —');
   ok('and one that named an effect keeps it', project.layers[3].effect === 'snow');
   ok('with its parameters and bindings present even when the file had neither',
     project.layers.every((l) => l.params && l.bindings));
-}
-
-{
-  /**
-   * A trigger saved with one hook configured used to carry only that one: the
-   * spread replaces `http` wholesale rather than filling the gap. The
-   * inspector rebuilds the missing half when you open it, which means the hole
-   * is invisible right up until somebody fires the trigger without having
-   * opened it.
-   */
-  const project = migrated({
-    triggers: [
-      { id: 't1', http: { before: { url: 'http://wled.local/on' } } },
-      { id: 't2', http: {} },
-      { id: 't3' },
-    ],
-  });
-  for (const trigger of project.triggers) {
-    ok(`${trigger.id} has both hooks`,
-      typeof trigger.http?.before?.url === 'string' && typeof trigger.http?.after?.url === 'string',
-      JSON.stringify(trigger.http));
-  }
-  ok('the half that was configured is the half that survives',
-    project.triggers[0].http.before.url === 'http://wled.local/on');
-  ok('and the half that was not gets the defaults',
-    project.triggers[0].http.after.method === 'GET' && project.triggers[0].http.after.mode === 'no-cors');
-  ok('the watch region is filled in the same way',
-    project.triggers[1].region.w === 0.5 && project.triggers[1].region.h === 0.45);
 }
 
 /* ------------------------------------------------------------------ *

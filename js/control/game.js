@@ -1,45 +1,41 @@
 /**
- * The dare game runtime.
+ * The automation runtime.
  *
- * Walks the table in core/game.js. A press arrives — from a Matter button by
- * way of Home Assistant, from the remote, from the panel's test buttons, all
- * the same message — and is either dropped for a reason or turned into an
- * event that moves the game along. Time moves it too: questions time out,
- * scares end, the house resets itself for the next group.
+ * Walks the steps in the project. A press arrives — from a Matter button by
+ * way of Home Assistant, from the remote, from the panel's buttons, all the
+ * same message — and is either dropped for a reason or moves the show to the
+ * step that button leads to. A step's timer moves it on too.
  *
- * Only the control tab runs this, like the trigger runtime, and for the same
- * reason: one authority over what happens next. It touches nothing directly.
- * Everything it does to the show goes out through `io`, which is what lets the
- * tests drive a whole evening of visitors with a clock they move by hand.
+ * Only the control tab runs this: one authority over what happens next. It
+ * touches nothing directly. Everything it does to the show goes out through
+ * `io`, which is what lets the tests drive a whole evening with a clock they
+ * move by hand.
  *
  * ── Presses are the hard part ──────────────────────────────────────────────
  *
  * Buttons on a path are pressed by groups, by mashing, by toddlers holding them
  * down, and twice by the same child because nothing seemed to happen. Each rule
  * in `press` is one of those, and each drops rather than queues: a queued press
- * answers a question nobody has read yet, and a group mashing YES would climb
- * from the first rung to the fourth without seeing the two in between.
+ * answers a question nobody has read yet.
  */
 
-import { STATES, transitionFor, sceneSlot, cueSlot, roleOf, topLevel } from '../core/game.js';
+import { stepById, startStep, nextFor, roleOf, timerSeconds } from '../core/game.js';
 
 /** Press ids remembered for de-duplication. A broker redelivers recent ones. */
 const SEEN_LIMIT = 64;
 /** Presses kept for the panel's log and for learning which button is which. */
 const LOG_LIMIT = 16;
-/** Guard against a chain of zero-length timers looping for ever. */
-const MAX_HOPS = 8;
+/** Guard against a chain of timers looping for ever within one tick. */
+const MAX_HOPS = 16;
 
 /**
  * @param {object} options
- * @param {() => object} options.getGame  The current game config. Read on every
- *   use, so an edit in the panel applies to the group already playing.
- * @param {object} options.io  What the game does to the show:
- *   - `scene(sceneId, { state, level })` put a scene up
- *   - `cue(triggerId, { state, level })` play a trigger; returns its hold in
- *     seconds, or null if it could not be played
- *   - `cueEnd(triggerId)` the trigger's hold is over (its `after` hook)
- *   - `release()` hand the stage back to whatever was on before the game
+ * @param {() => object} options.getGame  The current automation. Read on every
+ *   use, so an edit in the panel applies to the group already there.
+ * @param {object} options.io  What the automation does to the show:
+ *   - `scene(sceneId, step)` put a scene up
+ *   - `caption(text | null)` write words over whatever is up, or stop
+ *   - `sound(mediaId, step)` play a sound
  *   - `changed(snapshot)` something moved; repaint and publish
  * @param {() => number} options.now  Local milliseconds, for every duration.
  * @param {() => number} options.stamp  Link milliseconds, which is what a press's
@@ -48,93 +44,54 @@ const MAX_HOPS = 8;
 export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), stamp } = {}) {
   const linkStamp = stamp || now;
 
-  let state = 'attract';
-  let level = 0;
+  /** The step the show is on, by id. Null until there are steps. */
+  let current = null;
   let enteredAt = now();
   let deadline = null;
-  /** The trigger a cue state is playing, so its `after` hook fires on the way out. */
-  let playing = null;
-  /** First answer inside the decision window, waiting to see if it has company. */
-  let pending = null;
-  /** The last transition taken, for the diagram to light up. */
+  /** The last move made, for the diagram to light up. */
   let last = null;
-  /** Whether the game has put anything on the stage that needs handing back. */
-  let holding = false;
 
   const seen = [];
   const seenSet = new Set();
   const log = [];
 
   const game = () => getGame() || {};
-  const timing = () => game().timing || {};
   const ms = (key, fallback = 0) => {
-    const value = Number(timing()[key]);
+    const value = Number(game().timing?.[key]);
     return Number.isFinite(value) ? Math.max(0, value) : fallback;
   };
 
-  /* ------------------------------------------------------------------ *
-   * Moving between states
-   * ------------------------------------------------------------------ */
-
-  function leave() {
-    if (playing) {
-      io.cueEnd?.(playing);
-      playing = null;
-    }
-    pending = null;
+  /** The step the show is on, falling back to the start if that one has gone. */
+  function step() {
+    return stepById(game(), current) || startStep(game());
   }
 
-  function enter(next) {
-    state = next;
-    enteredAt = now();
+  /**
+   * Put up what a step shows, and start its clock — from `at`, which for a
+   * timer is when it was due rather than when it was noticed, so a tab that
+   * missed a few seconds catches up through every timer it slept through.
+   */
+  function enter(next, at = now()) {
+    current = next?.id ?? null;
+    enteredAt = at;
     deadline = null;
-    const def = STATES[next];
-    const g = game();
-
-    if (next === 'attract' || next === 'cooldown') {
-      if (holding) io.release?.();
-      holding = false;
-      if (next === 'attract') level = 0;
-    }
-
-    if (def.cue) {
-      const id = cueSlot(g, next, level);
-      const hold = id ? io.cue?.(id, { state: next, level }) : null;
-      if (id && hold !== null && hold !== undefined) {
-        playing = id;
-        holding = true;
-      }
-      // A rung with nothing to play still takes time, so the ladder keeps its
-      // rhythm and the next question does not land on top of the last one.
-      const seconds = Number(hold) > 0 ? Number(hold) : ms('scareHold', 5);
-      deadline = enteredAt + seconds * 1000;
-      return;
-    }
-
-    const scene = sceneSlot(g, next, level);
-    if (scene && next !== 'cooldown') {
-      io.scene?.(scene, { state: next, level });
-      // The attract prompt is the house's idle look, not the game holding the
-      // stage — a playlist is free to move on from it.
-      if (next !== 'attract') holding = true;
-    }
-    if (def.timer) {
-      const seconds = ms(def.timer, 0);
-      deadline = seconds > 0 ? enteredAt + seconds * 1000 : null;
-    }
+    if (!next) return;
+    if (next.sceneId) io.scene?.(next.sceneId, next);
+    io.caption?.(String(next.words || '').trim() ? String(next.words) : null);
+    if (next.sound) io.sound?.(next.sound, next);
+    const seconds = timerSeconds(next);
+    if (seconds) deadline = enteredAt + seconds * 1000;
   }
 
-  /** Take the transition `event` leads to from here, if there is one. */
-  function dispatch(event) {
-    const t = transitionFor(state, event, game(), level);
-    if (!t) return null;
-    const from = state;
-    leave();
-    if (t.do === 'start') level = 1;
-    if (t.do === 'next') level += 1;
-    last = { from, on: event, to: t.to, at: now() };
-    enter(t.to);
-    return t;
+  /** Follow `event` out of the current step, if it leads anywhere. */
+  function move(event, at = now()) {
+    const g = game();
+    const from = step();
+    const to = nextFor(g, from, event);
+    if (!to) return false;
+    last = { from: from.id, on: event, to, at };
+    enter(stepById(g, to), at);
+    return true;
   }
 
   /* ------------------------------------------------------------------ *
@@ -158,7 +115,7 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
    * @param {object} press
    * @param {string} press.button  A mapped button id, or a role name directly.
    * @param {'press'|'long'} [press.kind]  `long` is the button still held down
-   *   after the press itself has already arrived — Matter's `long_press`.
+   *   after the press itself arrived; the press has already counted.
    * @param {string} [press.id]  Unique per physical press, for de-duplication.
    * @param {number} [press.at]  When it was pressed, in link milliseconds.
    * @returns {string} What became of it, which is also what the log shows.
@@ -173,7 +130,7 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
       return result;
     };
 
-    if (!g.enabled) return finish('game off');
+    if (!g.enabled) return finish('off');
 
     // A broker at QoS 1 may deliver a press twice after a reconnect, and the
     // second copy would answer the *next* question.
@@ -183,7 +140,7 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
     }
 
     // And a restarted bridge must not replay the last three minutes into a
-    // fresh game.
+    // fresh show.
     if (at !== null && at !== undefined && Number.isFinite(Number(at))) {
       if (linkStamp() - Number(at) > ms('staleMs', 2000)) return finish('stale');
     }
@@ -191,40 +148,18 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
     const role = roleOf(g, button);
     entry.role = role;
     if (!role) return finish('unmapped');
+    // Held down: the press it belongs to has already been acted on.
+    if (kind === 'long') return finish('held');
 
-    // A long press arrives *after* the press it belongs to, which has already
-    // been acted on. Only NO means anything more for being held.
-    const event = kind === 'long' ? (role === 'no' ? 'long-no' : null) : role;
-    if (!event) return finish('held');
+    if (!nextFor(g, step(), role)) return finish('not now');
 
-    if (!transitionFor(state, event, g, level)) return finish('not now');
+    // The thumb still on YES from the last question must not answer this one.
+    if (now() - enteredAt < ms('armMs', 400)) return finish('too soon');
 
-    // TREAT is an adult who means it, once; it skips both windows.
-    if (event === 'treat') {
-      dispatch(event);
-      return finish(`→ ${state}`);
-    }
-
-    if (STATES[state].armed && now() - enteredAt < ms('armMs', 400)) return finish('not armed');
-
-    // The first answer opens a short window. If the other answer arrives in
-    // it, two children disagreed, and the house says so rather than picking
-    // whichever packet happened to win.
-    const answers = event === 'yes' || event === 'no';
-    const window = ms('windowMs', 150);
-    if (answers && window > 0 && transitionFor(state, 'both', g, level)) {
-      if (pending) {
-        if (pending.event === event) return finish('same answer');
-        pending = null;
-        dispatch('both');
-        return finish(`both → ${state}`);
-      }
-      pending = { event, until: now() + window };
-      return finish('deciding');
-    }
-
-    dispatch(event);
-    return finish(`→ ${state}`);
+    // The first answer wins. Two children pressing at once is one of them
+    // being a little quicker, and the house answers whichever it heard.
+    move(role);
+    return finish(`→ ${step()?.name || ''}`);
   }
 
   /* ------------------------------------------------------------------ *
@@ -232,19 +167,14 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
    * ------------------------------------------------------------------ */
 
   /**
-   * Let time move the game. Cheap enough to call every frame; the control tab
-   * also arms a timer for `nextDeadline`, because a hidden tab stops drawing
-   * frames and a scare still has to end.
+   * Let time move the show on. Cheap enough to call every frame; the control
+   * tab also arms a timer for `nextDeadline`, because a hidden tab stops
+   * drawing frames and a step still has to end.
    */
   function tick() {
     let changed = false;
-    if (pending && now() >= pending.until) {
-      const { event } = pending;
-      pending = null;
-      if (dispatch(event)) changed = true;
-    }
     for (let hop = 0; hop < MAX_HOPS && deadline !== null && now() >= deadline; hop++) {
-      if (!dispatch('timeout')) {
+      if (!move('timeout', deadline)) {
         deadline = null;
         break;
       }
@@ -254,35 +184,45 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
     return changed;
   }
 
-  /** Back to the start, from anywhere: the group walked off, or it went wrong. */
+  /**
+   * Back to the start, from anywhere: the group walked off, or it went wrong.
+   * Switched off, it only takes its words down and leaves the house alone.
+   */
   function reset() {
-    const from = state;
-    leave();
-    last = { from, on: 'reset', to: 'attract', at: now() };
-    enter('attract');
+    const from = current;
+    const start = startStep(game());
+    last = start ? { from, on: 'reset', to: start.id, at: now() } : null;
+    if (game().enabled) {
+      enter(start);
+    } else {
+      current = start?.id ?? null;
+      enteredAt = now();
+      deadline = null;
+      io.caption?.(null);
+    }
     io.changed?.(snapshot());
   }
 
   function nextDeadline() {
-    const times = [deadline, pending?.until].filter((t) => t !== null && t !== undefined);
-    return times.length ? Math.min(...times) : null;
+    return deadline;
   }
 
   /** Everything the panel, the remote and the diagram need, and nothing live. */
   function snapshot() {
     const t = now();
-    const next = nextDeadline();
+    const g = game();
+    const here = step();
+    const start = startStep(g);
     return {
-      state,
-      level,
-      of: topLevel(game()),
-      zone: STATES[state].zone,
-      active: state !== 'attract',
-      enabled: !!game().enabled,
+      enabled: !!g.enabled,
+      step: here?.id ?? null,
+      name: here?.name ?? '',
+      words: here?.words ?? '',
+      alert: !!here?.alert,
+      atStart: !here || here === start,
       since: (t - enteredAt) / 1000,
       remaining: deadline !== null ? Math.max(0, (deadline - t) / 1000) : null,
-      deciding: pending ? pending.event : null,
-      next: next !== null ? Math.max(0, next - t) : null,
+      next: deadline !== null ? Math.max(0, deadline - t) : null,
       last: last ? { from: last.from, on: last.on, to: last.to, ago: (t - last.at) / 1000 } : null,
       log: log.map((e) => ({ ...e, ago: (t - e.at) / 1000 })),
     };
@@ -294,15 +234,14 @@ export function createGameRuntime({ getGame, io = {}, now = () => Date.now(), st
     reset,
     snapshot,
     nextDeadline,
-    get state() {
-      return state;
+    /** The step the show is on, by id. */
+    get step() {
+      return step()?.id ?? null;
     },
-    get level() {
-      return level;
-    },
-    /** Playing, rather than idling in Attract: playlist and triggers stand aside. */
+    /** Away from the start step: the playlist stands aside. */
     get active() {
-      return state !== 'attract';
+      const here = step();
+      return !!here && here !== startStep(game());
     },
   };
 }
