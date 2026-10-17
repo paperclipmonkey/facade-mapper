@@ -171,7 +171,7 @@ function buildSteps(app) {
       done: shapes.length > 0,
       // The reason this step is fifth and not first.
       why: demo
-        ? 'Already done on the demo — five windows, a door, the roofline and the chimney, each '
+        ? 'Already done on the demo — five windows, a door and the roofline, each '
           + 'tagged. Draw another with Area or Path to see how it goes, or drag a corner of one and '
           + 'watch the effect follow it.'
         : 'Now, and not before — everything you draw is stored in camera coordinates, so tracing '

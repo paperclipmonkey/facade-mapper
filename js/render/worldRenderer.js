@@ -138,6 +138,19 @@ function frameShape(world) {
 const SIM_HZ = 60;
 
 /**
+ * How far in a layer switched on while the show is stopped is shown.
+ *
+ * Stopped, show time stands still, so a scene fired then has, honestly, been
+ * on for no time at all — and most of what makes a scene is something that
+ * has to happen first: smoke rising, blood running, a hole in the wall, bats
+ * arriving. At no time at all none of it has, so firing a scene with the clock
+ * stopped looked like half its effects were missing. Shown a couple of seconds
+ * in instead, it is a picture of the scene, which is what somebody building
+ * one with the clock stopped is looking for.
+ */
+const STOPPED_PREVIEW_AGE = 2;
+
+/**
  * Catching up, when a tab joins a show that has been running for hours.
  *
  * This used to be a single frame's allowance — ten seconds of steps — and
@@ -875,6 +888,8 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
           inst.step = 0;
         }
         inst.enabledAt = (onWall ? (showTimeOf(onWall, time) ?? 0) : 0) - stagger;
+        // Switched on after the clock stopped: see `STOPPED_PREVIEW_AGE`.
+        if (time.running === false && onWall && onWall / 1000 > time.wall) inst.enabledAt = t - STOPPED_PREVIEW_AGE;
         ctx.age = Math.max(0, t - inst.enabledAt);
 
         /**
@@ -1083,7 +1098,11 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
           continue;
         }
         if (inst.settled < 1) {
-          inst.settled = Math.min(1, inst.settled + Math.max(0, time.dt || 0) / SETTLE_SECONDS);
+          // Real time, not show time: a fade that runs on show time never
+          // finishes while the show is stopped, and a layer that had to catch
+          // up stayed invisible until somebody pressed play.
+          const elapsed = time.frameDt ?? time.dt;
+          inst.settled = Math.min(1, inst.settled + Math.max(0, elapsed || 0) / SETTLE_SECONDS);
           if (inst.settled < 1) nextSettling.add(layer.id);
         }
         layerSettled = Math.min(layerSettled, inst.settled);

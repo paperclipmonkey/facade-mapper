@@ -147,7 +147,11 @@ console.log('\n— tags that have to exist —');
     const unknown = [...wanted].filter((t) => !offered.has(t));
     ok(`${preset.id} targets only tags the picker offers`, unknown.length === 0, unknown.join(', '));
 
-    const untraced = [...wanted].filter((t) => !traced.has(t));
+    // A layer marked as needing a tag is left out where the tag is missing —
+    // the sign on a chimney, on a demo house that has none — so only the
+    // layers that will actually be added have to land on something.
+    const placed = new Set(preset.build().filter((l) => !l.__needsTag || traced.has(l.__needsTag)).flatMap((l) => l.targetTags || []));
+    const untraced = [...placed].filter((t) => !traced.has(t));
     ok(`${preset.id} targets only tags the demo house has`, untraced.length === 0, untraced.join(', '));
   }
 

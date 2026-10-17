@@ -114,7 +114,7 @@ import { scheduleWantsOn, describeSchedule } from './schedule.js';
 import { el, clear, toast, paramRow } from './ui.js';
 import { HELP_SECTIONS, EFFECT_TEMPLATE } from './help.js';
 import { PRESETS, applyPreset, addDemoBursts } from './presets.js';
-import { demoShapes, demoWorldQuad, demoFacadeBlob, DEMO_ASPECT } from './demoHouse.js';
+import { demoShapes, demoWorldQuad, demoFacadeBlob, DEMO_ASPECT, DEMO_VERSION } from './demoHouse.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -719,6 +719,18 @@ app.estimateQuota = estimateQuota;
  * ------------------------------------------------------------------ */
 
 function refreshPanels() {
+  // Rebuilding a list can collapse the page under it for an instant, which
+  // drops the scroll back to the top; put it back where it was.
+  const body = document.querySelector('.panel-left .panel-body');
+  const top = body?.scrollTop ?? 0;
+  try {
+    renderAllPanels();
+  } finally {
+    if (body) body.scrollTop = top;
+  }
+}
+
+function renderAllPanels() {
   renderSetupGuide($('setupGuide'), app);
   renderProjectorList($('projectorList'), app);
   renderShapeList($('shapeList'), app, $('shapeFilter').value);
@@ -740,8 +752,23 @@ function refreshPanels() {
   $('stageEmpty').hidden = !!(app.project.shapes.length || camera.isRunning() || stillImage);
 }
 
+/**
+ * What the inspector last showed, so a rebuild of the same thing keeps its
+ * place. Every tick of a checkbox in it rebuilds it from scratch, and a fresh
+ * build starts at the top — so ticking the ninth shape an effect is on
+ * scrolled the list you were working down out of sight. Something else
+ * selected still starts at the top, which is where its name is.
+ */
+let inspectorShowing = '';
+
 function refreshInspector() {
-  renderInspector($('inspector'), app);
+  const node = $('inspector');
+  const { type, id, ids } = app.selection || {};
+  const showing = `${type}:${id}:${(ids || []).join(',')}`;
+  const top = showing === inspectorShowing ? node.scrollTop : 0;
+  inspectorShowing = showing;
+  renderInspector(node, app);
+  node.scrollTop = top;
 }
 
 function switchPanel(name) {
@@ -2368,7 +2395,23 @@ async function captureStill() {
  */
 let stillUrl = null;
 
+/**
+ * A demo show saved before the demo house last changed: repaint its backdrop
+ * and drop the shapes for what is no longer there. The house is drawn in code
+ * but saved as a picture, so without this an old demo keeps a chimney the
+ * code no longer has.
+ */
+async function refreshDemoHouse() {
+  const settings = app.project.settings;
+  if (!settings?.isDemo || (settings.demoVersion || 1) >= DEMO_VERSION) return;
+  app.project.shapes = (app.project.shapes || []).filter((shape) => !(shape.tags || []).includes('chimney'));
+  settings.demoVersion = DEMO_VERSION;
+  await putBlob(`still/${app.project.id}`, await demoFacadeBlob());
+  app.commit();
+}
+
 async function loadStill() {
+  await refreshDemoHouse();
   const release = () => {
     if (stillUrl) URL.revokeObjectURL(stillUrl);
     stillUrl = null;
@@ -2467,6 +2510,7 @@ app.loadDemoHouse = async (presetId = 'halloween') => {
   project.worldAspect = DEMO_ASPECT;
   project.shapes = demoShapes();
   project.settings.isDemo = true;
+  project.settings.demoVersion = DEMO_VERSION;
   project.settings.demoPreset = presetId;
   project.settings.hasStill = true;
 

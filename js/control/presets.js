@@ -790,6 +790,7 @@ const CYBERPUNK = () => [
   layer('neon-sign', {
     name: 'Sign on the chimney',
     tags: ['chimney'],
+    needsTag: 'chimney',
     params: {
       text: '電脳', orientation: 'down', color: '#ff2a6d', core: '#fff0f6', size: 0.78,
       weight: '700', spacing: 1.08, frame: 0.5, frameColor: '#05d9e8', flicker: 0.5,
@@ -1034,7 +1035,7 @@ export const PRESETS = [
     name: 'Night city',
     description:
       'Neon tube round every opening, a Japanese sign on the chimney, a holographic advert over the brickwork, code in the windows and rain through the lot.',
-    tagsUsed: ['window', 'door', 'chimney', 'wall'],
+    tagsUsed: ['window', 'door', 'wall'],
     grade: 'saturated',
     build: CYBERPUNK,
   },

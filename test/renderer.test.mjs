@@ -121,6 +121,7 @@ function openTab(project) {
   return {
     clock,
     renderer,
+    g,
     /** Render one frame at whatever the clock now says. */
     frame() {
       const time = clock.tick();
@@ -431,6 +432,54 @@ console.log('\n— the transport —');
     carried > 4.5, `${carried.toFixed(2)} s old after the change`);
   ok('but the same scene fired again still replays it',
     refired < 1.5, `${refired.toFixed(2)} s old after the re-fire`);
+}
+
+{
+  /**
+   * A layer switched on while the show is stopped is shown a little way in.
+   *
+   * Show time stands still while stopped, so the layer had honestly been on
+   * for no time at all, and anything that has to happen first — smoke rising,
+   * blood running — had not: half a scene fired with the clock stopped was
+   * simply missing. It is a picture of the scene that is wanted, and a still
+   * one: the simulation runs to the preview and then stays put.
+   *
+   * Steps that cost something, so getting there takes more than one frame's
+   * allowance — which is what sends a layer through the catch-up fade.
+   */
+  const probe = watch('shoal', 1);
+  const project = makeShow(1);
+  const tab = openTab(project);
+  tab.run(1, 60);
+  tab.clock.pause();
+  tab.run(0.5, 60);
+  project.layers[0].onAt = Date.now();   // switched on with the clock stopped
+  tab.run(0.5, 60);
+  const shown = probe.ages.get('L0');
+  const steps = probe.steps.get('L0');
+  tab.run(2, 60);
+  const later = probe.ages.get('L0');
+  const stepsLater = probe.steps.get('L0');
+  probe.restore();
+  // What it is composited at, once it has caught up: a layer that had to
+  // catch up fades back in, and that fade used to run on show time — which,
+  // stopped, does not move, so it stayed faded out for good.
+  // The fade is a third of a second of *real* time, which the faked wall clock
+  // above does not move; so wait one out.
+  const until = performance.now() + 400;
+  while (performance.now() < until);
+  const alphas = [];
+  const blit = tab.g.drawImage;
+  tab.g.drawImage = function (...args) { alphas.push(this.globalAlpha); return blit.apply(this, args); };
+  tab.run(0.1, 60);
+  tab.g.drawImage = blit;
+
+  ok('switched on with the clock stopped, it is shown a couple of seconds in',
+    Math.abs(shown - 2) < 0.05, `${shown.toFixed(2)} s old`);
+  ok('and then holds still, like everything else while stopped',
+    later === shown && stepsLater === steps, `${later.toFixed(2)} s, ${stepsLater - steps} more steps`);
+  ok('fully faded in, not left invisible by a fade that runs on a stopped clock',
+    alphas.every((a) => a > 0.95), alphas.slice(-3).join(', '));
 }
 
 {
