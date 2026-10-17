@@ -1,57 +1,41 @@
 /**
- * The game editor: the tree, and whatever you click on it.
+ * The automation editor: the diagram, big, and the step you clicked beside it.
  *
- * The diagram is the clearest picture of the game there is — every moment,
- * every press and where it goes — and it used to be only a picture. Here it is
- * the editor. Click a moment on it and the side shows everything about that
- * moment, in the order it happens:
- *
- *   1. **Words first** — lines said over whatever is already on the wall, each
- *      for a few seconds, before anything else happens. Like a dare: "SO… YOU
- *      DARE." and then the question; "YOU ASKED FOR IT…" and then the scare.
- *      Nobody presses anything; the game moves on by itself.
- *   2. **Then it shows** — the scene (or for a scare, the trigger), what is in
- *      it, and the words it puts on the wall, editable in place.
- *   3. **Then** — every way out of this moment: which press, or how long, and
- *      where it leads. Each one is a link to that moment, so the tree can be
- *      walked from here as well as clicked.
- *
- * It opens over the stage rather than living in the side panel, because the
- * tree is wide and is the point. The side panel keeps the buttons to play the
- * game and a button that opens this.
+ * Opens over the stage. Each step is edited in one place — what goes on the
+ * house, what it says, and where each button and its timer lead — so building
+ * it is never a matter of making a scene in one tab, a trigger in another and
+ * wiring them up in a third. The effects a step's scene shows are ticked off
+ * right here; the scene is still an ordinary scene, and still in the Scenes
+ * tab, but nobody has to go there to make a step.
  */
 
 import { el, clear } from './ui.js';
-import { STATES, ROLES, ROLE_LABELS, EVENT_LABELS, eventsFrom, sceneSlot, cueSlot, beatsFor, gameProblems, persuadeCount } from '../core/game.js';
-import { renderGameGraph, holdable } from '../core/gameGraph.js';
-import { sceneContents, sceneMessage, setSceneMessage, gameNames, gameMissing } from './gamePanel.js';
+import { ROLES, ROLE_LABELS, gameProblems, stepById, startStep } from '../core/game.js';
+import { renderGameGraph } from '../core/gameGraph.js';
+import { createStep, createScene } from '../core/state.js';
+import { captureScene } from '../core/scenes.js';
+import { stepSceneNames, describeSnapshot } from './gamePanel.js';
 
 let root = null;
-let current = { state: 'attract', level: 1 };
 let appRef = null;
-
-const ZONE = {
-  path: ['PATH', 'On the path, far enough back to read the wall.'],
-  door: ['DOOR', 'At the door: too close to read anything on the house.'],
-  street: ['STREET', 'Seen from the street, coming or going.'],
-};
-
-/** Every press or timer, as somebody would say it. */
-const EVENT_WORDS = {
-  yes: 'YES',
-  no: 'NO',
-  door: 'DOOR',
-  'long-no': 'NO held down (a frightened child)',
-};
+/** The step being edited, by id. */
+let selected = null;
+/**
+ * Leaving a text field refreshes the rest of the app, which would rebuild this
+ * side panel too — under the click that left the field, so the box just
+ * clicked into was replaced and whatever was typed next went nowhere.
+ */
+let keepSide = false;
 
 export function isGameEditorOpen() {
   return !!root && !root.hidden;
 }
 
-export function openGameEditor(app, state = null, level = 1) {
+export function openGameEditor(app, stepId = null) {
   appRef = app;
   if (!root) build();
-  if (state) current = { state, level };
+  if (stepId) selected = stepId;
+  if (!stepById(app.project.game, selected)) selected = startStep(app.project.game)?.id ?? null;
   root.hidden = false;
   document.body.classList.add('geditor-open');
   refreshGameEditor();
@@ -64,20 +48,21 @@ export function closeGameEditor() {
 }
 
 function build() {
-  root = el('div', { class: 'geditor', hidden: true, role: 'dialog', 'aria-label': 'Game editor' });
+  root = el('div', { class: 'geditor', hidden: true, role: 'dialog', 'aria-label': 'Automation editor' });
   root.innerHTML = `
     <header class="geditor-head">
-      <strong>Dare game</strong>
-      <label class="glive-switch"><input type="checkbox" data-ge="on" /> <span>Game on</span></label>
+      <strong>Automation</strong>
+      <label class="glive-switch"><input type="checkbox" data-ge="on" /> <span>On</span></label>
       <span class="glive-status" data-ge="status"></span>
       <div class="glive-pad" data-ge="pad"></div>
-      <button type="button" class="btn small" data-ge="rehearse"></button>
+      <button type="button" class="btn small" data-ge="restart" title="Back to the start step, at once">↺ Start again</button>
+      <button type="button" class="btn small primary" data-ge="add">+ Add a step</button>
       <button type="button" class="btn small" data-ge="close" title="Close (Esc)">Close</button>
     </header>
     <div class="geditor-body">
       <div class="geditor-map">
         <div class="geditor-graph" data-ge="graph"></div>
-        <p class="geditor-hint">Click any moment to edit it. Orange edges happen on the path, where words can be read; blue ones at the door, where they cannot.</p>
+        <p class="geditor-hint">Click a step to edit it. Arrows are the buttons and timers that move from one step to the next.</p>
         <ul class="game-problems" data-ge="problems" hidden></ul>
       </div>
       <aside class="geditor-side" data-ge="side"></aside>
@@ -88,14 +73,14 @@ function build() {
   q('close').addEventListener('click', closeGameEditor);
   q('on').addEventListener('change', (ev) => {
     appRef.project.game.enabled = ev.target.checked;
-    if (!ev.target.checked) appRef.game.reset();
     appRef.commit();
+    appRef.game.reset();
   });
-  q('rehearse').addEventListener('click', () => appRef.rehearse());
+  q('restart').addEventListener('click', () => appRef.game.reset());
+  q('add').addEventListener('click', () => addStep());
   q('graph').addEventListener('click', (ev) => {
-    const node = ev.target.closest?.('[data-state]');
-    if (!node) return;
-    select(node.dataset.state, current.state === node.dataset.state ? current.level : 1);
+    const node = ev.target.closest?.('[data-step]');
+    if (node) select(node.dataset.step);
   });
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape' && isGameEditorOpen() && !ev.target.closest?.('textarea, input, select')) closeGameEditor();
@@ -103,27 +88,31 @@ function build() {
 
   const pad = q('pad');
   for (const role of ROLES) {
-    const button = el('button', { type: 'button', class: `btn game-btn game-${role}`, text: ROLE_LABELS[role], dataset: { role } });
-    if (role === 'no') holdable(button, () => appRef.game.press({ button: 'no' }), () => appRef.game.press({ button: 'no', kind: 'long' }));
-    else button.addEventListener('click', () => appRef.game.press({ button: role }));
-    pad.appendChild(button);
+    pad.appendChild(
+      el('button', {
+        type: 'button',
+        class: `btn game-btn game-${role}`,
+        text: ROLE_LABELS[role],
+        onclick: () => appRef.game.press({ button: role }),
+      })
+    );
   }
-  pad.appendChild(el('button', { type: 'button', class: 'btn game-reset', text: '↺', title: 'Back to the start', onclick: () => appRef.game.reset() }));
 }
 
-function select(state, level = 1) {
-  current = { state, level };
+function select(stepId) {
+  selected = stepId;
   refreshGameEditor();
 }
 
-/** Rebuild the side and repaint the tree. After an edit, or a change from elsewhere. */
+/** Rebuild the side and repaint the diagram. After an edit, or a change from elsewhere. */
 export function refreshGameEditor() {
   if (!isGameEditorOpen()) return;
-  renderSide();
+  if (!stepById(appRef.project.game, selected)) selected = startStep(appRef.project.game)?.id ?? null;
+  if (!keepSide) renderSide();
   paintGameEditor();
 }
 
-/** The moving parts only: the tree, the status, the buttons. Cheap; safe while typing. */
+/** The moving parts only: the diagram and the status. Cheap; safe while typing. */
 export function paintGameEditor() {
   if (!isGameEditorOpen()) return;
   const app = appRef;
@@ -132,454 +121,289 @@ export function paintGameEditor() {
   const q = (name) => root.querySelector(`[data-ge="${name}"]`);
 
   q('on').checked = !!game.enabled;
-  q('rehearse').textContent = app.rehearsing?.() ? '■ Stop rehearsing' : '▶ Rehearse';
-  q('rehearse').classList.toggle('on', !!app.rehearsing?.());
-  root.querySelector('[data-role="door"]').hidden = !game.door;
-
-  const def = STATES[snapshot.state];
   const status = q('status');
-  if (!game.enabled) status.textContent = 'Off — presses do nothing.';
-  else if (!snapshot.active) status.textContent = 'Waiting for somebody to press a button.';
-  else {
-    let text = `${def.label}${def.levelled && !def.staged ? ` ${snapshot.level} of ${snapshot.of}` : def.byAttempt ? ` (try ${snapshot.attempt})` : ''}`;
-    if (snapshot.saying) text += ` · saying “${snapshot.saying.text.replace(/\s*\n\s*/g, ' ')}”`;
-    else if (snapshot.remaining !== null) text += ` · ${Math.ceil(snapshot.remaining)} s`;
-    status.textContent = text;
-  }
-  status.classList.toggle('on', !!(game.enabled && snapshot.active));
+  status.textContent = describeSnapshot(game, snapshot);
+  status.classList.toggle('on', !!(game.enabled && !snapshot.atStart));
 
-  q('graph').innerHTML = renderGameGraph({
-    game,
-    snapshot,
-    names: gameNames(app.project, game, snapshot.active ? snapshot.level : 0),
-    missing: gameMissing(game),
-    words: graphWords(app.project, game),
-    notes: graphNotes(game),
-    selected: current.state,
-  });
+  q('graph').innerHTML = renderGameGraph({ game, snapshot, names: stepSceneNames(app.project, game), selected });
 
-  const problems = gameProblems(game, app.project);
+  const problems = game.steps.length ? gameProblems(game, app.project) : [];
   const list = q('problems');
   list.hidden = !problems.length;
   clear(list);
   for (const p of problems) list.appendChild(el('li', { text: p }));
 }
 
-/** Per state, the words it puts on the wall at level 1 — the tree's second line. */
-export function graphWords(project, game) {
-  const words = {};
-  for (const state of Object.keys(STATES)) {
-    // When the waiting screen is the first question, "scared yet?" starts at 2.
-    const level = state === 'ask' && game.openingQuestion ? 2 : 1;
-    const sceneId = STATES[state].cue ? project.triggers?.find((t) => t.id === cueSlot(game, state, level))?.sceneId : sceneSlot(game, state, level);
-    const message = sceneId ? sceneMessage(project, sceneId) : null;
-    if (message?.text) words[state] = message.text;
-  }
-  return words;
-}
-
-/** Per state, a note that it says something first. */
-export function graphNotes(game) {
-  const notes = {};
-  for (const state of Object.keys(STATES)) {
-    const levels = Math.max(1, STATES[state].levelled ? game.rungs.length : STATES[state].byAttempt ? persuadeCount(game) : 1);
-    let lines = 0;
-    for (let l = 1; l <= levels; l++) lines += beatsFor(game, state, l).length;
-    if (lines) notes[state] = `💬 words first (${lines})`;
-  }
-  return notes;
-}
-
 /* ------------------------------------------------------------------ *
- * The side: one moment
+ * Steps
  * ------------------------------------------------------------------ */
+
+function addStep() {
+  const app = appRef;
+  const game = app.project.game;
+  app.pushUndo();
+  const step = createStep({ name: `Step ${game.steps.length + 1}` });
+  game.steps.push(step);
+  if (!game.start) game.start = step.id;
+  selected = step.id;
+  app.commit();
+}
+
+function deleteStep(step) {
+  const app = appRef;
+  const game = app.project.game;
+  if (!confirm(`Delete the step "${step.name}"? Anything leading to it will lead nowhere. Ctrl+Z puts it back.`)) return;
+  app.pushUndo();
+  game.steps = game.steps.filter((s) => s !== step);
+  for (const other of game.steps) {
+    for (const role of ROLES) if (other.on?.[role] === step.id) other.on[role] = null;
+    if (other.after?.to === step.id) other.after.to = null;
+  }
+  if (game.start === step.id) game.start = game.steps[0]?.id ?? null;
+  selected = game.start;
+  app.commit();
+}
+
+/**
+ * A text field that edits as you type without rebuilding the panel under
+ * your cursor: one undo step per visit to the field, the diagram repainted
+ * as it changes, and the full refresh left until you leave it.
+ */
+function liveField(input, apply) {
+  input.addEventListener('focus', () => appRef.pushUndo());
+  input.addEventListener('input', () => {
+    apply(input.value);
+    appRef.commitLive();
+    paintGameEditor();
+  });
+  input.addEventListener('change', () => {
+    keepSide = true;
+    try {
+      appRef.refreshPanels();
+    } finally {
+      keepSide = false;
+    }
+  });
+  return input;
+}
+
+/** A select of steps, with "nothing" first. */
+function stepSelect(game, value, onChange, { none = '— nothing —' } = {}) {
+  const select = el('select', {}, [
+    el('option', { value: '', text: none }),
+    ...game.steps.map((s) => el('option', { value: s.id, text: s.name || 'Untitled' })),
+  ]);
+  select.value = value || '';
+  select.addEventListener('change', () => onChange(select.value || null));
+  return select;
+}
 
 function renderSide() {
   const app = appRef;
   const project = app.project;
   const game = project.game;
   const side = root.querySelector('[data-ge="side"]');
-  // Keep the scroll where it was across a rebuild after an edit.
   const scroll = side.scrollTop;
   clear(side);
 
-  const { state } = current;
-  const def = STATES[state];
-  // A moment that comes in several: a level of the ladder, or a try at
-  // talking them round. `level` below is whichever of those it is.
-  const top = Math.max(1, game.rungs.length);
-  const levels = def.staged ? top + 1 : def.levelled ? top : def.byAttempt ? Math.max(1, persuadeCount(game)) : 1;
-  // When the waiting screen is the first question, this box is only ever
-  // "scared yet?": there is no first question of its own to edit.
-  const first = state === 'ask' && game.openingQuestion ? 2 : 1;
-  const level = Math.max(first, Math.min(current.level, levels));
-  current.level = level;
-  const [zoneName, zoneHint] = ZONE[def.zone];
-
-  const rebuild = () => {
+  const step = stepById(game, selected);
+  if (!step) {
+    side.append(
+      el('h2', { text: 'No steps yet' }),
+      el('p', { class: 'ge-help', text: 'Add a step, or build the example from the Automation panel and change it.' })
+    );
+    return;
+  }
+  const commit = () => {
     app.commit();
-    refreshGameEditor();
   };
+  const edit = (fn) => {
+    app.pushUndo();
+    fn();
+    commit();
+  };
+  const isStart = startStep(game) === step;
 
+  // Name, and whether this is where it starts.
+  const name = liveField(el('input', { type: 'text', class: 'ge-name', value: step.name }), (v) => {
+    step.name = v;
+  });
+  side.appendChild(el('div', { class: 'ge-title' }, [name]));
   side.appendChild(
-    el('div', { class: `ge-title zone-${def.zone}` }, [
-      el('h2', { text: def.label }),
-      el('span', { class: 'gstep-zone', text: zoneName, title: zoneHint }),
+    el('p', { class: 'ge-note' }, [
+      isStart
+        ? el('span', { class: 'chip on', text: 'Start: the show waits here, and Start again comes back here' })
+        : el('button', { type: 'button', class: 'btn small', text: 'Make this the start', onclick: () => edit(() => { game.start = step.id; }) }),
     ])
   );
-  side.appendChild(el('p', { class: 'ge-note', text: `${def.note}.` }));
 
-  if (def.levelled || (def.byAttempt && levels > 1)) {
-    const tabs = el('div', { class: 'ge-levels' });
-    for (let l = first; l <= levels; l++) {
-      tabs.appendChild(
-        el('button', {
-          type: 'button',
-          class: `chip${l === level ? ' on' : ''}`,
-          text: state === 'scare' ? `Trick ${l}` : state === 'ask' ? (l === 1 ? 'First question' : `After trick ${l - 1}`) : state === 'persuade' ? `Try ${l}`
-            : def.staged ? (l > top ? 'Out of tricks' : l === 1 ? 'Said NO first' : `After trick ${l - 1}`) : `After ${l - 1}`,
-          onclick: () => select(state, l),
-        })
-      );
-    }
-    side.appendChild(tabs);
-  }
+  side.appendChild(houseSection(app, step, edit));
+  side.appendChild(wordsSection(app, step));
+  side.appendChild(nextSection(app, step, edit));
 
-  if (state === 'cooldown') {
-    side.appendChild(el('p', { class: 'panel-note', text: 'The house goes back to what it was doing before the group arrived, and waits a moment before inviting the next one.' }));
-  }
+  // Sound and the alert indoors.
+  const extra = el('section', { class: 'ge-section' }, [el('h3', { text: 'Also' })]);
+  const sounds = (project.media || []).filter((m) => m.kind === 'audio');
+  const sound = el('select', {}, [
+    el('option', { value: '', text: sounds.length ? '— no sound —' : '— no sounds uploaded (Media tab) —' }),
+    ...sounds.map((m) => el('option', { value: m.id, text: m.name || m.id })),
+  ]);
+  sound.value = step.sound || '';
+  sound.addEventListener('change', () => edit(() => { step.sound = sound.value || null; }));
+  extra.appendChild(el('label', { class: 'field' }, [el('span', { text: 'Play' }), sound]));
+  const alert = el('input', { type: 'checkbox' });
+  alert.checked = !!step.alert;
+  alert.addEventListener('change', () => edit(() => { step.alert = alert.checked; }));
+  extra.appendChild(el('label', { class: 'inline-check' }, [alert, 'Alert me indoors — the remote rings and flashes']));
+  side.appendChild(extra);
 
-  if (state === 'attract' || state === 'persuade') side.appendChild(startSection(app, rebuild));
-
-  /* --- 1. Words first --- */
-
-  if (state !== 'attract' && state !== 'cooldown') {
-    const section = el('section', { class: 'ge-section' }, [
-      el('h3', { text: '1 · Words first' }),
-      el('p', { class: 'ge-help', text: 'Said over whatever is already on the wall, one after another — then it moves on by itself. Nobody presses anything.' }),
-    ]);
-    const list = beatList(game, state, level);
-    list.forEach((beat, i) => {
-      const words = el('textarea', { class: 'gstep-words', rows: String(beat.text.split('\n').length + 1), spellcheck: 'false' });
-      words.value = beat.text;
-      words.addEventListener('focus', () => app.pushUndo());
-      words.addEventListener('input', () => {
-        beat.text = words.value;
-        app.commitLive();
-        paintGameEditor();
-      });
-      const seconds = el('input', { type: 'number', min: '0.5', max: '20', step: '0.1', title: 'How long this line stays up' });
-      seconds.value = beat.seconds;
-      seconds.addEventListener('change', () => {
-        const v = Number(seconds.value);
-        if (Number.isFinite(v) && v > 0) beat.seconds = v;
-        app.commit();
-      });
-      section.appendChild(
-        el('div', { class: 'ge-beat' }, [
-          el('span', { class: 'ge-beat-n', text: String(i + 1) }),
-          words,
-          el('div', { class: 'ge-beat-tools' }, [
-            seconds,
-            el('span', { class: 'unit', text: 's' }),
-            el('button', { type: 'button', class: 'icon-btn', title: 'Say it on the wall now', text: '▶', onclick: () => app.previewCaption(beat.text) }),
-            el('button', {
-              type: 'button',
-              class: 'icon-btn',
-              title: 'Remove this line',
-              text: '✕',
-              onclick: () => {
-                app.pushUndo();
-                list.splice(i, 1);
-                rebuild();
-              },
-            }),
-          ]),
-        ])
-      );
-    });
-    section.appendChild(
-      el('button', {
-        type: 'button',
-        class: 'btn small',
-        text: list.length ? '+ Another line' : '+ Say something first',
-        onclick: () => {
-          app.pushUndo();
-          list.push({ text: list.length ? '' : defaultLine(state), seconds: 2.2 });
-          rebuild();
-        },
-      })
-    );
-    if (def.zone === 'door' && list.length) {
-      section.appendChild(el('div', { class: 'gstep-warn', text: 'They are at the door: words here will be too close to read.' }));
-    }
-    side.appendChild(section);
-  }
-
-  /* --- 2. Then it shows --- */
-
-  const shows = el('section', { class: 'ge-section' }, [el('h3', { text: state === 'attract' ? 'It shows' : '2 · Then it shows' })]);
-  if (def.cue) shows.appendChild(cueEditor(app, state, level, rebuild));
-  else if (def.scene) shows.appendChild(sceneEditor(app, state, level, rebuild));
-  else shows.appendChild(el('p', { class: 'ge-help', text: 'Nothing of its own.' }));
-  side.appendChild(shows);
-
-  /* --- 3. Then --- */
-
-  side.appendChild(nextSection(app, state, level));
+  side.appendChild(
+    el('div', { class: 'panel-actions' }, [
+      el('button', { type: 'button', class: 'btn small danger', text: 'Delete this step', onclick: () => deleteStep(step) }),
+    ])
+  );
 
   side.scrollTop = scroll;
 }
 
-/** The beats list for a state and level, created if it is not there yet, so it can be edited in place. */
-function beatList(game, state, level) {
-  game.beats = game.beats || {};
-  const levels = (game.beats[state] = game.beats[state] || []);
-  const index = STATES[state].levelled || STATES[state].byAttempt ? level - 1 : 0;
-  while (levels.length <= index) levels.push([]);
-  return levels[index];
-}
-
-function defaultLine(state) {
-  return { ask: 'SO…\nYOU DARE.', scare: 'YOU ASKED FOR IT…', reward: 'YOU MADE IT…', approach: 'ONE LAST THING…', persuade: 'REALLY?' }[state] || '…';
-}
-
-function sceneEditor(app, state, level, rebuild) {
+/** 1 · What goes on the house: a scene, or nothing (keep it as it is), and its effects ticked off. */
+function houseSection(app, step, edit) {
   const project = app.project;
   const game = project.game;
-  const box = el('div');
-  const key = STATES[state].scene;
-  const slot = game.scenes[key];
-  const own = Array.isArray(slot) ? slot[level - 1] || null : slot || null;
-  const effective = sceneSlot(game, state, level);
+  const section = el('section', { class: 'ge-section' }, [el('h3', { text: '1 · On the house' })]);
 
   const select = el('select', {}, [
-    el('option', { value: '', text: Array.isArray(slot) && level > 1 ? '— same as the one before —' : '— nothing —' }),
+    el('option', { value: '', text: '— keep what is on —' }),
     ...(project.scenes || []).map((s) => el('option', { value: s.id, text: s.name })),
   ]);
-  select.value = own || '';
-  select.addEventListener('change', () => {
-    app.pushUndo();
-    const value = select.value || null;
-    if (Array.isArray(game.scenes[key])) {
-      while (game.scenes[key].length < level) game.scenes[key].push(null);
-      game.scenes[key][level - 1] = value;
-    } else {
-      game.scenes[key] = value;
-    }
-    rebuild();
+  select.value = step.sceneId || '';
+  select.addEventListener('change', () => edit(() => { step.sceneId = select.value || null; }));
+  const show = el('button', {
+    type: 'button',
+    class: 'btn small',
+    text: '▶',
+    title: 'Show it on the house',
+    disabled: !step.sceneId,
+    onclick: () => app.previewScene(step.sceneId),
   });
-  box.appendChild(
-    el('div', { class: 'gstep-choose' }, [
-      el('span', { text: 'Scene' }),
-      select,
-      el('button', { type: 'button', class: 'icon-btn gstep-play', title: 'Show it on the wall', text: '▶', disabled: !effective, onclick: () => app.previewScene(effective) }),
-    ])
-  );
-  box.appendChild(contentsRow(project, effective));
-  box.appendChild(wordsEditor(app, effective, STATES[state].zone));
-  return box;
-}
+  section.appendChild(el('div', { class: 'ge-scene-row' }, [select, show]));
 
-function cueEditor(app, state, level, rebuild) {
-  const project = app.project;
-  const game = project.game;
-  const box = el('div');
-  const id = cueSlot(game, state, level);
-  const trigger = project.triggers?.find((t) => t.id === id) || null;
-
-  const select = el('select', {}, [
-    el('option', { value: '', text: '— nothing —' }),
-    ...(project.triggers || []).map((t) => el('option', { value: t.id, text: t.name })),
-  ]);
-  select.value = trigger?.id || '';
-  select.addEventListener('change', () => {
-    app.pushUndo();
-    const value = select.value || null;
-    if (state === 'finale') game.finale = value;
-    else if (value) game.rungs[level - 1] = value;
-    else game.rungs.splice(level - 1, 1);
-    rebuild();
-  });
-  box.appendChild(
-    el('div', { class: 'gstep-choose' }, [
-      el('span', { text: 'Scare' }),
-      select,
-      el('button', { type: 'button', class: 'icon-btn gstep-play', title: 'Play it on the wall', text: '▶', disabled: !trigger, onclick: () => app.fireTrigger(trigger.id) }),
-    ])
-  );
-  if (trigger) {
-    const hold = el('input', { type: 'number', min: '1', max: '60', step: '0.5' });
-    hold.value = trigger.hold ?? 6;
-    hold.addEventListener('change', () => {
-      const v = Number(hold.value);
-      if (Number.isFinite(v) && v > 0) trigger.hold = v;
-      rebuild();
-    });
-    box.appendChild(el('div', { class: 'gstep-choose gstep-tools' }, [el('span', { text: 'Lasts' }), hold, el('span', { class: 'unit', text: 's' })]));
-    box.appendChild(contentsRow(project, trigger.sceneId));
-    box.appendChild(wordsEditor(app, trigger.sceneId, STATES[state].zone));
-  }
-
-  if (state === 'scare') {
-    const ladder = el('div', { class: 'ge-ladder' }, [el('div', { class: 'ge-help', text: 'The ladder, mildest first:' })]);
-    game.rungs.forEach((rungId, i) => {
-      const t = project.triggers?.find((x) => x.id === rungId);
-      const move = (delta) => {
-        const j = i + delta;
-        if (j < 0 || j >= game.rungs.length) return;
-        app.pushUndo();
-        [game.rungs[i], game.rungs[j]] = [game.rungs[j], game.rungs[i]];
-        current.level = j + 1;
-        rebuild();
-      };
-      ladder.appendChild(
-        el('div', { class: `ge-rung${i === level - 1 ? ' on' : ''}` }, [
-          el('button', { type: 'button', class: 'ge-rung-name', text: `${i + 1}. ${t?.name?.replace(/^Dare · /, '') || 'missing'}`, onclick: () => select('scare', i + 1) }),
-          el('button', { type: 'button', class: 'icon-btn', text: '↑', title: 'Earlier', disabled: i === 0, onclick: () => move(-1) }),
-          el('button', { type: 'button', class: 'icon-btn', text: '↓', title: 'Later', disabled: i === game.rungs.length - 1, onclick: () => move(1) }),
-          el('button', {
-            type: 'button',
-            class: 'icon-btn',
-            text: '✕',
-            title: 'Take it out of the ladder',
-            onclick: () => {
-              app.pushUndo();
-              game.rungs.splice(i, 1);
-              current.level = Math.max(1, Math.min(current.level, game.rungs.length));
-              rebuild();
-            },
+  const scene = project.scenes.find((s) => s.id === step.sceneId);
+  if (!scene) {
+    section.appendChild(el('p', { class: 'ge-help', text: 'The house stays as the step before left it; only the words change.' }));
+    section.appendChild(
+      el('button', {
+        type: 'button',
+        class: 'btn small',
+        text: 'Make a scene from what is on the wall now',
+        onclick: () =>
+          edit(() => {
+            const made = createScene({ name: step.name || 'Step', fade: 0.6, full: true, state: captureScene(project) });
+            // Without the step's words: those are the step's, written over it.
+            const message = game.messageLayer && made.state[game.messageLayer];
+            if (message) message.enabled = false;
+            project.scenes.push(made);
+            step.sceneId = made.id;
           }),
-        ])
-      );
-    });
-    const add = el('select', {}, [
-      el('option', { value: '', text: '+ add a scare…' }),
-      ...(project.triggers || []).map((t) => el('option', { value: t.id, text: t.name })),
-    ]);
-    add.addEventListener('change', () => {
-      if (!add.value) return;
-      app.pushUndo();
-      game.rungs.push(add.value);
-      current.level = game.rungs.length;
-      rebuild();
-    });
-    ladder.appendChild(add);
-    box.appendChild(ladder);
-  }
-  return box;
-}
-
-function contentsRow(project, sceneId) {
-  const row = el('div', { class: 'gstep-what' });
-  const names = sceneId ? sceneContents(project, sceneId) : [];
-  if (!sceneId) row.appendChild(el('span', { class: 'chip warn', text: 'nothing chosen' }));
-  for (const name of names) row.appendChild(el('span', { class: 'chip', text: name }));
-  return row;
-}
-
-function wordsEditor(app, sceneId, zone) {
-  const box = el('div');
-  const message = sceneId ? sceneMessage(app.project, sceneId) : null;
-  if (!message) {
-    if (sceneId) box.appendChild(el('p', { class: 'ge-help', text: 'No words on the wall here.' }));
-    return box;
-  }
-  const words = el('textarea', { class: 'gstep-words', rows: String(message.text.split('\n').length + 1), spellcheck: 'false', title: 'What the wall says. A new line is a new line.' });
-  words.value = message.text;
-  words.addEventListener('focus', () => app.pushUndo());
-  words.addEventListener('input', () => {
-    setSceneMessage(app.project, sceneId, message.layer.id, words.value);
-    app.commitLive();
-    paintGameEditor();
-  });
-  box.appendChild(el('div', { class: 'ge-help', text: 'And the wall says:' }));
-  box.appendChild(words);
-  if (zone === 'door') box.appendChild(el('div', { class: 'gstep-warn', text: 'They are at the door: these words will be too close to read.' }));
-  return box;
-}
-
-/** How the game begins: is the waiting screen the first question, and is NO argued with? */
-function startSection(app, rebuild) {
-  const game = app.project.game;
-  const opening = el('input', { type: 'checkbox' });
-  opening.checked = !!game.openingQuestion;
-  opening.addEventListener('change', () => {
-    app.pushUndo();
-    game.openingQuestion = opening.checked;
-    rebuild();
-  });
-  const tries = el('input', { type: 'number', min: '0', max: '5', step: '1' });
-  tries.value = persuadeCount(game);
-  tries.addEventListener('change', () => {
-    const v = Math.max(0, Math.min(5, Math.round(Number(tries.value) || 0)));
-    app.pushUndo();
-    game.persuade = v;
-    while ((game.scenes.persuade = game.scenes.persuade || []).length < v) game.scenes.persuade.push(null);
-    rebuild();
-  });
-  return el('section', { class: 'ge-section' }, [
-    el('h3', { text: 'How it starts' }),
-    el('label', { class: 'inline-check' }, [opening, 'The waiting screen asks the first question — YES goes straight to the first scare']),
-    el('label', { class: 'gstep-choose' }, [
-      el('span', { text: 'After a NO to it, ask again' }),
-      tries,
-      el('span', { class: 'unit', text: 'more times before giving up' }),
-    ]),
-  ]);
-}
-
-/** Every way out of this moment, as links along the tree. */
-function nextSection(app, state, level) {
-  const game = app.project.game;
-  const section = el('section', { class: 'ge-section' }, [el('h3', { text: state === 'attract' ? 'Then' : '3 · Then' })]);
-  const list = el('ul', { class: 'ge-next' });
-  const timing = game.timing || {};
-
-  const byTry = !!STATES[state].byAttempt;
-  for (const [event, t] of eventsFrom(state, game, byTry ? 1 : level, byTry ? level : 0)) {
-    let when;
-    if (event === 'timeout') {
-      const key = STATES[state].timer;
-      if (STATES[state].cue) when = 'When it ends';
-      else if (key && Number(timing[key]) > 0) when = `After ${timing[key]} s with nothing pressed`;
-      else continue;
-    } else {
-      when = `${EVENT_WORDS[event] || EVENT_LABELS[event] || event}`;
-    }
-    // Where this leads, and which of its several it lands on.
-    const steps = String(t.do || '').split('+');
-    let nextLevel = byTry ? 1 : level;
-    if (steps.includes('start')) nextLevel = 1;
-    if (steps.includes('next')) nextLevel = level + 1;
-    if (STATES[t.to].byAttempt) nextLevel = steps.includes('start') ? 1 : byTry ? level + 1 : 1;
-    const target = STATES[t.to];
-    const label = `${target.label}${target.staged ? '' : target.levelled ? ` ${nextLevel}` : target.byAttempt ? ` (try ${nextLevel})` : ''}`;
-    list.appendChild(
-      el('li', {}, [
-        el('span', { class: `ge-when ev-${event}`, text: when }),
-        el('span', { class: 'ge-arrow', text: '→' }),
-        el('button', { type: 'button', class: 'ge-to', text: label, onclick: () => select(t.to, nextLevel) }),
-      ])
+      })
     );
+    return section;
   }
-  if (!list.children.length) list.appendChild(el('li', { class: 'ge-help', text: 'Nothing leads on from here.' }));
-  section.appendChild(list);
 
-  // The timer that decides the "after N s" line, editable where it is read.
-  const key = STATES[state].timer;
-  if (key && state !== 'attract') {
-    const input = el('input', { type: 'number', min: '0', step: '0.5' });
-    input.value = timing[key];
-    input.addEventListener('change', () => {
-      const v = Number(input.value);
-      if (!Number.isFinite(v) || v < 0) return;
-      game.timing[key] = v;
-      app.commit();
-      refreshGameEditor();
-    });
-    section.appendChild(el('label', { class: 'gstep-choose gstep-tools' }, [el('span', { text: 'Wait' }), input, el('span', { class: 'unit', text: 's before moving on by itself' })]));
+  section.appendChild(el('p', { class: 'ge-help', text: 'Tick what this step shows. It changes the scene, which every step using it shares.' }));
+  const list = el('div', { class: 'ge-effects' });
+  for (const layer of project.layers) {
+    if (layer.id === game.messageLayer) continue;
+    const stored = scene.state?.[layer.id];
+    const on = stored ? stored.enabled !== false : !scene.full && layer.enabled !== false;
+    const box = el('input', { type: 'checkbox' });
+    box.checked = on;
+    box.addEventListener('change', () =>
+      edit(() => {
+        scene.state = scene.state || {};
+        scene.state[layer.id] = {
+          opacity: layer.opacity ?? 1,
+          params: { ...(layer.params || {}) },
+          ...(scene.state[layer.id] || {}),
+          enabled: box.checked,
+        };
+        // Seen as it changes, when it is the scene on the wall.
+        if (project.show?.activeScene === scene.id) app.previewScene(scene.id);
+      })
+    );
+    list.appendChild(el('label', { class: 'inline-check' }, [box, layer.name || layer.effect]));
   }
+  section.appendChild(list);
   return section;
 }
 
+/** 2 · What it says, written over whatever is on the house. */
+function wordsSection(app, step) {
+  const section = el('section', { class: 'ge-section' }, [el('h3', { text: '2 · Words on the wall' })]);
+  const words = liveField(el('textarea', { class: 'gstep-words', rows: '3', placeholder: 'Nothing — no words' }), (v) => {
+    step.words = v;
+  });
+  words.value = step.words || '';
+  section.append(
+    words,
+    el('div', { class: 'ge-row' }, [
+      el('span', { class: 'ge-help', text: 'A new line is a new line on the wall.' }),
+      el('button', {
+        type: 'button',
+        class: 'btn small',
+        text: '▶ Show',
+        onclick: () => {
+          if (String(step.words || '').trim()) app.previewCaption(step.words);
+        },
+      }),
+    ])
+  );
+  return section;
+}
+
+/** 3 · Where each button leads, and the timer. */
+function nextSection(app, step, edit) {
+  const game = app.project.game;
+  const section = el('section', { class: 'ge-section' }, [el('h3', { text: '3 · Then' })]);
+  const list = el('ul', { class: 'ge-next' });
+  for (const role of ROLES) {
+    const to = step.on?.[role] || null;
+    list.appendChild(
+      el('li', {}, [
+        el('span', { class: `ge-when ev-${role}`, text: ROLE_LABELS[role] }),
+        el('span', { class: 'ge-arrow', text: '→' }),
+        stepSelect(game, to, (value) => edit(() => { step.on = { ...(step.on || {}), [role]: value }; })),
+        to ? el('button', { type: 'button', class: 'ge-to', text: 'Go', title: 'Edit that step', onclick: () => select(to) }) : null,
+      ].filter(Boolean))
+    );
+  }
+
+  const seconds = el('input', { type: 'number', min: '0', step: '0.5', class: 'ge-seconds' });
+  seconds.value = step.after?.seconds || '';
+  seconds.placeholder = 'never';
+  seconds.addEventListener('change', () =>
+    edit(() => {
+      const value = Number(seconds.value);
+      step.after = { ...(step.after || {}), seconds: Number.isFinite(value) && value > 0 ? value : 0 };
+    })
+  );
+  const to = step.after?.to || null;
+  list.appendChild(
+    el('li', {}, [
+      el('span', { class: 'ge-when', text: 'After' }),
+      seconds,
+      el('span', { class: 'ge-when', text: 's' }),
+      el('span', { class: 'ge-arrow', text: '→' }),
+      stepSelect(game, to, (value) => edit(() => { step.after = { ...(step.after || {}), to: value }; })),
+      to ? el('button', { type: 'button', class: 'ge-to', text: 'Go', title: 'Edit that step', onclick: () => select(to) }) : null,
+    ].filter(Boolean))
+  );
+  section.appendChild(list);
+  section.appendChild(
+    el('p', {
+      class: 'ge-help',
+      text: 'A step with words and no timer waits for a button. Leave the seconds empty and it never moves on by itself.',
+    })
+  );
+  return section;
+}

@@ -1,22 +1,21 @@
 /**
- * The dare game: the table, the runtime that walks it, and the picture of it.
+ * The automation: steps, the runtime that walks them, and the picture of them.
  *
- * Everything the game does happens in front of children, in the dark, from a
- * button nobody indoors can see being pressed. A question that never times out
- * strands the house mid-game for the rest of the evening; a press that queues
- * skips a group past the tricks they were promised; a rung whose `after` hook
- * never fires leaves the fog machine running. None of it is visible from the
- * laptop, so all of it is here.
+ * Everything it does happens in front of children, in the dark, from a button
+ * nobody indoors can see being pressed. A question that never times out
+ * strands the house for the rest of the evening; a press that queues answers a
+ * question nobody has read. None of it is visible from the laptop, so all of
+ * it is here.
  *
  * The clock is one this file moves by hand. Nothing sleeps.
  *
  *   node test/game.test.mjs
  */
 
-import { STATES, TRANSITIONS, EVENT_LABELS, ROLES, transitionFor, eventsFrom, sceneSlot, roleOf, gameProblems } from '../js/core/game.js';
-import { renderGameGraph, graphEdges, LAYOUT } from '../js/core/gameGraph.js';
+import { ROLES, EVENT_LABELS, stepById, startStep, nextFor, exitsOf, roleOf, gameProblems, gameSceneIds, reachable } from '../js/core/game.js';
+import { renderGameGraph, graphEdges, layoutSteps, formatSeconds } from '../js/core/gameGraph.js';
 import { createGameRuntime } from '../js/control/game.js';
-import { createGame, createProject, createScene, createTrigger, migrateProject } from '../js/core/state.js';
+import { createGame, createStep, createProject, createScene, migrateProject } from '../js/core/state.js';
 
 let failures = 0;
 const ok = (name, cond, detail = '') => {
@@ -35,542 +34,268 @@ const advance = (seconds) => {
 };
 
 /**
- * A game with a three-rung ladder and every scene slot filled, and a runtime
- * whose `io` writes down what it was asked to do.
+ * A small automation: a question, a scare on a timer, a question asked over
+ * the scare with words alone, and the way to the door.
+ *
+ *   ask      "TRICK OR TREAT?"  YES → scare · NO → treat
+ *   scare    scene, 5 s → more
+ *   more     words only "MORE?" NO → scare · YES → treat · 120 s → ask
+ *   treat    words only, DOOR → door · 120 s → ask
+ *   door     scene, 4 s → ask
  */
-function setup(overrides = {}, { holds = { r1: 4, r2: 5, r3: 6, fin: 8 } } = {}) {
-  const game = createGame({
-    enabled: true,
-    rungs: ['r1', 'r2', 'r3'],
-    finale: 'fin',
-    scenes: {
-      attract: 'sAttract',
-      ask: ['sAsk1', 'sAsk2'],
-      persuade: [],
-      approach: ['sTreat1', null, 'sTreat3', 'sOut'],
-      waiting: 'sWaiting',
-      reward: 'sBye',
-    },
-    ...overrides,
-  });
-  const calls = [];
-  const io = {
-    scene: (id, ctx) => calls.push(['scene', id, ctx.level]),
-    cue: (id, ctx) => {
-      calls.push(['cue', id, ctx.level]);
-      return holds[id] ?? null;
-    },
-    cueEnd: (id) => calls.push(['cueEnd', id]),
-    release: () => calls.push(['release']),
-    changed: () => calls.push(['changed']),
-  };
-  const runtime = createGameRuntime({ getGame: () => game, io, now });
-  const did = (kind) => calls.filter((c) => c[0] === kind);
-  const lastOf = (kind) => did(kind).at(-1);
-  return { game, runtime, calls, did, lastOf };
+function makeGame(overrides = {}) {
+  const steps = [
+    createStep({ id: 'ask', name: 'Trick or treat?', sceneId: 'sHouse', words: 'TRICK OR TREAT?', on: { yes: 'scare', no: 'treat' } }),
+    createStep({ id: 'scare', name: 'Scare', sceneId: 'sScare', sound: 'scream', after: { seconds: 5, to: 'more' } }),
+    createStep({ id: 'more', name: 'More?', words: 'MORE?', on: { no: 'scare', yes: 'treat' }, after: { seconds: 120, to: 'ask' } }),
+    createStep({ id: 'treat', name: 'Come and get your treat', words: 'TREAT', alert: true, on: { door: 'door' }, after: { seconds: 120, to: 'ask' } }),
+    createStep({ id: 'door', name: 'At the door', sceneId: 'sDoor', after: { seconds: 4, to: 'ask' } }),
+  ];
+  return createGame({ enabled: true, start: 'ask', steps, ...overrides });
 }
 
-/** Wait out the arming delay of a fresh question, then answer it. */
+function setup(overrides = {}) {
+  const game = makeGame(overrides);
+  const calls = [];
+  const io = {
+    scene: (id) => calls.push(['scene', id]),
+    caption: (text) => calls.push(['caption', text]),
+    sound: (id) => calls.push(['sound', id]),
+    changed: () => {},
+  };
+  const runtime = createGameRuntime({ getGame: () => game, io, now });
+  const lastOf = (kind) => calls.filter((c) => c[0] === kind).at(-1);
+  const count = (kind) => calls.filter((c) => c[0] === kind).length;
+  return { game, runtime, calls, lastOf, count };
+}
+
+/** Press a button once the step has been up long enough to be armed. */
 function answer(runtime, button) {
   advance(0.5);
   return runtime.press({ button });
 }
 
-/** Let a trick, or a wait, run out. */
-const through = (runtime, seconds = 10) => {
-  advance(seconds);
-  runtime.tick();
-};
-
-/* ------------------------------------------------------------------ *
- * The table
- * ------------------------------------------------------------------ */
-
-console.log('— the table is a machine you cannot get stuck in —');
-{
-  const states = Object.keys(STATES);
-  ok('every transition starts and ends at a state that exists',
-    TRANSITIONS.every((t) => STATES[t.from] && STATES[t.to]));
-  ok('every event has a label for the diagram', TRANSITIONS.every((t) => EVENT_LABELS[t.on]));
-  ok('every state is placed on the diagram', states.every((s) => LAYOUT[s]));
-  ok('and nothing is placed that is not a state', Object.keys(LAYOUT).every((s) => STATES[s]));
-  ok('nine moments, no more', states.length === 9, states.join(','));
-
-  const reach = (start, edges) => {
-    const seen = new Set([start]);
-    const queue = [start];
-    while (queue.length) {
-      const s = queue.shift();
-      for (const t of edges) {
-        if (t.from === s && !seen.has(t.to)) {
-          seen.add(t.to);
-          queue.push(t.to);
-        }
-      }
-    }
-    return seen;
-  };
-  const fromAttract = reach('attract', TRANSITIONS);
-  ok('every state can be reached from the waiting screen', states.every((s) => fromAttract.has(s)),
-    states.filter((s) => !fromAttract.has(s)).join(','));
-
-  // Without any presses at all — nobody comes back, nobody comes to the door —
-  // the house must still find its way home from every state.
-  const timeouts = TRANSITIONS.filter((t) => t.on === 'timeout');
-  const stuck = states.filter((s) => s !== 'attract' && !reach(s, timeouts).has('attract'));
-  ok('every state gets back to the start on time alone', !stuck.length, stuck.join(','));
-
-  ok('there is no TREAT button any more', !ROLES.includes('treat') && !TRANSITIONS.some((t) => t.on === 'treat'));
-  ok('a press from one is nobody', roleOf(createGame(), 'treat') === null);
-
-  const game = createGame({ rungs: ['a', 'b'] });
-  ok('the ladder climbs while there are tricks left', transitionFor('scare', 'timeout', game, 1)?.to === 'ask');
-  ok('and at the top, sends them for their treat', transitionFor('scare', 'timeout', game, 2)?.to === 'approach');
-  ok('an empty ladder is one rung, not none', transitionFor('scare', 'timeout', createGame(), 1)?.to === 'approach');
-
-  ok('DOOR does nothing until they are invited up',
-    ['attract', 'ask', 'persuade', 'scare', 'waiting'].every((s) => !transitionFor(s, 'door', { ...game, door: true }, 1)));
-  ok('and then it is them coming forward', transitionFor('approach', 'door', { ...game, door: true }, 1)?.to === 'finale');
-  ok('without a DOOR button, it does nothing even then', !transitionFor('approach', 'door', { ...game, door: false }, 1));
-
-  const fromAsk = eventsFrom('ask', game, 1);
-  ok('a question listens to YES, NO and time — nothing else',
-    [...fromAsk.keys()].sort().join(',') === 'no,timeout,yes', [...fromAsk.keys()].join(','));
-  ok('and an unanswered one starts the house again', transitionFor('ask', 'timeout', game, 1)?.to === 'attract');
-  ok('the first question: YES is a trick', transitionFor('ask', 'yes', game, 1)?.to === 'scare');
-  ok('and NO is a treat', transitionFor('ask', 'no', game, 1)?.to === 'approach');
-  ok('"scared yet?" turns them round: NO is another trick', transitionFor('ask', 'no', game, 2)?.to === 'scare');
-  ok('and YES, enough, is the treat', transitionFor('ask', 'yes', game, 2)?.to === 'approach');
-  ok('which is all "scared yet?" ever is when the waiting screen asks first',
-    transitionFor('ask', 'yes', { ...game, openingQuestion: true }, 1)?.to === 'approach');
-  ok('after two minutes, by default', createGame().timing.askTimeout === 120);
-}
-
-console.log('— scenes by level, and buttons by role —');
-{
-  const game = createGame({ scenes: { ...createGame().scenes, ask: ['a1', null, 'a3'], reward: 'r' } });
-  ok('level 1 asks the first question', sceneSlot(game, 'ask', 1) === 'a1');
-  ok('a gap in the list repeats the one before it', sceneSlot(game, 'ask', 2) === 'a1');
-  ok('level 3 asks the third', sceneSlot(game, 'ask', 3) === 'a3');
-  ok('and beyond the list, the last one again', sceneSlot(game, 'ask', 7) === 'a3');
-  ok('single slots are just themselves', sceneSlot(game, 'reward', 4) === 'r');
-  ok('an empty list is nothing, not undefined', sceneSlot(createGame(), 'ask', 1) === null);
-
-  const mapped = createGame({ buttons: { 'event.path_left': 'yes', 'event.front': 'door', 'event.odd': 'banana' } });
-  ok('a mapped button has its role', roleOf(mapped, 'event.path_left') === 'yes');
-  ok('a role name is its own role, so the remote needs no mapping', roleOf(mapped, 'no') === 'no');
-  ok('an unknown button has none', roleOf(mapped, 'event.unknown') === null);
-  ok('a mapping to something that is not a role is ignored', roleOf(mapped, 'event.odd') === null);
-  ok('the prototype is not a button', roleOf(mapped, 'constructor') === null && roleOf(mapped, '__proto__') === null);
-  ok('there are exactly three roles', ROLES.join() === 'yes,no,door');
-}
-
-/* ------------------------------------------------------------------ *
- * A group that goes all the way
- * ------------------------------------------------------------------ */
-
-console.log('— all the way up the ladder, to the door, and home —');
-{
-  const { runtime, did, lastOf } = setup();
-
-  ok('it starts on the waiting screen', runtime.state === 'attract' && !runtime.active);
-  ok('YES starts the game', runtime.press({ button: 'yes' }) === '→ ask');
-  ok('at level 1, with the first question', runtime.level === 1 && lastOf('scene')?.[1] === 'sAsk1');
-  ok('and is now playing', runtime.active);
-
-  ok('YES plays the first trick at once', answer(runtime, 'yes') === '→ scare' && lastOf('cue')?.[1] === 'r1');
-  advance(3.9);
-  runtime.tick();
-  ok('the trick holds for its own hold', runtime.state === 'scare');
-  advance(0.2);
-  runtime.tick();
-  ok('and then asks again, one level up', runtime.state === 'ask' && runtime.level === 2);
-  ok("with the trick's after hook sent", lastOf('cueEnd')?.[1] === 'r1');
-  ok('and the second question', lastOf('scene')?.[1] === 'sAsk2');
-
-  ok('"scared yet?" — NO, not yet, is another trick', answer(runtime, 'no') === '→ scare');
-  through(runtime, 5.1);
-  ok('level 3 asks the last question written again', runtime.level === 3 && lastOf('scene')?.[1] === 'sAsk2');
-  answer(runtime, 'no');
-  ok('the third trick', lastOf('cue')?.[1] === 'r3');
-  through(runtime, 6.1);
-  ok('out of tricks, they are sent for their treat', runtime.state === 'approach' && lastOf('scene')?.[1] === 'sOut');
-
-  ok('YES now does nothing — they have been asked to walk', runtime.press({ button: 'yes' }) === 'not now');
-  ok('DOOR is them coming forward', runtime.press({ button: 'door' }) === '→ finale' && lastOf('cue')?.[1] === 'fin');
-  through(runtime, 8.1);
-  ok('the door moment ends in waiting for a treat', runtime.state === 'waiting');
-  ok('with its after hook sent', lastOf('cueEnd')?.[1] === 'fin');
-
-  ok('pressing anything at the door does nothing more', runtime.press({ button: 'yes' }) === 'not now');
-  through(runtime, 29);
-  ok('they have time to get their sweets', runtime.state === 'waiting');
-  through(runtime, 1.1);
-  ok('and then the goodbye plays by itself', runtime.state === 'reward' && lastOf('scene')?.[1] === 'sBye');
-  ok('nothing handed back yet', did('release').length === 0);
-  through(runtime, 8.1);
-  ok('the goodbye ends in cooldown', runtime.state === 'cooldown');
-  ok('which hands the stage back', did('release').length === 1);
-  through(runtime, 6.1);
-  ok('and then the waiting screen again', runtime.state === 'attract' && runtime.level === 0);
-  ok('showing the question again', lastOf('scene')?.[1] === 'sAttract');
-  ok('without handing back twice', did('release').length === 1);
-  ok('every cue was ended exactly once', did('cue').length === did('cueEnd').length);
-}
-
-{
-  const { runtime, lastOf } = setup({ door: false });
-  runtime.press({ button: 'yes' });
-  for (let rung = 1; rung <= 3; rung++) {
-    answer(runtime, rung === 1 ? 'yes' : 'no');
-    through(runtime, 7);
+/** Let time run, ticking the way the control tab does. */
+function through(runtime, seconds, step = 0.25) {
+  for (let t = 0; t < seconds; t += step) {
+    advance(step);
+    runtime.tick();
   }
-  ok('without a DOOR button the house still sends them for their treat', runtime.state === 'approach' && runtime.level === 4);
-  ok('DOOR does nothing', runtime.press({ button: 'door' }) === 'not now');
-  through(runtime, 120.1);
-  ok('and after a while it says goodbye, since they will have come up anyway', runtime.state === 'reward' && lastOf('scene')?.[1] === 'sBye');
-}
-
-{
-  const { runtime } = setup();
-  runtime.press({ button: 'yes' });
-  for (let rung = 1; rung <= 3; rung++) {
-    answer(runtime, 'yes');
-    through(runtime, 7);
-  }
-  through(runtime, 120.1);
-  ok('nobody coming for the treat starts the house again, after two minutes', runtime.state === 'attract');
-}
-
-{
-  const { runtime, lastOf } = setup();
-  runtime.press({ button: 'yes' });
-  for (let rung = 1; rung <= 3; rung++) {
-    answer(runtime, 'yes');
-    through(runtime, 7);
-  }
-  runtime.press({ button: 'door' });
-  through(runtime, 8.1);
-  through(runtime, 30.1);
-  ok('a forgotten TREAT still gets them the goodbye on the way back', runtime.state === 'reward' && lastOf('scene')?.[1] === 'sBye');
 }
 
 /* ------------------------------------------------------------------ *
- * Saying no
+ * The model
  * ------------------------------------------------------------------ */
 
-console.log('— NO, and being frightened —');
+console.log('— steps, and where they lead —');
 {
-  const { runtime, lastOf } = setup();
-  runtime.press({ button: 'no' });
-  ok('NO on the waiting screen starts the game too', runtime.state === 'ask');
-  answer(runtime, 'no');
-  ok('NO to the first question sends them for their treat', runtime.state === 'approach' && runtime.level === 1);
-  ok('with the words for having seen nothing', lastOf('scene')?.[1] === 'sTreat1');
+  const game = makeGame();
+  ok('three buttons: YES, NO and DOOR', ROLES.join() === 'yes,no,door');
+  ok('and a timer is the fourth way out', EVENT_LABELS.timeout === 'time');
+  ok('the start is the step named as the start', startStep(game).id === 'ask');
+  ok('or the first, when none is named', startStep({ ...game, start: null }).id === 'ask');
+  ok('and still the first when the named one has gone', startStep({ ...game, start: 'gone' }).id === 'ask');
+
+  ok('a button leads where it says', nextFor(game, stepById(game, 'ask'), 'yes') === 'scare');
+  ok('a button with nothing set leads nowhere', nextFor(game, stepById(game, 'ask'), 'door') === null);
+  ok('a timer leads where it says', nextFor(game, stepById(game, 'scare'), 'timeout') === 'more');
+  ok('a timer with no seconds is no timer',
+    nextFor(game, createStep({ after: { seconds: 0, to: 'ask' } }), 'timeout') === null);
+  ok('a link to a deleted step leads nowhere', nextFor(game, createStep({ on: { yes: 'gone' } }), 'yes') === null);
+  ok('the ways out are listed buttons first',
+    exitsOf(game, stepById(game, 'more')).map((e) => e.on).join() === 'yes,no,timeout');
+
+  ok('every step is reachable from the start', reachable(game).size === 5);
+  ok('the scenes the steps show are the automation’s', [...gameSceneIds(game)].sort().join() === 'sDoor,sHouse,sScare');
 }
 
+console.log('— buttons by role —');
 {
-  const { runtime, lastOf } = setup();
-  runtime.press({ button: 'yes' });
-  answer(runtime, 'yes');
-  through(runtime, 4.1);
-  answer(runtime, 'yes');
-  ok('YES after a trick — scared — is a treat too', runtime.state === 'approach' && runtime.level === 2);
-  ok('repeating the words before it where this level has none', lastOf('scene')?.[1] === 'sTreat1');
+  const game = makeGame({ buttons: { 'event.left': 'yes', 'event.front': 'door' } });
+  ok('a mapped button plays its role', roleOf(game, 'event.front') === 'door');
+  ok('a role pressed by name is that role', roleOf(game, 'no') === 'no');
+  ok('an unknown button is nobody', roleOf(game, 'event.kitchen') === null);
+  ok('and TREAT, which there no longer is, is nobody too', roleOf(game, 'treat') === null);
 }
 
+console.log('— problems, worded for the person building it —');
 {
-  const { runtime, lastOf } = setup();
-  runtime.press({ button: 'yes' });
-  answer(runtime, 'yes');
-  ok('NO pressed during a trick is dropped', runtime.press({ button: 'no' }) === 'not now');
-  ok('YES too — nothing queues', runtime.press({ button: 'yes' }) === 'not now');
-  ok('the trick carries on', runtime.state === 'scare');
-  ok('NO held down stops it, and sends them for their treat', runtime.press({ button: 'no', kind: 'long' }) === '→ approach');
-  ok('ending the trick straight away', lastOf('cueEnd')?.[1] === 'r1');
-  through(runtime, 4.1);
-  ok('its hold running out later changes nothing', runtime.state === 'approach');
-}
-
-{
-  const { runtime } = setup();
-  runtime.press({ button: 'yes' });
-  advance(0.5);
-  ok('a held YES means nothing more than the YES itself', runtime.press({ button: 'yes', kind: 'long' }) === 'held');
-  ok('a held NO outside a trick is nothing', runtime.press({ button: 'no', kind: 'long' }) === 'not now');
-}
-
-console.log('— the waiting screen asks, and NO is not the end of it —');
-{
-  const { runtime, lastOf } = setup({
-    openingQuestion: true,
-    persuade: 2,
-    scenes: { ...createGame().scenes, attract: 'sAttract', ask: ['sAsk1', 'sAsk2'], persuade: ['sTrick', 'sLove'], approach: ['sTreat'] },
-  });
-  ok('with the waiting screen as the question, YES is the first trick', runtime.press({ button: 'yes' }) === '→ scare' && runtime.level === 1 && lastOf('cue')?.[1] === 'r1');
-  through(runtime, 4.1);
-  ok('and the next question is question 2', runtime.state === 'ask' && runtime.level === 2 && lastOf('scene')?.[1] === 'sAsk2');
-  runtime.reset();
-
-  ok('NO to it asks again', runtime.press({ button: 'no' }) === '→ persuade' && runtime.attempt === 1);
-  ok('"did you say trick?"', lastOf('scene')?.[1] === 'sTrick');
-  answer(runtime, 'no');
-  ok('NO again asks once more', runtime.state === 'persuade' && runtime.attempt === 2 && lastOf('scene')?.[1] === 'sLove');
-  answer(runtime, 'no');
-  ok('and a third NO sends them for their treat', runtime.state === 'approach' && lastOf('scene')?.[1] === 'sTreat');
-  runtime.reset();
-
-  runtime.press({ button: 'no' });
-  answer(runtime, 'yes');
-  ok('talked round, YES is the first trick', runtime.state === 'scare' && runtime.level === 1 && lastOf('cue')?.[1] === 'r1');
-  through(runtime, 4.1);
-  ok('after a trick, NO is not scared yet: another trick', answer(runtime, 'no') === '→ scare' && runtime.level === 2);
-  through(runtime, 5.1);
-  ok('YES, scared, is not argued with: off for their treat', answer(runtime, 'yes') === '→ approach');
-  ok('reset clears the tries', (runtime.reset(), runtime.attempt === 0));
-
-  runtime.press({ button: 'no' });
-  through(runtime, 120.1);
-  ok('an unanswered "did you say trick?" starts the house again', runtime.state === 'attract');
-}
-
-{
-  const { runtime } = setup({ openingQuestion: true });
-  ok('with nobody to talk them round, NO to the opening question is a treat', runtime.press({ button: 'no' }) === '→ approach');
-}
-
-{
-  const { runtime } = setup({ persuade: 1 });
-  runtime.press({ button: 'yes' });
-  answer(runtime, 'no');
-  ok('without an opening question, NO at question 1 can be argued with too', runtime.state === 'persuade');
-  answer(runtime, 'yes');
-  ok('and YES from there is trick 1', runtime.state === 'scare' && runtime.level === 1);
+  const project = createProject('t');
+  project.scenes = [createScene({ id: 'sHouse' }), createScene({ id: 'sScare' })];
+  const game = makeGame({ buttons: { b: 'yes' } });
+  game.steps.push(createStep({ id: 'stuck', name: 'Stuck' }));
+  stepById(game, 'treat').on.door = 'stuck';
+  stepById(game, 'more').after.to = 'gone';
+  const problems = gameProblems(game, project);
+  ok('a step that shows a deleted scene', problems.some((p) => p.includes('"At the door" shows a scene')));
+  ok('a link to a deleted step', problems.some((p) => p.includes('"More?" leads to a step')));
+  ok('a dead end', problems.some((p) => p.includes('Nothing moves on from "Stuck"')));
+  ok('a step nothing reaches', problems.some((p) => p.includes('Nothing leads to "At the door"')));
+  ok('a button listened for that nothing is mapped to', problems.some((p) => p.includes('listens for DOOR')));
+  ok('an empty automation says so', gameProblems(createGame(), project)[0].includes('no steps'));
 }
 
 /* ------------------------------------------------------------------ *
- * The presses a path actually gets
+ * The runtime
  * ------------------------------------------------------------------ */
 
-console.log('— mashing, and thumbs left on buttons —');
+console.log('— a group, all the way through —');
 {
-  const { runtime } = setup();
-  runtime.press({ button: 'yes' });
-  ok('a press the instant a question appears is ignored', runtime.press({ button: 'yes' }) === 'not armed');
-  advance(0.3);
-  ok('and still, just before it arms', runtime.press({ button: 'yes' }) === 'not armed');
-  advance(0.15);
-  ok('once armed the first answer wins, at once', runtime.press({ button: 'no' }) === '→ approach');
-  ok('and the other one, a moment later, is too late', runtime.press({ button: 'yes' }) === 'not now');
-}
-
-{
-  const { runtime } = setup();
-  ok('a press with an id counts once', runtime.press({ button: 'yes', id: 'ctx-1' }) === '→ ask');
-  advance(0.5);
-  ok('the same id again is a redelivery', runtime.press({ button: 'yes', id: 'ctx-1' }) === 'duplicate');
-  ok('and does not answer the question', runtime.state === 'ask');
-  ok('stamped two and a half seconds ago, it is stale', runtime.press({ button: 'yes', at: clock - 2500 }) === 'stale');
-  ok('stamped just now, it is fine', runtime.press({ button: 'yes', at: clock - 300 }) === '→ scare');
-}
-
-{
-  const { runtime } = setup({ buttons: { 'event.path_left': 'yes', 'event.front': 'door' } });
-  ok('a mapped button plays its role', runtime.press({ button: 'event.path_left' }) === '→ ask');
-  ok('an unmapped button is logged and dropped', runtime.press({ button: 'event.shed' }) === 'unmapped');
-  const log = runtime.snapshot().log;
-  ok('the log keeps it, newest first, for learning which button is which',
-    log[0].button === 'event.shed' && log[0].result === 'unmapped' && log[1].role === 'yes');
-}
-
-{
-  const { runtime } = setup({ enabled: false });
-  ok('a switched-off game ignores everything', runtime.press({ button: 'yes' }) === 'game off' && runtime.state === 'attract');
-}
-
-{
-  const { runtime } = setup();
-  ok('DOOR on the waiting screen does nothing at all', runtime.press({ button: 'door' }) === 'not now' && runtime.state === 'attract');
-  ok('nor does a button once mapped to TREAT', runtime.press({ button: 'treat' }) === 'unmapped');
-}
-
-/* ------------------------------------------------------------------ *
- * Time, and the group that walked off
- * ------------------------------------------------------------------ */
-
-console.log('— nobody answering, and resetting —');
-{
-  const { runtime, did } = setup();
-  runtime.press({ button: 'yes' });
-  through(runtime, 119);
-  ok('a question waits a good while', runtime.state === 'ask');
-  through(runtime, 1.1);
-  ok('then starts the house again', runtime.state === 'attract');
-  ok('handing the stage back', did('release').length === 1);
-}
-
-{
-  const { runtime, lastOf, did } = setup();
-  runtime.press({ button: 'yes' });
-  answer(runtime, 'yes');
+  const { runtime, lastOf, count } = setup();
   runtime.reset();
-  ok('reset mid-trick goes straight to the start', runtime.state === 'attract');
-  ok('ending the trick', lastOf('cueEnd')?.[1] === 'r1');
-  ok('and handing the stage back', did('release').length === 1);
-  ok('and the diagram is told why', runtime.snapshot().last.on === 'reset');
+  ok('it starts at the start, showing its scene', runtime.step === 'ask' && lastOf('scene')?.[1] === 'sHouse');
+  ok('and its words', lastOf('caption')?.[1] === 'TRICK OR TREAT?');
+  ok('and is not yet away from the start', !runtime.active && runtime.snapshot().atStart);
+
+  ok('a press straight away is too soon', runtime.press({ button: 'yes' }) === 'too soon');
+  ok('YES once it has been read is the scare', answer(runtime, 'yes') === '→ Scare' && lastOf('scene')?.[1] === 'sScare');
+  ok('with its sound', lastOf('sound')?.[1] === 'scream');
+  ok('and no words over it', lastOf('caption')?.[1] === null);
+  ok('away from the start now', runtime.active);
+  ok('a button that leads nowhere from here is dropped', answer(runtime, 'yes') === 'not now');
+
+  through(runtime, 4);
+  ok('the scare runs for its time', runtime.step === 'scare');
+  through(runtime, 1);
+  ok('and then moves on by itself', runtime.step === 'more');
+  const scenes = count('scene');
+  ok('words alone keep the house as it is', lastOf('caption')?.[1] === 'MORE?' && count('scene') === scenes);
+
+  ok('NO goes round again', answer(runtime, 'no') === '→ Scare');
+  through(runtime, 5.2);
+  ok('YES is the treat', answer(runtime, 'yes') === '→ Come and get your treat');
+  ok('which is an alert step', runtime.snapshot().alert === true);
+  ok('DOOR is them coming up', answer(runtime, 'door') === '→ At the door' && lastOf('scene')?.[1] === 'sDoor');
+  through(runtime, 4.2);
+  ok('and the show goes back to the start', runtime.step === 'ask' && lastOf('scene')?.[1] === 'sHouse');
 }
 
-{
-  // A hidden tab is ticked late, not on time. One late tick must make one move,
-  // not replay the whole evening at once.
-  const { runtime } = setup();
-  runtime.press({ button: 'yes' });
-  answer(runtime, 'yes');
-  through(runtime, 100);
-  ok('a very late tick moves one step', runtime.state === 'ask' && runtime.level === 2);
-}
-
-{
-  const { runtime } = setup({}, { holds: {} });
-  runtime.press({ button: 'yes' });
-  answer(runtime, 'yes');
-  ok('a trick whose trigger cannot play still takes time', runtime.state === 'scare');
-  through(runtime, 4.9);
-  ok('the fallback hold, five seconds', runtime.state === 'scare');
-  through(runtime, 0.2);
-  ok('and then the next question', runtime.state === 'ask');
-}
-
-{
-  const { runtime, game } = setup();
-  runtime.press({ button: 'yes' });
-  game.rungs = ['r1'];
-  answer(runtime, 'yes');
-  through(runtime, 4.1);
-  ok('editing the ladder mid-game applies to the group already playing', runtime.state === 'approach');
-}
-
+console.log('— time —');
 {
   const { runtime } = setup();
-  ok('nothing is due on the waiting screen', runtime.nextDeadline() === null);
-  runtime.press({ button: 'yes' });
-  ok('a question is due when it times out', runtime.nextDeadline() === clock + 120000);
-  advance(0.5);
+  runtime.reset();
+  answer(runtime, 'no');
+  ok('an unanswered question waits a good while', (through(runtime, 100), runtime.step === 'treat'));
+  through(runtime, 20.5);
+  ok('and then goes back to the start', runtime.step === 'ask');
+
+  answer(runtime, 'yes');
+  advance(200);
+  runtime.tick();
+  ok('a very late tick catches up through every timer it missed', runtime.step === 'ask');
+  ok('and the last move is the one into the start', runtime.snapshot().last?.to === 'ask');
+
+  runtime.reset();
+  answer(runtime, 'yes');
   const snap = runtime.snapshot();
-  ok('the snapshot says where it is', snap.state === 'ask' && snap.of === 3 && snap.level === 1);
-  ok('and how long is left on the question', Math.abs(snap.remaining - 119.5) < 1e-9);
+  ok('the snapshot says where it is and how long is left', snap.step === 'scare' && snap.name === 'Scare' && Math.abs(snap.remaining - 5) < 1e-9);
+  ok('and the move that got it there', snap.last?.from === 'ask' && snap.last.on === 'yes' && snap.last.to === 'scare');
 }
 
-console.log('— words first, like a dare —');
+console.log('— presses are the hard part —');
 {
-  const beats = { ask: [[{ text: 'SO…', seconds: 1 }, { text: 'YOU DARE.', seconds: 2 }]], scare: [[], [{ text: 'TOO LATE', seconds: 1.5 }]] };
-  const { runtime, lastOf } = setup({ beats });
-  runtime.press({ button: 'yes' });
-  ok('a question with words first says them before it asks', runtime.snapshot().saying?.text === 'SO…');
-  ok('over whatever was up, without changing the scene yet', lastOf('scene')?.[1] !== 'sAsk1');
-  ok('presses are dropped while it speaks', runtime.press({ button: 'yes' }) === 'wait for the words');
-  through(runtime, 1.05);
-  ok('then the next line, by itself', runtime.snapshot().saying?.text === 'YOU DARE.');
-  through(runtime, 2.05);
-  ok('then the question itself', runtime.snapshot().saying === null && lastOf('scene')?.[1] === 'sAsk1');
-  ok('armed from when it appeared, not from when the words began', runtime.press({ button: 'yes' }) === 'not armed');
-  ok('and its own clock started then too', Math.abs(runtime.snapshot().remaining - 120) < 1e-9);
-  answer(runtime, 'yes');
-  ok('a level with no words goes straight to its trick', runtime.state === 'scare' && runtime.snapshot().saying === null && lastOf('cue')?.[1] === 'r1');
-  through(runtime, 4.1);
-  answer(runtime, 'no');
-  ok('the next level has its own words', runtime.snapshot().saying?.text === 'TOO LATE');
-}
-
-{
-  const said = [];
-  const game = createGame({ enabled: true, rungs: ['r1'], beats: { ask: [[{ text: 'HELLO', seconds: 1 }]] } });
-  const runtime = createGameRuntime({
-    getGame: () => game,
-    now,
-    io: { caption: (text) => said.push(text), cue: () => 3, scene: () => {}, release: () => {} },
-  });
-  runtime.press({ button: 'yes' });
+  const { runtime } = setup({ buttons: { 'event.path_left': 'yes' } });
   runtime.reset();
-  ok('the line is put up as a caption', said[0] === 'HELLO');
-  ok('and taken down when the game moves on, even by a reset', said.at(-1) === null);
+  advance(1);
+  ok('a press with an id counts once', runtime.press({ button: 'yes', id: 'ctx-1' }) === '→ Scare');
+  through(runtime, 5.2);
+  advance(1);
+  ok('the same id again is a duplicate', runtime.press({ button: 'no', id: 'ctx-1' }) === 'duplicate');
+  ok('a mapped button plays its role', runtime.press({ button: 'event.path_left' }) === '→ Come and get your treat');
+  advance(1);
+  ok('an unknown button is logged and dropped', runtime.press({ button: 'event.kitchen' }) === 'unmapped');
+  ok('and stays in the log for naming', runtime.snapshot().log.some((e) => e.button === 'event.kitchen'));
+  ok('a press from minutes ago is stale', runtime.press({ button: 'door', at: clock - 5 * 60 * 1000 }) === 'stale');
+  ok('a held button has already counted', runtime.press({ button: 'door', kind: 'long' }) === 'held');
+  ok('and none of that moved anything', runtime.step === 'treat');
+
+  const off = setup({ enabled: false });
+  off.runtime.reset();
+  advance(1);
+  ok('switched off, every press is dropped', off.runtime.press({ button: 'yes' }) === 'off' && off.runtime.step === 'ask');
+}
+
+console.log('— edited while it runs —');
+{
+  const { game, runtime } = setup();
+  runtime.reset();
+  answer(runtime, 'yes');
+  game.steps = game.steps.filter((s) => s.id !== 'scare');
+  ok('a step deleted while the show is on it falls back to the start', runtime.step === 'ask');
+  stepById(game, 'ask').on.yes = 'treat';
+  ok('and a link changed takes effect at once', answer(runtime, 'yes') === '→ Come and get your treat');
+
+  const empty = createGameRuntime({ getGame: () => createGame({ enabled: true }), io: {}, now });
+  empty.reset();
+  ok('with no steps at all, nothing breaks', empty.step === null && empty.press({ button: 'yes' }) === 'not now');
 }
 
 /* ------------------------------------------------------------------ *
  * Saved shows
  * ------------------------------------------------------------------ */
 
-console.log('— the game in a saved show —');
+console.log('— the automation in a saved show —');
 {
   const project = createProject('t');
-  ok('a new show has a game, switched off', project.game && project.game.enabled === false);
-  const old = JSON.parse(JSON.stringify(project));
-  delete old.game;
-  ok('a show from before the game gets one', migrateProject(old).game?.timing?.askTimeout === 120);
-  const partial = JSON.parse(JSON.stringify(project));
-  partial.game = {
-    enabled: true,
-    timing: { askTimeout: 9, nudgeTimeout: 10, windowMs: 150 },
-    scenes: { ask: 'single', chicken: ['x'], nudge: 'y', approach: 'z' },
-    rungs: ['a', null, 'b'],
-    buttons: { left: 'yes', pocket: 'treat' },
-  };
-  const migrated = migrateProject(partial).game;
-  ok('a button mapped to TREAT, which is gone, is unmapped', migrated.buttons.left === 'yes' && !('pocket' in migrated.buttons));
-  ok('a saved timing is kept and the missing ones filled in', migrated.timing.askTimeout === 9 && migrated.timing.armMs === 400);
-  ok('timings for moments that are gone are dropped', !('nudgeTimeout' in migrated.timing) && !('windowMs' in migrated.timing));
-  ok('and so are the moments themselves', !('chicken' in migrated.scenes) && !('nudge' in migrated.scenes));
-  ok('a single question becomes a list of one', Array.isArray(migrated.scenes.ask) && migrated.scenes.ask[0] === 'single');
-  ok('and a single treat invitation too', Array.isArray(migrated.scenes.approach) && migrated.scenes.approach[0] === 'z');
-  ok('gaps in the ladder close up', migrated.rungs.join() === 'a,b');
-  ok('scene slots that were never saved are there', migrated.scenes.reward === null && Array.isArray(migrated.scenes.persuade));
-}
+  ok('a new show has an automation, switched off and empty', project.game.enabled === false && project.game.steps.length === 0);
 
-{
-  const project = createProject('t');
-  project.scenes = [createScene({ id: 'q' })];
-  project.triggers = [createTrigger({ id: 'T1' })];
-  const game = createGame({ door: true, rungs: ['T1', 'gone'], scenes: { ...createGame().scenes, ask: ['q'] }, buttons: { b: 'no' } });
-  const problems = gameProblems(game, project);
-  ok('a rung pointing at a deleted trigger is reported', problems.some((p) => p.includes('Rung 2')));
-  ok('so is nothing to happen at the door', problems.some((p) => p.includes('Nothing happens at the door')));
-  ok('and nothing on the waiting screen', problems.some((p) => p.includes('waits')));
-  ok('and buttons with no YES among them', problems.some((p) => p.includes('YES')));
-  ok('and a DOOR button that is on but not mapped', problems.some((p) => p.includes('mapped to DOOR')));
+  project.game = makeGame({ buttons: { left: 'yes' } });
+  const back = migrateProject(JSON.parse(JSON.stringify(project))).game;
+  ok('steps survive a save', back.steps.length === 5 && back.start === 'ask' && back.enabled === true);
+  ok('with where every button leads', stepById(back, 'more').on.no === 'scare' && stepById(back, 'more').after.seconds === 120);
+
+  const old = JSON.parse(JSON.stringify(createProject('old')));
+  old.game = {
+    enabled: true,
+    rungs: ['t1'],
+    scenes: { attract: 's', ask: ['a'] },
+    buttons: { left: 'yes', pocket: 'treat' },
+    timing: { askTimeout: 9, armMs: 250 },
+  };
+  old.triggers = [{ id: 't1', name: 'Scare' }];
+  const migrated = migrateProject(old);
+  ok('the old ladder game arrives as an empty automation, switched off', migrated.game.steps.length === 0 && migrated.game.enabled === false);
+  ok('keeping which button is which', migrated.game.buttons.left === 'yes');
+  ok('but not a button mapped to TREAT', !('pocket' in migrated.game.buttons));
+  ok('and the press handling it had', migrated.game.timing.armMs === 250 && !('askTimeout' in migrated.game.timing));
+  ok('and triggers are gone', !('triggers' in migrated));
 }
 
 /* ------------------------------------------------------------------ *
  * The picture
  * ------------------------------------------------------------------ */
 
-console.log('— the diagram draws the table, and lights up the game —');
+console.log('— the diagram draws the steps, and lights up the show —');
 {
-  const game = createGame({ rungs: ['a', 'b', 'c'] });
-  const svg = renderGameGraph({ game, names: { ask: 'Do you <dare>?' } });
+  const game = makeGame();
+  const cells = layoutSteps(game);
+  ok('the start is on the left', cells.ask[0] === 0);
+  ok('each column is one move further along', cells.scare[0] === 1 && cells.treat[0] === 1 && cells.more[0] === 2 && cells.door[0] === 2);
+  game.steps.push(createStep({ id: 'lost', name: 'Lost' }));
+  ok('a step nothing reaches is put at the end', layoutSteps(game).lost[0] === 3);
+
+  const svg = renderGameGraph({ game, names: { scare: 'A <scary> scene' } });
   ok('it is an svg', svg.startsWith('<svg') && svg.endsWith('</svg>'));
-  ok('with a box for every state', Object.keys(STATES).every((s) => svg.includes(`data-state="${s}"`)));
-  const edges = graphEdges();
-  ok('and an arrow for every transition it does not summarise',
-    edges.length === (svg.match(/class="gg-edge[ "]/g) || []).length);
-  ok('every drawn transition is in one of them',
-    TRANSITIONS.filter((t) => !t.quiet).every((t) => edges.some((e) => e.from === t.from && e.to === t.to && e.rows.includes(t))));
+  ok('with a box for every step', game.steps.every((s) => svg.includes(`data-step="${s.id}"`)));
+  const edges = graphEdges(game);
+  ok('and an arrow for every way out except back to the start', edges.length === (svg.match(/class="gg-edge[ "]/g) || []).length
+    && !edges.some((e) => e.to === 'ask'));
+  ok('YES and NO to the same place are one arrow', edges.filter((e) => e.from === 'more' && e.to === 'scare').length === 1);
+  ok('going back to the start is a note on the box instead', svg.includes('to the start after 2 min'));
+  ok('a timer’s arrow says how long', svg.includes('>5 s<'));
+  ok('words are shown in quotes', svg.includes('“MORE?”'));
+  ok('names are escaped', svg.includes('A &lt;scary&gt; scene') && !svg.includes('<scary>'));
   ok('no NaN anywhere in the geometry', !/NaN|undefined|Infinity/.test(svg));
-  ok('scene names are escaped', svg.includes('Do you &lt;dare&gt;?') && !svg.includes('<dare>'));
-  ok('levelled states show the ladder height', svg.includes('Scared yet? ×3'));
-  ok('nothing is lit without a game running', !svg.includes('gg-current'));
+  ok('seconds read as people say them', formatSeconds(120) === '2 min' && formatSeconds(6) === '6 s' && formatSeconds(2.5) === '2.5 s');
 
   const { runtime } = setup();
-  runtime.press({ button: 'yes' });
+  runtime.reset();
   answer(runtime, 'yes');
-  const live = renderGameGraph({ game, snapshot: runtime.snapshot() });
-  ok('live, the current state is lit', /class="gg-node[^"]*gg-current[^"]*" data-state="scare"/.test(live));
-  ok('with its level', live.includes('Trick 1/3'));
-  ok('the move just made is marked', /class="gg-edge[^"]*gg-last[^"]*" data-from="ask" data-to="scare"/.test(live));
-  ok('and the ways out of here are bright', /class="gg-edge[^"]*gg-live[^"]*" data-from="scare" data-to="approach"/.test(live));
-
-  const noDoor = renderGameGraph({ game: { ...game, door: false } });
-  ok('with no DOOR button, its arrow is drawn as not applying',
-    /class="gg-edge[^"]*gg-off[^"]*" data-from="approach" data-to="finale"/.test(noDoor));
+  const lit = renderGameGraph({ game, snapshot: runtime.snapshot() });
+  ok('the current step is lit', /class="gg-node[^"]*gg-current[^"]*" data-step="scare"/.test(lit));
+  ok('its way out is live', /class="gg-edge[^"]*gg-live[^"]*" data-from="scare"/.test(lit));
+  ok('and the move that got there is marked', /class="gg-edge[^"]*gg-last[^"]*" data-from="ask" data-to="scare"/.test(lit));
+  ok('an empty automation draws without failing', renderGameGraph({ game: createGame() }).includes('No steps yet'));
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');

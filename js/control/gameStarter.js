@@ -1,58 +1,48 @@
 /**
- * The example dare game: a whole evening, built in one click.
+ * The example automation: a whole evening, built in one click.
  *
- * An empty game is a long form of dropdowns that all say "— nothing —", and
- * the fastest way to understand what each one is for is to see it filled in.
- * So this builds a complete, playable game out of the built-in effects, to this
- * script:
+ * An empty automation is a blank page, and the fastest way to understand what
+ * a step is for is to see some filled in. So this builds a complete, playable
+ * one out of the built-in effects, to this script:
  *
- *   TRICK OR TREAT?
- *     NO   → DID YOU SAY… TRICK?
- *              NO → BUT WE LOVE TO SCARE…
- *                     NO → COME AND GET YOUR TREAT.
- *     YES  → lightning and smoke                       → SCARED YET?
- *                                                          YES → COME AND GET YOUR TREAT.
- *     NO   → the flowers die, a creature at the windows → SCARED YET?
- *     NO   → tentacles out of the walls
- *          → WE'RE ALL OUT OF TRICKS. COME AND GET YOUR TREAT.
- *   DOOR, when they are ready to come forward → the house wakes up at the door
- *   sweets, then HAPPY HALLOWEEN!, read as they walk away
+ *   Trick or treat?             YES → Lightning and smoke · NO → Did you say trick?
+ *   Did you say trick?          YES → Lightning and smoke · NO → But we love to scare
+ *   But we love to scare        YES → Lightning and smoke · NO → Come and get your treat
+ *   Lightning and smoke         after 6 s → Scared yet?
+ *   Scared yet?                 NO → Flowers die, creature · YES → Come and get your treat
+ *   Flowers die, creature       after 7 s → Scared yet? (again)
+ *   Scared yet? (again)         NO → Tentacles · YES → Come and get your treat
+ *   Tentacles                   after 8 s → Out of tricks
+ *   Out of tricks               DOOR → At the door
+ *   Come and get your treat     DOOR → At the door
+ *   At the door                 after 10 s → Sweets
+ *   Sweets                      after 30 s → Happy Halloween
+ *   Happy Halloween             after 8 s → Trick or treat?
  *
- * YES at any of the NO questions goes straight to the first scare. The house
- * keeps what each scare reveals, so the second "scared yet?" is asked over dead
- * flowers and a creature in the window, and the group can see how far they have
- * come. "Scared yet?" turns the buttons round: NO, not yet, is another trick,
- * and YES is the treat. The DOOR button only does anything once
- * they have been invited up: it is them saying they are coming forward.
+ * Every question goes back to "Trick or treat?" after two minutes with
+ * nothing pressed. The house keeps what each scare reveals, so the second
+ * "Scared yet?" is asked over dead flowers and a creature in the window.
  *
- * Every question, send-off and reward is the same **Message** layer with
- * different words: each scene stores the text it shows, so rewording a moment
- * is editing one field in the game editor, and nothing has to be restyled to
- * match.
+ * The words are the steps', written over whatever is up on one **Message**
+ * layer, so a step can say something new without changing the house, and
+ * rewording a step is one field.
  *
  * Like the starter presets, everything here targets tags, so it lands on the
  * house that has been traced rather than on the demo's. Nothing is special-
- * cased: every layer, scene and trigger is one you could have made by hand,
- * and all of it is editable afterwards.
+ * cased: every layer, scene and step is one you could have made by hand, and
+ * all of it is editable afterwards.
  */
 
-import { createLayer, createScene, createTrigger } from '../core/state.js';
+import { createLayer, createScene, createStep } from '../core/state.js';
 import { defaultParams } from '../effects/registry.js';
 import { captureScene } from '../core/scenes.js';
 
 /** Marks everything the example made, so it can be found and rebuilt. */
 export const EXAMPLE = 'dare';
 
-/** Seconds each scare holds before the next question. Climbing, like the dread. */
+/** Seconds each scare plays before the next question. Climbing, like the dread. */
 const HOLDS = [6, 7, 8];
 const FINALE_HOLD = 10;
-
-/**
- * Words first: lines said over whatever is already on the wall before the next
- * thing happens by itself. The script has none — every line in it is a
- * question or an answer — but the editor makes them a click away.
- */
-export const EXAMPLE_BEATS = {};
 
 /**
  * The words. Short, because they are read in the dark from the end of a path
@@ -196,11 +186,11 @@ function buildLayers(tagsPresent) {
 }
 
 /**
- * Build the example into a project: layers, scenes, triggers, and the game
- * pointed at all of them. Replaces an earlier example if there is one, and
- * leaves everything else in the show alone.
+ * Build the example into a project: layers, the scenes they make, and the
+ * steps that move between them. Replaces an earlier example if there is one,
+ * and leaves everything else in the show alone.
  *
- * @returns {{ scenes: number, triggers: number, layers: number, missing: string[], flowers: boolean }}
+ * @returns {{ scenes: number, steps: number, layers: number, missing: string[], flowers: boolean, start: string }}
  */
 export function buildExampleGame(project) {
   removeExampleGame(project);
@@ -224,11 +214,11 @@ export function buildExampleGame(project) {
   const before = project.layers.map((l) => ({ l, enabled: l.enabled }));
 
   /**
-   * One scene: these layers on and everything else off, the message saying
-   * `words` (or switched off when there are none), and any per-scene tweaks to
-   * a layer's parameters.
+   * One look of the house: these layers on and everything else off, with any
+   * per-scene tweaks to a layer's parameters. No words: those belong to the
+   * steps, so one look can carry several different questions.
    */
-  const scene = (name, on, { words = null, fade = 0.6, tweak = {} } = {}) => {
+  const scene = (name, on, { fade = 0.6, tweak = {} } = {}) => {
     for (const l of project.layers) l.enabled = false;
     for (const key of on) cast[key].enabled = true;
     const saved = {};
@@ -236,125 +226,109 @@ export function buildExampleGame(project) {
       saved[key] = { ...cast[key].params };
       Object.assign(cast[key].params, params);
     }
-    if (words) {
-      cast.message.enabled = true;
-      cast.message.params.content = words;
-    }
-    const built = createScene({ name: `Dare · ${name}`, fade, full: true, state: captureScene(project), example: EXAMPLE });
+    const built = createScene({ name: `Example · ${name}`, fade, full: true, state: captureScene(project), example: EXAMPLE });
     for (const [key, params] of Object.entries(saved)) cast[key].params = params;
-    cast.message.params.content = EXAMPLE_WORDS.attract;
     project.scenes.push(built);
     return built;
   };
 
-  // The house before anything has happened — flowers in bloom — and after the
-  // first scare, when they have died. Every later scene keeps them dead.
   // Before anything has happened the flowers are in bloom; the second scare
-  // kills them, and every scene after it keeps them dead.
+  // kills them, and every look after it keeps them dead.
   const fresh = hasPlanter ? ['flowers'] : [];
   const dead = hasPlanter ? ['flowersDying'] : [];
-  const base = ['wash', 'brick', 'fog', ...fresh];
-  const smoky = [...base, 'smoke'];
+  const house = ['wash', 'brick', 'fog', ...fresh];
+  const smoky = [...house, 'smoke'];
   const ruined = ['wash', 'brick', 'fog', 'smoke', ...dead];
-  // What the house looks like after each scare: it keeps what it has shown.
-  const afterRung = [base, smoky, [...ruined, 'creature'], [...ruined, 'creature', 'tentacles', 'blood']];
-  const W = EXAMPLE_WORDS;
+  const tentacled = [...ruined, 'creature', 'tentacles', 'blood'];
 
-  const attract = scene('Trick or treat?', base, { words: W.attract, fade: 1.2 });
-  const scenes = {
-    attract,
-    // The waiting screen is question 1; the questions after it are "scared yet?",
-    // each over everything shown so far.
-    ask: [attract, scene('Scared yet? (after the lightning)', afterRung[1], { words: W.more }), scene('Scared yet? (after the creature)', afterRung[2], { words: W.more })],
-    persuade: W.persuade.map((words, i) => scene(`Said no ${i + 1}`, base, { words, tweak: { message: { animation: i ? 'jitter' : 'wave' } } })),
-    /**
-     * Come and get your treat, by how far they got: said over whatever the
-     * house had become when they said NO — or, after the last trick, the house
-     * owning up that it has nothing left. The door glows: that is where to go.
-     */
-    approach: [
-      ...afterRung.slice(0, 3).map((look, i) => scene(`Come and get your treat ${i + 1}`, [...look, 'doorGlow'], { words: W.treat, tweak: { message: { animation: 'fade', color: '#ffd23a' } } })),
-      scene('Out of tricks', [...afterRung[3], 'doorGlow', 'candles'], { words: W.outOfTricks }),
-    ],
-    waiting: scene('Waiting for a treat', [...ruined, 'candles', 'doorGlow', 'eyes'], { fade: 1 }),
-    reward: scene('Happy Halloween', ['wash', 'brick', 'candles', 'fireworks'], { words: W.goodbye, fade: 0.4, tweak: { message: { animation: 'pop', color: '#ffd23a' } } }),
-  };
-
-  const scares = [
+  const looks = {
+    house: scene('The house', house, { fade: 1.2 }),
     // Lightning, and the smoke rolls in. A real smoke machine can join in from
-    // Home Assistant on the cue for this scare: facade/game/cue, level 1.
-    scene('Scare: lightning and smoke', [...afterRung[1], 'lightning'], { fade: 0.15, tweak: { lightning: { rate: 16, flash: 0.7 }, smoke: { density: 0.7 } } }),
+    // Home Assistant: it is told every step the show moves to.
+    lightning: scene('Lightning and smoke', [...smoky, 'lightning'], { fade: 0.15, tweak: { lightning: { rate: 16, flash: 0.7 }, smoke: { density: 0.7 } } }),
+    smoky: scene('Smoke', smoky, { fade: 1 }),
     // The flowers die — the dying bunch comes on here, so its six seconds of
-    // wilting start with the scare — and the creature appears at the windows.
-    scene('Scare: the flowers die, a creature at the windows', afterRung[2], { fade: 0.15 }),
-    scene('Scare: tentacles from the walls', afterRung[3], { fade: 0.15 }),
-  ];
-  const finaleScene = scene('Finale: the house wakes up', [...afterRung[3], 'eyes', 'bats', 'lightning', 'doorGlow'], {
-    fade: 0.1,
-    tweak: { doorGlow: { color: '#ff1a1a', rate: 2.2, min: 0.4, max: 1 }, lightning: { rate: 18 } },
-  });
-
-  const trigger = (name, sceneId, hold) =>
-    createTrigger({ name: `Dare · ${name}`, source: 'manual', sceneId, hold, cooldown: 0, example: EXAMPLE });
-  const rungs = [
-    trigger('Lightning and smoke', scares[0].id, HOLDS[0]),
-    trigger('Flowers die, creature at the windows', scares[1].id, HOLDS[1]),
-    trigger('Tentacles from the walls', scares[2].id, HOLDS[2]),
-  ];
-  const finale = trigger('The house wakes up', finaleScene.id, FINALE_HOLD);
-  project.triggers = project.triggers || [];
-  project.triggers.push(...rungs, finale);
+    // wilting start with it — and the creature appears at the windows.
+    creature: scene('Flowers die, creature at the windows', [...ruined, 'creature'], { fade: 0.15 }),
+    tentacles: scene('Tentacles from the walls', tentacled, { fade: 0.15 }),
+    door: scene('The house wakes up', [...tentacled, 'eyes', 'bats', 'lightning', 'doorGlow'], {
+      fade: 0.1,
+      tweak: { doorGlow: { color: '#ff1a1a', rate: 2.2, min: 0.4, max: 1 }, lightning: { rate: 18 } },
+    }),
+    sweets: scene('Sweets', [...ruined, 'candles', 'doorGlow', 'eyes'], { fade: 1 }),
+    goodbye: scene('Goodbye', ['wash', 'brick', 'candles', 'fireworks'], { fade: 0.4 }),
+  };
 
   for (const { l, enabled } of before) l.enabled = enabled;
 
+  /**
+   * The script, as steps.
+   *
+   * A step with words and no scene keeps the house as it is and only changes
+   * what it says — which is how "Scared yet?" is asked over whatever the last
+   * scare left behind. Every question goes back to the start after two
+   * minutes with nothing pressed; the remote can do the same at once.
+   */
+  const W = EXAMPLE_WORDS;
+  const QUESTION_WAIT = 120;
+  const ids = {};
+  const names = [
+    'trickOrTreat', 'didYouSay', 'loveToScare', 'lightning', 'scared', 'creature', 'scaredAgain',
+    'tentacles', 'outOfTricks', 'treat', 'door', 'sweets', 'goodbye',
+  ];
+  for (const name of names) ids[name] = createStep().id;
+  const step = (key, fields) => createStep({ id: ids[key], example: EXAMPLE, ...fields });
+  const back = { seconds: QUESTION_WAIT, to: ids.trickOrTreat };
+  const steps = [
+    step('trickOrTreat', { name: 'Trick or treat?', sceneId: looks.house.id, words: W.attract, on: { yes: ids.lightning, no: ids.didYouSay } }),
+    step('didYouSay', { name: 'Did you say trick?', words: W.persuade[0], on: { yes: ids.lightning, no: ids.loveToScare }, after: back }),
+    step('loveToScare', { name: 'But we love to scare', words: W.persuade[1], on: { yes: ids.lightning, no: ids.treat }, after: back }),
+    step('lightning', { name: 'Lightning and smoke', sceneId: looks.lightning.id, after: { seconds: HOLDS[0], to: ids.scared } }),
+    step('scared', { name: 'Scared yet?', sceneId: looks.smoky.id, words: W.more, on: { yes: ids.treat, no: ids.creature }, after: back }),
+    step('creature', { name: 'Flowers die, creature', sceneId: looks.creature.id, after: { seconds: HOLDS[1], to: ids.scaredAgain } }),
+    step('scaredAgain', { name: 'Scared yet? (again)', words: W.more, on: { yes: ids.treat, no: ids.tentacles }, after: back }),
+    step('tentacles', { name: 'Tentacles', sceneId: looks.tentacles.id, after: { seconds: HOLDS[2], to: ids.outOfTricks } }),
+    step('outOfTricks', { name: 'Out of tricks', words: W.outOfTricks, alert: true, on: { door: ids.door }, after: back }),
+    step('treat', { name: 'Come and get your treat', words: W.treat, alert: true, on: { door: ids.door }, after: back }),
+    step('door', { name: 'At the door', sceneId: looks.door.id, alert: true, after: { seconds: FINALE_HOLD, to: ids.sweets } }),
+    step('sweets', { name: 'Sweets', sceneId: looks.sweets.id, after: { seconds: 30, to: ids.goodbye } }),
+    step('goodbye', { name: 'Happy Halloween', sceneId: looks.goodbye.id, words: W.goodbye, after: { seconds: 8, to: ids.trickOrTreat } }),
+  ];
+
   const game = project.game;
+  game.steps = [...game.steps.filter((s) => s.example !== EXAMPLE), ...steps];
+  game.start = ids.trickOrTreat;
   game.enabled = true;
-  game.door = true;
-  game.openingQuestion = true;
-  game.persuade = W.persuade.length;
-  game.rungs = rungs.map((t) => t.id);
-  game.finale = finale.id;
-  game.scenes = {
-    attract: scenes.attract.id,
-    ask: scenes.ask.map((s) => s.id),
-    persuade: scenes.persuade.map((s) => s.id),
-    approach: scenes.approach.map((s) => s.id),
-    waiting: scenes.waiting.id,
-    reward: scenes.reward.id,
-  };
-
-
-  game.beats = JSON.parse(JSON.stringify(EXAMPLE_BEATS));
   game.messageLayer = cast.message.id;
 
   const missing = ['wall', 'door', 'window'].filter((t) => !tagsPresent.has(t));
   return {
-    scenes: project.scenes.filter((s) => s.example === EXAMPLE).length,
-    triggers: rungs.length + 1,
+    scenes: Object.keys(looks).length,
+    steps: steps.length,
     layers: order.length,
     missing,
     // No flowers without something to grow them from: worth saying, because
     // a scare that is only a creature looks like a bug rather than a choice.
     flowers: hasPlanter,
-    attract: scenes.attract.id,
+    start: looks.house.id,
   };
 }
 
-/** Is there an example game in this show already? */
+/** Is there an example in this show already? */
 export function hasExampleGame(project) {
   return (project.layers || []).some((l) => l.example === EXAMPLE);
 }
 
-/** Take the example out again: its layers, scenes and triggers, and the game's references to them. */
+/** Take the example out again: its layers, scenes and steps, and anything pointing at them. */
 export function removeExampleGame(project) {
   const sceneIds = new Set((project.scenes || []).filter((s) => s.example === EXAMPLE).map((s) => s.id));
-  const triggerIds = new Set((project.triggers || []).filter((t) => t.example === EXAMPLE).map((t) => t.id));
   const layerIds = new Set((project.layers || []).filter((l) => l.example === EXAMPLE).map((l) => l.id));
-  if (!sceneIds.size && !triggerIds.size && !layerIds.size) return false;
+  const game = project.game;
+  const stepIds = new Set((game?.steps || []).filter((s) => s.example === EXAMPLE).map((s) => s.id));
+  if (!sceneIds.size && !layerIds.size && !stepIds.size) return false;
 
   project.layers = project.layers.filter((l) => !layerIds.has(l.id));
   project.scenes = project.scenes.filter((s) => !sceneIds.has(s.id));
-  project.triggers = (project.triggers || []).filter((t) => !triggerIds.has(t.id));
   // Other scenes captured while the example existed name its layers; harmless,
   // but tidier gone.
   for (const s of project.scenes) for (const id of layerIds) delete s.state?.[id];
@@ -363,19 +337,17 @@ export function removeExampleGame(project) {
   if (sceneIds.has(show.activeScene)) show.activeScene = null;
   if (sceneIds.has(show.previousScene)) show.previousScene = null;
   if (sceneIds.has(show.sceneLoaded)) show.sceneLoaded = null;
+  show.caption = null;
 
-  const game = project.game;
   if (game) {
-    game.rungs = game.rungs.filter((id) => !triggerIds.has(id));
-    if (triggerIds.has(game.finale)) game.finale = null;
-    if (layerIds.has(game.messageLayer)) {
-      game.messageLayer = null;
-      game.beats = {};
+    game.steps = game.steps.filter((s) => !stepIds.has(s.id));
+    for (const step of game.steps) {
+      if (sceneIds.has(step.sceneId)) step.sceneId = null;
+      for (const role of Object.keys(step.on || {})) if (stepIds.has(step.on[role])) step.on[role] = null;
+      if (stepIds.has(step.after?.to)) step.after.to = null;
     }
-    for (const [key, slot] of Object.entries(game.scenes)) {
-      if (Array.isArray(slot)) game.scenes[key] = slot.filter((id) => !sceneIds.has(id));
-      else if (sceneIds.has(slot)) game.scenes[key] = null;
-    }
+    if (stepIds.has(game.start)) game.start = null;
+    if (layerIds.has(game.messageLayer)) game.messageLayer = null;
   }
   return true;
 }

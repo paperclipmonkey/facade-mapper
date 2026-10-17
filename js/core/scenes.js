@@ -118,7 +118,7 @@ export function sceneDrift(project, sceneId) {
  * Changes that would be lost by leaving a scene: its drift, but only while it
  * is *loaded*.
  *
- * A scene put up by a trigger, the playlist or the dare game is applied at
+ * A scene put up by the playlist or the automation is applied at
  * render time and never written onto the layers — deliberately, so an evening
  * of scares cannot rewrite the show. Its layers therefore differ from it as a
  * matter of course, and `sceneDrift` says so. Reading that as unsaved work put
@@ -199,9 +199,8 @@ export function effectiveLayers(project, at = now()) {
  * A caption: one text layer, switched on and saying something, on top of
  * whatever the scene is showing.
  *
- * This is how the dare game says a line and moves on — "YOU ASKED FOR IT…"
- * over the question that was just answered, and then the scare. Not a scene of
- * its own: the point is that the picture does not change, only the words, and
+ * This is how an automation step writes its words — "SCARED YET?" over
+ * whatever the last scare left on the house. Not a scene of its own: the point is that the picture does not change, only the words, and
  * a scene per line would have to copy the picture it was said over. It lives
  * in the show state like a scene change does, so every tab draws the same
  * words at the same moment.

@@ -163,11 +163,31 @@ export function createLayer(effectId, overrides = {}) {
   };
 }
 
+/**
+ * Single keys the editor itself uses, which a scene's key therefore cannot be.
+ *
+ * The editor's own handler runs first and does not fall through, so a scene
+ * on one of these is simply dead — it looks configured, and pressing the key
+ * does the editor's thing instead. The first demo used B for bats, which is
+ * Blackout. Digits are for scenes, so they are not here.
+ */
+export const RESERVED_KEYS = {
+  v: 'the Select tool',
+  p: 'the Area tool',
+  l: 'the Path tool',
+  r: 'the Rectangle tool',
+  c: 'the Corners tool',
+  w: 'Square up the wall',
+  b: 'Blackout',
+  ' ': 'play/pause',
+  0: 'zoom the stage back to fit',
+};
+
 export function createScene(overrides = {}) {
   return {
     id: uid('scene'),
     name: 'Scene',
-    /** Hotkey digit 1-9, or null. */
+    /** Its key: a digit 1-9 for a look, a letter for a one-shot, or null. */
     hotkey: null,
     /** Crossfade seconds when switching to this scene. */
     fade: 0.6,
@@ -196,142 +216,28 @@ export function createScene(overrides = {}) {
 }
 
 /**
- * A trigger fires a scene for a while and then puts the previous one back.
- *
- * The interesting source is 'motion': the control tab watches a region of the
- * camera view and fires when something moves through it. That is what turns the
- * house from a loop into something that reacts to whoever walks up the path.
- */
-/**
- * Single keys the editor itself uses, which a trigger therefore cannot have.
- *
- * The editor's own handler runs first and does not fall through, so a trigger
- * on one of these is simply dead — it looks configured, reads as configured,
- * and never fires. Worth a warning rather than a puzzle in the dark.
- */
-export const RESERVED_KEYS = {
-  v: 'the Select tool',
-  p: 'the Area tool',
-  l: 'the Path tool',
-  r: 'the Rectangle tool',
-  c: 'the Corners tool',
-  /**
-   * Added late, and missing from here until it was gone looking for.
-   *
-   * `W` opens the square-the-wall tool. The editor's switch handles it and
-   * breaks, so it never reaches the trigger dispatch below `default` — a
-   * trigger on `w` looked configured, was warned about by nothing, and in the
-   * dark opened a modal tool instead of firing the scare. Which is the whole
-   * of what this constant is for.
-   */
-  w: 'Square up the wall',
-  b: 'Blackout',
-  ' ': 'play/pause',
-  0: 'zoom the stage back to fit',
-  1: 'scene 1', 2: 'scene 2', 3: 'scene 3', 4: 'scene 4', 5: 'scene 5',
-  6: 'scene 6', 7: 'scene 7', 8: 'scene 8', 9: 'scene 9',
-};
-
-export function createTrigger(overrides = {}) {
-  return {
-    id: uid('trig'),
-    name: 'Scare',
-    enabled: true,
-    /** 'motion' | 'hotkey' | 'timer' | 'manual' */
-    source: 'motion',
-    /** Scene to jump to. */
-    sceneId: null,
-    /** Seconds to hold it before returning to what was playing. 0 = stay. */
-    hold: 6,
-    /** Media id of a sound to play with it. */
-    sound: null,
-    soundVolume: 1,
-    /** Minimum seconds between firings, so one visitor doesn't retrigger it. */
-    cooldown: 20,
-
-    /** source: 'motion' — which part of the camera view to watch. */
-    region: { x: 0.25, y: 0.55, w: 0.5, h: 0.45 },
-    sensitivity: 0.5,
-
-    /** source: 'hotkey' — a single key. */
-    key: 'q',
-
-    /** source: 'timer' — average seconds between firings, with jitter. */
-    every: 180,
-    jitter: 0.5,
-
-    /**
-     * HTTP calls fired around this trigger, for WLED and anything else on the
-     * network that takes a URL. `before` goes at the instant it fires; `after`
-     * when the hold expires and the show returns to what it was doing.
-     */
-    http: {
-      before: { url: '', method: 'GET', body: '', mode: 'no-cors' },
-      after: { url: '', method: 'GET', body: '', mode: 'no-cors' },
-    },
-
-    ...overrides,
-  };
-}
-
-/**
- * The dare game: buttons on the path, a ladder of scares, a treat at the door.
- * The machine itself is in core/game.js; this is only what one show configures.
+ * The automation: steps, and what moves between them. The model and the
+ * questions asked of it are in core/game.js; this is what one show stores.
  */
 export function createGame(overrides = {}) {
   return {
     enabled: false,
     /** Physical button id (as Home Assistant names it) → 'yes' | 'no' | 'door'. */
     buttons: {},
+    /** The step the show waits at and goes back to. Null means the first. */
+    start: null,
+    /** See createStep. */
+    steps: [],
     /**
-     * The waiting screen is the first question — "TRICK OR TREAT?" — so YES
-     * goes straight to the first scare. Off, it only invites a press, and the
-     * first question comes after it.
+     * The text layer a step's words are written on. Words are drawn over
+     * whatever is up, so a step can say something without changing the house.
      */
-    openingQuestion: false,
-    /** After a NO to the first question, how many more times the house asks. */
-    persuade: 0,
-    /**
-     * End at the front door. On, the top of the ladder invites them up the path
-     * and the finale waits for the door button; off, it plays where they stand.
-     */
-    door: true,
-    /**
-     * Scene ids per moment. `ask` and `approach` are per level and `persuade`
-     * per try, a blank one repeating the one before.
-     */
-    scenes: {
-      attract: null,
-      ask: [],
-      persuade: [],
-      approach: [],
-      waiting: null,
-      reward: null,
-    },
-    /** Trigger ids, one per rung, mildest first. */
-    rungs: [],
-    /** Trigger played at the door. */
-    finale: null,
-    /**
-     * Words first: lines said over whatever is on the wall as a moment begins,
-     * each for a few seconds, before it shows what it shows — and then it
-     * moves on by itself. `{ [state]: [[{ text, seconds }, …] per level] }`;
-     * a state that is not by level uses the first list.
-     */
-    beats: {},
-    /** The text layer that says them. The example's Message layer. */
     messageLayer: null,
-    /** Seconds, except the two press-handling windows in milliseconds. */
+    /** The two press-handling windows, in milliseconds. */
     timing: {
-      // Long, on purpose: a group can stand and argue about a question for a
-      // while, and the house can always be reset from indoors.
-      askTimeout: 120,
-      approachTimeout: 120,
-      waitForTreat: 30,
-      rewardHold: 8,
-      cooldown: 6,
-      scareHold: 5,
+      /** A step ignores presses this long after it appears: a thumb still on YES. */
       armMs: 400,
+      /** A press older than this is a replay, not a person. */
       staleMs: 2000,
     },
     ...overrides,
@@ -339,12 +245,39 @@ export function createGame(overrides = {}) {
 }
 
 /**
+ * One step of the automation.
+ *
+ * It shows a scene, or words, or both; words alone keep the house as it is.
+ * Each button can lead somewhere, and so can a timer.
+ */
+export function createStep(overrides = {}) {
+  const { on, after, ...rest } = overrides;
+  return {
+    id: uid('step'),
+    name: 'New step',
+    /** The scene to put up. Null keeps what is already on the house. */
+    sceneId: null,
+    /** Words written over it, on the automation's message layer. */
+    words: '',
+    /** A sound to play as it starts: a media id. */
+    sound: null,
+    /** Ring the alert on the remote, for a moment somebody indoors should get up for. */
+    alert: false,
+    /** Where each button leads: a step id, or null for nowhere. */
+    on: { yes: null, no: null, door: null, ...(on || {}) },
+    /** Where the step goes by itself, and after how long. */
+    after: { seconds: 0, to: null, ...(after || {}) },
+    ...rest,
+  };
+}
+
+/**
  * Delete every scene, and everything that pointed at one.
  *
  * What is on the wall stays on the wall: scenes are snapshots of the layers,
- * not the layers themselves. The playlist empties, the game forgets the scenes
- * it showed, and a trigger that fired one now fires nothing — each still
- * there, only waiting to be pointed at something new.
+ * not the layers themselves. The playlist empties and a step that showed a
+ * scene now keeps whatever is on the house — each still there, only waiting
+ * to be pointed at something new.
  *
  * @returns {number} how many scenes went.
  */
@@ -358,42 +291,23 @@ export function clearScenes(project) {
   show.previousScene = null;
   show.sceneLoaded = false;
   show.caption = null;
-  for (const trigger of project.triggers || []) trigger.sceneId = null;
-  if (project.game) project.game.scenes = createGame().scenes;
+  for (const step of project.game?.steps || []) step.sceneId = null;
   return count;
 }
 
 /**
  * Everything but the house.
  *
- * Effects, scenes, triggers and the game go; the traced shapes, the projectors
+ * Effects, scenes and the automation go; the traced shapes, the projectors
  * and their alignment, the photo of the house, uploaded media and the look
- * stay — the slow, physical part of setting up, which nobody wants to do twice.
- * For starting again from the examples without starting again from the
- * ladder. The game keeps which button is which, because that is about the
- * hardware too.
+ * stay — the slow, physical part of setting up, which nobody wants to do
+ * twice. Which button is which stays too, because that is about the hardware.
  */
 export function clearShow(project) {
   clearScenes(project);
   project.layers = [];
-  project.triggers = [];
   project.game = createGame({ buttons: { ...(project.game?.buttons || {}) } });
   return project;
-}
-
-/** Beats as saved, made safe to walk: lists of lists of `{ text, seconds }`. */
-function normaliseBeats(raw) {
-  const out = {};
-  if (!raw || typeof raw !== 'object') return out;
-  for (const [state, levels] of Object.entries(raw)) {
-    if (!Array.isArray(levels)) continue;
-    out[state] = levels.map((list) =>
-      (Array.isArray(list) ? list : [])
-        .filter((b) => b && typeof b.text === 'string')
-        .map((b) => ({ text: b.text, seconds: Number(b.seconds) > 0 ? Number(b.seconds) : 2.5 }))
-    );
-  }
-  return out;
 }
 
 export function createProject(name = 'Untitled show') {
@@ -436,10 +350,7 @@ export function createProject(name = 'Untitled show') {
     /** Media entries: { id, name, kind, size, duration }. Bytes live in IndexedDB. */
     media: [],
 
-    /** Reactive and timed one-shots. See createTrigger. */
-    triggers: [],
-
-    /** The dare game. See createGame and docs/button-game.md. */
+    /** Buttons and timers moving the show between steps. See createGame. */
     game: createGame(),
 
     /** Unattended on/off times, so the show runs itself all evening. */
@@ -575,52 +486,32 @@ export function migrateProject(raw) {
     return scene;
   });
 
-  p.triggers = (Array.isArray(raw.triggers) ? raw.triggers : []).map((t) => {
-    const base = createTrigger();
-    const merged = { ...base, ...t };
-    merged.region = { ...base.region, ...(t.region || {}) };
-    /**
-     * The hooks are merged a level down, like the region and for the same
-     * reason: a trigger saved with one of them configured carries only that
-     * one, and `{ ...base, ...t }` replaces the pair wholesale rather than
-     * filling the gap. The inspector papers over the result by rebuilding a
-     * missing hook when you open it, which means the hole is invisible until
-     * somebody fires the trigger without having opened it.
-     */
-    merged.http = {
-      before: { ...base.http.before, ...(t.http?.before || {}) },
-      after: { ...base.http.after, ...(t.http?.after || {}) },
-    };
-    return merged;
+  /**
+   * The automation, as saved.
+   *
+   * Shows saved before it was steps — the dare game's ladder of scares and
+   * the triggers it played — arrive with an empty automation and their
+   * button mapping kept: there is no faithful way to turn a ladder into
+   * steps, and the example rebuilds the same script in one click. Triggers
+   * are gone altogether; scenes do what they did.
+   */
+  const savedGame = raw.game && typeof raw.game === 'object' ? raw.game : {};
+  const buttons = Object.fromEntries(
+    Object.entries(savedGame.buttons || {}).filter(([, role]) => ['yes', 'no', 'door'].includes(role))
+  );
+  const freshGame = createGame();
+  p.game = createGame({
+    enabled: Array.isArray(savedGame.steps) ? !!savedGame.enabled : false,
+    buttons,
+    start: typeof savedGame.start === 'string' ? savedGame.start : null,
+    steps: (Array.isArray(savedGame.steps) ? savedGame.steps : [])
+      .filter((step) => step && typeof step === 'object')
+      .map((step) => createStep({ ...step, on: { ...(step.on || {}) }, after: { ...(step.after || {}) } })),
+    messageLayer: typeof savedGame.messageLayer === 'string' ? savedGame.messageLayer : null,
+    timing: Object.fromEntries(Object.keys(freshGame.timing).map((key) => [key, savedGame.timing?.[key] ?? freshGame.timing[key]])),
   });
 
-  /**
-   * A level down for the same reason as the trigger hooks: a show saved before
-   * a timing or a scene slot existed must arrive with the default in the gap,
-   * not with `undefined` where the runtime expects a number.
-   */
-  const game = createGame();
-  const savedGame = raw.game && typeof raw.game === 'object' ? raw.game : {};
-  const list = (value) => (Array.isArray(value) ? value.map((v) => v || null) : value ? [value] : []);
-  p.game = {
-    ...game,
-    ...savedGame,
-    // A button once mapped to TREAT, which the game no longer has, is unmapped.
-    buttons: Object.fromEntries(Object.entries(savedGame.buttons || {}).filter(([, role]) => ['yes', 'no', 'door'].includes(role))),
-    // Only the moments the game still has: a show saved with "chicken" or
-    // "anyone there?" in it arrives without them.
-    scenes: Object.fromEntries(Object.keys(game.scenes).map((key) => [key, savedGame.scenes?.[key] ?? game.scenes[key]])),
-    timing: Object.fromEntries(Object.keys(game.timing).map((key) => [key, savedGame.timing?.[key] ?? game.timing[key]])),
-    rungs: list(savedGame.rungs).filter(Boolean),
-    finale: savedGame.finale || null,
-    beats: normaliseBeats(savedGame.beats),
-    messageLayer: typeof savedGame.messageLayer === 'string' ? savedGame.messageLayer : null,
-  };
-  p.game.scenes.ask = list(p.game.scenes.ask);
-  p.game.scenes.persuade = list(p.game.scenes.persuade);
-  p.game.scenes.approach = list(p.game.scenes.approach);
-  p.game.openingQuestion = !!p.game.openingQuestion;
-  p.game.persuade = Math.max(0, Math.round(Number(p.game.persuade) || 0));
+  delete p.triggers;
 
   p.userEffects = Array.isArray(raw.userEffects) ? raw.userEffects : [];
   p.media = Array.isArray(raw.media) ? raw.media : [];

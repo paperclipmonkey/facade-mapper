@@ -356,7 +356,7 @@ half past midnight on Saturday.
 
 | | |
 | --- | --- |
-| Shapes, alignment, effects, scenes, triggers, schedule | `localStorage` — small, and the thing worth keeping |
+| Shapes, alignment, effects, scenes, automation, schedule | `localStorage` — small, and the thing worth keeping |
 | Video, images, sounds, the traced camera still | IndexedDB — too big for `localStorage`, and shared across tabs so projector tabs read the same files |
 
 Nothing is uploaded anywhere. Clearing site data deletes all of it, so

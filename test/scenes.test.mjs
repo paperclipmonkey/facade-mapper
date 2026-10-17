@@ -27,7 +27,7 @@
  *   node test/scenes.test.mjs
  */
 
-import { createProject, createLayer, createScene, createTrigger, createShape, migrateProject, clearScenes, clearShow } from '../js/core/state.js';
+import { createProject, createLayer, createScene, createStep, createShape, migrateProject, clearScenes, clearShow } from '../js/core/state.js';
 import { applyPreset, addDemoBursts, PRESETS } from '../js/control/presets.js';
 import {
   captureScene,
@@ -204,7 +204,8 @@ console.log('\n— firing a one-shot over a running show —');
   const ambient = liveLayers(project).length;
   ok('the ambient look is running', ambient > 3, `${ambient} layers`);
 
-  const burstScene = project.scenes.find((s) => s.name === bursts[0].name);
+  const burstScene = project.scenes.find((s) => s.hotkey === bursts[0].key);
+  ok('each one-shot is a scene on its own key', !!burstScene && burstScene.name.startsWith(bursts[0].name));
   ok('and a one-shot names exactly one layer',
     Object.keys(burstScene.state).length === 1 && burstScene.full === false);
 
@@ -239,7 +240,7 @@ console.log('\n— firing a one-shot over a running show —');
     const ambient = liveLayers(project).length;
 
     for (const burst of bursts) {
-      const scene = project.scenes.find((s) => s.name === burst.name);
+      const scene = project.scenes.find((s) => s.hotkey === burst.key);
       activateScene(project, scene.id, { fade: 0 });
       const live = liveLayers(project);
       if (live.length !== ambient + 1) {
@@ -556,20 +557,20 @@ console.log('\n— clearing out —');
   project.scenes = [createScene({ id: 's1' }), createScene({ id: 's2' })];
   project.show.playlist = [{ sceneId: 's1', duration: 30 }];
   project.show.activeScene = 's2';
-  project.triggers = [createTrigger({ sceneId: 's1' })];
-  project.game.scenes.attract = 's1';
+  project.game.steps = [createStep({ id: 'a', sceneId: 's1', words: 'HELLO' })];
   project.game.buttons = { left: 'yes' };
 
   ok('deleting all scenes says how many went', clearScenes(project) === 2);
   ok('and they have gone', project.scenes.length === 0);
   ok('with the playlist and the live scene', project.show.playlist.length === 0 && project.show.activeScene === null);
-  ok('nothing points at one any more', project.triggers[0].sceneId === null && project.game.scenes.attract === null);
+  ok('no step points at one any more', project.game.steps[0].sceneId === null);
+  ok('though the step keeps its words', project.game.steps[0].words === 'HELLO');
   ok('but what is on the wall stays', project.layers.length === 2);
 
   project.scenes = [createScene({ id: 's3' })];
   clearShow(project);
-  ok('clearing the show takes every effect, scene and trigger',
-    project.layers.length === 0 && project.scenes.length === 0 && project.triggers.length === 0);
+  ok('clearing the show takes every effect, scene and step',
+    project.layers.length === 0 && project.scenes.length === 0 && project.game.steps.length === 0);
   ok('and the house stays', project.shapes.length === 1 && project.projectors.length === 1);
   ok('so does which button is which', project.game.buttons.left === 'yes' && project.game.enabled === false);
 }

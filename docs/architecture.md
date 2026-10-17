@@ -12,7 +12,7 @@ mqtt.mjs            optional: the link server's bridge to an MQTT broker
 js/core/            project model, storage, cross-tab bus, maths, clock, modulation
 js/effects/         effect registry and the built-in library
 js/render/          world renderer (2D), projective warp and post-processing (WebGL)
-js/control/         camera, calibration, motion, sound, triggers, UI
+js/control/         camera, calibration, sound, automation, UI
 js/projector/       the output tab
 js/remote/          the remote
 js/draw/            the drawing surface
@@ -22,7 +22,7 @@ test/               plain Node tests, no dependencies, plus a browser benchmark
 
 ## One project object
 
-Everything a show is — shapes, projectors, layers, scenes, triggers, schedule,
+Everything a show is — shapes, projectors, layers, scenes, automation, schedule,
 settings, the source of any custom effects — lives in a single serialisable
 object, defined in [`js/core/state.js`](../js/core/state.js).
 
@@ -47,7 +47,7 @@ Three, and most confusion about this codebase is confusion between them.
 
 | Space | Range | What lives in it |
 | --- | --- | --- |
-| **World** | 0..1 across the camera frame | Everything stored: shape points, projector quads, trigger regions |
+| **World** | 0..1 across the camera frame | Everything stored: shape points, projector quads |
 | **World pixels** | a virtual 1920-wide frame | What effects draw in, so a line width of 6 means the same thing everywhere |
 | **Projector** | 0..1 across one projector's output | What the homography produces |
 
@@ -159,10 +159,9 @@ plausible-looking output:
 
 ```bash
 node test/geometry.test.mjs    # homography, marker detection, region and mesh maths
-node test/runtime.test.mjs     # motion, gating, scheduling, grading, the show clock, feeds
-node test/triggers.test.mjs    # holds, restores, timers, hotkeys and the HTTP hooks
-node test/game.test.mjs        # the dare game: its table, every press rule, and its diagram
-node test/gameStarter.test.mjs # the example dare game, played end to end
+node test/runtime.test.mjs     # scheduling, grading, the show clock, feeds
+node test/game.test.mjs        # the automation: steps, every press rule, and its diagram
+node test/gameStarter.test.mjs # the example automation, played end to end
 node test/migrate.test.mjs     # every project ever saved, arriving at a newer copy
 node test/bus.test.mjs         # cross-tab messages, the mirror, and who is alive
 node test/picker.test.mjs      # the effect gallery: cards, search, and letting go
@@ -208,10 +207,10 @@ frame in two tabs. Both suites share the stand-in browser in
 [`effectHarness.mjs`](../test/effectHarness.mjs), which is where the shapes live:
 each one stands for a project somebody actually has.
 
-[`triggers.test.mjs`](../test/triggers.test.mjs) covers the runtime with the
-least margin for error in the app — everything it does happens once, in the
-dark, in front of people, and every failure mode is silent. It runs on a clock
-the test moves by hand, so nothing sleeps.
+[`game.test.mjs`](../test/game.test.mjs) covers the runtime with the least
+margin for error in the app — everything it does happens once, in the dark, in
+front of people, and every failure mode is silent. It runs on a clock the test
+moves by hand, so nothing sleeps.
 
 [`bus.test.mjs`](../test/bus.test.mjs) runs against a real `BroadcastChannel`,
 which Node has. The corner worth knowing is the last one it checks: a message
@@ -256,10 +255,7 @@ also the function that has to survive being handed a file somebody dragged in,
 which is any JSON at all.
 
 `geometry.test.mjs` includes an end-to-end calibration against a simulated
-projector and camera. The motion tests are worth reading if you plan to rely on
-triggers: they cover a person walking into frame, a parked car fading into the
-background, and a porch light coming on, which are the three cases that decide
-whether the feature is usable in a real garden.
+projector and camera.
 
 [`test/bench.html`](../test/bench.html) is the effect benchmark — see
 [performance](performance.md).

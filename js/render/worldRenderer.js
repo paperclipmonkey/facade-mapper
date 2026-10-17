@@ -541,7 +541,7 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
      * And, moving from one scene to another, only the layers the new scene
      * brings *in*. A layer that was already on in the scene before carries on
      * where it was: moving between two looks that share a fog bank must not
-     * restart the fog, and the dare game's house keeps what it has shown — the
+     * restart the fog, and an automation's house keeps what it has shown — the
      * flowers that died in one scene stay dead in the next, the tentacles stay
      * out of the wall — only because their clocks keep running across the
      * change. A scene fired again over itself is the exception: that is the

@@ -1280,3 +1280,16 @@
   font-size: 12px;
 }
 .ge-to:hover { border-color: var(--accent-2); }
+
+/* The automation editor's step panel. */
+.glive-restart { grid-column: 1 / -1; font-weight: 700; }
+.ge-name { width: 100%; font-size: 17px; font-weight: 600; padding: 6px 8px; }
+.ge-note { margin: 6px 0 10px; }
+.ge-scene-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.ge-scene-row select { flex: 1 1 auto; min-width: 0; }
+.ge-effects { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; margin-bottom: 6px; }
+.ge-effects .inline-check { font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ge-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.ge-next select { flex: 1 1 auto; min-width: 0; }
+.ge-seconds { width: 64px; }
+.geditor-map .geditor-graph { overflow: auto; }

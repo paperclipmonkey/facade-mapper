@@ -486,7 +486,7 @@ input[type="checkbox"] {
 .list-item .chip { flex: none; white-space: nowrap; }
 
 /* ------------------------------------------------------------------ *
- * The dare game diagram (js/core/gameGraph.js)
+ * The automation diagram (js/core/gameGraph.js)
  *
  * Shared by the control tab's Game panel and the remote. Everything is
  * dimmed while the game is live except the current state and the ways out of
@@ -549,3 +549,8 @@ input[type="checkbox"] {
 .gg-sub.gg-words { fill: #ffb26b; font-style: italic; }
 .gg-node.gg-selected > rect:first-of-type { stroke: var(--accent-2); stroke-width: 2.6; }
 .gg-node:hover > rect:first-of-type { stroke: var(--text-dim); }
+
+/* Automation diagram: the start step and the steps that ring indoors. */
+.gg-node.gg-start .gg-stripe { fill: var(--good); }
+.gg-node.gg-alert .gg-stripe { fill: var(--accent-2); }
+.gg-node .gg-stripe { fill: var(--accent); }

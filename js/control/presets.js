@@ -12,7 +12,7 @@
  * afterwards.
  */
 
-import { createLayer, createScene, createTrigger } from '../core/state.js';
+import { createLayer, createScene } from '../core/state.js';
 import { defaultParams } from '../effects/registry.js';
 import { captureScene } from '../core/scenes.js';
 import { GRADE_PRESETS } from '../render/postfx.js';
@@ -1140,21 +1140,17 @@ function nextFreeHotkey(project) {
  * actually reaches the door. These are the other kind: they happen once, and
  * something has to set them off.
  *
- * Each is a layer that is **off** in the authored show, a scene that switches
- * exactly that one on, and a trigger that fires the scene from a key. The
- * trigger holds it for a moment and then restores whatever was playing, so the
- * ambient look comes back by itself and the next visitor gets the same thing.
- * Pressing the key again re-enables the layer, which restarts its clock — that
- * is what makes them repeatable rather than a one-off.
+ * Each is a layer that is **off** in the authored show, and a scene that
+ * switches exactly that one on, fired by its own key. Pressing the key again
+ * re-fires the scene, which restarts the layer's clock — that is what makes
+ * them repeatable rather than a one-off.
  *
- * A key rather than motion because a key can be pressed by hand, by a doorbell
- * wired to a USB button, or by anything else that can type — and because it is
- * the one trigger that works indoors while you are still learning the app.
+ * A key because a key can be pressed by hand, by a doorbell wired to a USB
+ * button, or by anything else that can type.
  *
  * The keys avoid the ones the editor has already taken. That is not a detail:
  * the first draft of this used B for bats, which is Blackout, so pressing it
- * blacked the show out and never reached the trigger at all. `RESERVED_KEYS`
- * in core/state.js is the list, and the trigger inspector warns if you pick one.
+ * blacked the show out and never reached the scene at all.
  */
 export const DEMO_BURSTS = [
   {
@@ -1162,7 +1158,6 @@ export const DEMO_BURSTS = [
     name: 'Bats out of the door',
     effect: 'bat-burst',
     tags: ['door'],
-    hold: 3.2,
     params: {
       // Each bat is cut out of its own patch of backlight, so it is the glow
       // that makes it visible at all on a dark wall; bigger bats with a little
@@ -1176,7 +1171,6 @@ export const DEMO_BURSTS = [
     name: 'Something knocks',
     effect: 'shockwave',
     tags: ['door'],
-    hold: 2,
     params: {
       color: '#ff7a18', color2: '#8b00ff', rings: 4, duration: 1.7,
       reach: 1500, width: 30, flash: 1.3, gap: 0.11,
@@ -1187,7 +1181,6 @@ export const DEMO_BURSTS = [
     name: 'Sparks off the roof',
     effect: 'spark-burst',
     tags: ['roof'],
-    hold: 2.6,
     params: {
       hotTemp: 2800, coolTemp: 1100, count: 120, duration: 2.2, speed: 780,
       spread: 0.5, aim: -90, gravity: 950, size: 8, trail: 0.7,
@@ -1215,7 +1208,6 @@ const PRESET_BURSTS = {
       name: 'Confetti out of the door',
       effect: 'confetti-cannon',
       tags: ['door'],
-      hold: 5.5,
       params: {
         count: 200, duration: 5, speed: 1200, aim: -90, spread: 0.2,
         gravity: 420, drag: 1.6, size: 18, tumble: 1, streamers: 0.35, seed: 1,
@@ -1226,7 +1218,6 @@ const PRESET_BURSTS = {
       name: 'A rocket for the birthday',
       effect: 'rocket',
       tags: ['roof'],
-      hold: 5,
       params: {
         shell: 'peony', star: 'magnesium', color: '#ffd166', duration: 4.5, lift: 1.1,
         height: 820, drift: 90, stars: 100, power: 520, gravity: 260, size: 4,
@@ -1246,7 +1237,6 @@ const PRESET_BURSTS = {
       name: 'A fireball breaks up',
       effect: 'spark-burst',
       tags: ['roof'],
-      hold: 3.5,
       params: {
         hotTemp: 4600, coolTemp: 1400, count: 70, duration: 2.8, speed: 620,
         spread: 0.16, aim: 25, gravity: 90, size: 6, trail: 0.9,
@@ -1259,7 +1249,6 @@ const PRESET_BURSTS = {
       name: 'Rocket over the roof',
       effect: 'rocket',
       tags: ['roof'],
-      hold: 6,
       params: {
         shell: 'crossette', star: 'copper', color: '#ffd166', duration: 5, lift: 1.2,
         height: 980, drift: 140, stars: 120, power: 600, gravity: 240, size: 4.5,
@@ -1271,7 +1260,6 @@ const PRESET_BURSTS = {
       name: 'Confetti out of the door',
       effect: 'confetti-cannon',
       tags: ['door'],
-      hold: 5.5,
       params: {
         count: 220, duration: 5, speed: 1300, aim: -90, spread: 0.22,
         gravity: 420, drag: 1.7, size: 16, tumble: 1.2, streamers: 0.4, seed: 2,
@@ -1290,7 +1278,6 @@ const PRESET_BURSTS = {
       name: 'Something takes the power out',
       effect: 'shockwave',
       tags: ['door'],
-      hold: 2.4,
       params: {
         color: '#05d9e8', color2: '#ff2a6d', rings: 4, duration: 2,
         reach: 1300, width: 22, flash: 1.6, gap: 0.09,
@@ -1301,7 +1288,6 @@ const PRESET_BURSTS = {
       name: 'A transformer blows',
       effect: 'spark-burst',
       tags: ['roof'],
-      hold: 3,
       params: {
         hotTemp: 6500, coolTemp: 2000, count: 130, duration: 2.4, speed: 900,
         spread: 0.6, aim: -90, gravity: 1100, size: 5, trail: 0.8,
@@ -1323,7 +1309,6 @@ const PRESET_BURSTS = {
       name: 'Something breathes out',
       effect: 'spark-burst',
       tags: ['door'],
-      hold: 5,
       params: {
         /**
          * Nine thousand Kelvin is off the top of the blackbody curve, where the
@@ -1354,7 +1339,6 @@ const PRESET_BURSTS = {
       name: 'Something big goes past',
       effect: 'shockwave',
       tags: ['roof'],
-      hold: 4,
       params: {
         // Reach is how far the rings get in their lifetime. At 2600 they left
         // the house in half a second and spent the rest of it off the frame.
@@ -1369,7 +1353,6 @@ const PRESET_BURSTS = {
       name: 'Rocket over the rooftops',
       effect: 'rocket',
       tags: ['roof'],
-      hold: 7,
       params: {
         shell: 'willow', star: 'sodium', color: '#ffd166', duration: 6, lift: 1.3,
         height: 1050, drift: 120, stars: 110, power: 560, gravity: 300, size: 4,
@@ -1381,7 +1364,6 @@ const PRESET_BURSTS = {
       name: 'A wheel goes off',
       effect: 'catherine-wheel',
       tags: ['wall'],
-      hold: 11,
       params: {
         radius: 0.16, nozzles: 3, hotTemp: 3200, coolTemp: 1100, tint: '#ffe9b0',
         sparks: 420, speed: 700, life: 0.85, gravity: 520, spin: 4, spinUp: 1.2,
@@ -1394,7 +1376,6 @@ const PRESET_BURSTS = {
       name: 'A log collapses',
       effect: 'spark-burst',
       tags: ['door'],
-      hold: 3,
       params: {
         hotTemp: 2600, coolTemp: 1000, count: 140, duration: 2.4, speed: 520,
         spread: 0.45, aim: -90, gravity: 620, size: 6, trail: 0.6,
@@ -1409,7 +1390,7 @@ export function burstsFor(presetId) {
 }
 
 /**
- * Add the one-shots to a project, wired to their keys.
+ * Add the one-shots to a project, each a scene on its own key.
  *
  * Scenes here are built by hand rather than captured, and deliberately name
  * only the one layer they switch on: a layer a scene says nothing about keeps
@@ -1433,21 +1414,13 @@ export function addDemoBursts(project, presetId = null) {
     project.layers.push(layer);
 
     const scene = createScene({
-      name: spec.name,
+      name: `${spec.name} (${spec.key.toUpperCase()})`,
       fade: 0,
+      // A letter, not a number: the numbers are for whole looks.
+      hotkey: spec.key,
       state: { [layer.id]: { enabled: true, opacity: 1, params: { ...layer.params } } },
     });
     project.scenes.push(scene);
-
-    project.triggers.push(createTrigger({
-      name: `${spec.name} (${spec.key.toUpperCase()})`,
-      source: 'hotkey',
-      key: spec.key,
-      sceneId: scene.id,
-      hold: spec.hold,
-      // No cooldown: these are meant to be pressed again the moment they finish.
-      cooldown: 0,
-    }));
 
     added.push({ key: spec.key, name: spec.name });
   }

@@ -1,76 +1,35 @@
 /**
- * The dare game, drawn.
+ * The automation, drawn.
  *
- * Every arrow on this picture is a row of the table in core/game.js, so the
- * picture cannot describe a game the runtime does not play. What is laid out
- * by hand is only *where* things go: automatic graph layout makes a different
- * tangle every time a transition is added, and this is a picture people learn
- * by position — the street on the left, the front door on the right, the
- * ladder climbing along the middle — the way they learn a floor plan.
+ * Every arrow on this picture is a button or a timer on a step, so it cannot
+ * describe something the runtime will not do. The steps are laid out left to
+ * right in the order they can be reached from the start: the start on the
+ * left, and each column one press or timer further along.
+ *
+ * Going back to the start — every unanswered question does, after a while —
+ * is not drawn as an arrow. Drawn, it is a fan of long lines from every box
+ * back to the first, which says less than the note on each box does.
  *
  * It is a string of SVG rather than DOM, so the control tab, the remote and the
  * tests all draw it the same way, and a test can look at it without a browser.
  *
  * Live, it answers the question you have while testing on the path: *what
- * would this button do right now?* The current state is lit, every way out of
+ * would this button do right now?* The current step is lit, every way out of
  * it is drawn bright with the press that takes it, and the last move made is
  * marked so a press that did something can be told from one that was dropped.
  */
 
-import { STATES, TRANSITIONS, EVENT_LABELS, guardPasses, guardPossible, topLevel } from './game.js';
+import { EVENT_LABELS, startStep, stepById, exitsOf, timerSeconds } from './game.js';
 
-const COL = 252;
-const ROW = 118;
-const NODE_W = 164;
-const NODE_H = 70;
-const PAD_X = 24;
-const PAD_TOP = 56;
-const PAD_BOTTOM = 86;
+const COL = 206;
+const ROW = 96;
+const NODE_W = 168;
+const NODE_H = 64;
+const PAD_X = 20;
+const PAD_TOP = 44;
+const PAD_BOTTOM = 28;
 
-/**
- * Where each state sits, in grid cells.
- *
- * Columns run from the street to the house: the house waits on the left, the
- * tricks and questions are on the path in the middle, and the door is on the
- * right. The middle row is the way through; above it is the house arguing,
- * below it the goodbye and the walk home.
- */
-export const LAYOUT = {
-  attract: [0, 1],
-  cooldown: [0, 2],
-  persuade: [1, 0],
-  ask: [2, 0],
-  scare: [2, 1],
-  approach: [3, 1],
-  finale: [4, 1],
-  reward: [3, 2],
-  waiting: [4, 2],
-};
-
-/**
- * Edges that cannot go in a straight line without crossing a state.
- *
- * Waypoints in grid cells. Anything not listed is drawn as a gentle curve,
- * bent to its own left so that a pair going both ways — a trick and the
- * question after it — reads as two arrows rather than one line with two heads.
- */
-const ROUTES = {
-  // Along the gap under the middle row.
-  'attract>approach': [[0.6, 1.47], [2.6, 1.47]],
-  'approach>attract': [[3, 1.62], [0.45, 1.62]],
-};
-
-const COLS = 5;
-const ROWS = 3;
-export const GRAPH_SIZE = {
-  w: PAD_X * 2 + (COLS - 1) * COL + NODE_W,
-  h: PAD_TOP + (ROWS - 1) * ROW + NODE_H + PAD_BOTTOM,
-};
-
-const center = ([col, row]) => ({
-  x: PAD_X + NODE_W / 2 + col * COL,
-  y: PAD_TOP + NODE_H / 2 + row * ROW,
-});
+const fixed = (n) => Math.round(n * 10) / 10;
 
 const esc = (value) =>
   String(value ?? '')
@@ -79,9 +38,51 @@ const esc = (value) =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 
-const fixed = (n) => Math.round(n * 10) / 10;
+/** "2 min", "45 s", "1.5 s". */
+export function formatSeconds(seconds) {
+  const s = Number(seconds) || 0;
+  if (s >= 60 && s % 60 === 0) return `${s / 60} min`;
+  return `${Math.round(s * 10) / 10} s`;
+}
 
-/** Where the line from a state's centre towards `toward` leaves its box. */
+/**
+ * Where each step goes, in grid cells: `{ [id]: [col, row] }`.
+ *
+ * Breadth first from the start, ignoring the ways back to it, so a column is
+ * "this many moves in". Steps nothing reaches are put in a column of their
+ * own at the end, where they are easy to see and connect up.
+ */
+export function layoutSteps(game) {
+  const steps = game?.steps || [];
+  const start = startStep(game);
+  const cells = {};
+  if (!start) return cells;
+  const columns = [];
+  const place = (id, col) => {
+    (columns[col] = columns[col] || []).push(id);
+    cells[id] = [col, columns[col].length - 1];
+  };
+  place(start.id, 0);
+  const queue = [start.id];
+  while (queue.length) {
+    const id = queue.shift();
+    const [col] = cells[id];
+    for (const { to } of exitsOf(game, stepById(game, id))) {
+      if (to === start.id || cells[to]) continue;
+      place(to, col + 1);
+      queue.push(to);
+    }
+  }
+  const orphanCol = columns.length;
+  for (const step of steps) if (!cells[step.id]) place(step.id, orphanCol);
+  return cells;
+}
+
+function center([col, row]) {
+  return { x: PAD_X + NODE_W / 2 + col * COL, y: PAD_TOP + NODE_H / 2 + row * ROW };
+}
+
+/** Where the line from a box's centre towards `toward` leaves the box. */
 function boxExit(c, toward, pad = 4) {
   const dx = toward.x - c.x;
   const dy = toward.y - c.y;
@@ -100,185 +101,131 @@ function arrowHead(tip, from, size = 9) {
   return `${fixed(tip.x)},${fixed(tip.y)} ${p(a1)} ${p(a2)}`;
 }
 
-const GUARD_SHORT = {
-  more: 'more tricks',
-  first: 'first question',
-  door: '',
-  'no-door': 'no DOOR button',
-  opening: '',
-  closed: '',
-  'opening-plead': '',
-  'first-plead': '',
-  plead: 'try again',
-}
-
 /**
- * The arrows: table rows grouped by where they go, so "YES or NO" from Attract
- * is one arrow with both presses on it rather than two lines drawn on top of
- * each other.
+ * The arrows: every way out of every step except back to the start, grouped
+ * by where they go, so "YES or NO" to the same step is one arrow with both
+ * presses on it rather than two lines drawn on top of each other.
  */
-export function graphEdges() {
+export function graphEdges(game) {
+  const start = startStep(game);
   const groups = new Map();
-  for (const t of TRANSITIONS) {
-    if (t.quiet) continue;
-    const key = `${t.from}>${t.to}`;
-    if (!groups.has(key)) groups.set(key, { key, from: t.from, to: t.to, rows: [] });
-    groups.get(key).rows.push(t);
+  for (const step of game?.steps || []) {
+    for (const exit of exitsOf(game, step)) {
+      if (start && exit.to === start.id && step.id !== start.id) continue;
+      const key = `${step.id}>${exit.to}`;
+      if (!groups.has(key)) groups.set(key, { key, from: step.id, to: exit.to, exits: [] });
+      groups.get(key).exits.push(exit);
+    }
   }
   return [...groups.values()];
 }
 
-function edgeLabel(rows, shape) {
-  const parts = [];
-  // A press this game can never make here is no part of the arrow's label.
-  const possible = rows.filter((row) => guardPossible(row.when, shape));
-  for (const row of possible.length ? possible : rows) {
-    // A guarded timeout is named by its guard alone: "next rung" already says
-    // the scare ended, and the gap between two boxes is only so wide.
-    let text = EVENT_LABELS[row.on] || row.on;
-    const guard = row.when ? GUARD_SHORT[row.when] ?? row.when : '';
-    if (guard) text = row.on === 'timeout' ? guard : `${text} · ${guard}`;
-    if (!parts.includes(text)) parts.push(text);
-  }
-  return parts.join(' / ');
-}
-
-/** The second line of a state's box: what it shows and for how long. */
-function describe(state, game, names) {
-  const def = STATES[state];
-  const timing = game?.timing || {};
-  const parts = [];
-  const name = names?.[state];
-  if (name) parts.push(name);
-  if (def.timer && Number(timing[def.timer]) > 0) parts.push(`${timing[def.timer]} s`);
-  return parts.join(' · ');
+function edgeLabel(game, edge) {
+  const from = stepById(game, edge.from);
+  return edge.exits
+    .map((e) => (e.on === 'timeout' ? formatSeconds(timerSeconds(from)) : EVENT_LABELS[e.on] || e.on))
+    .join(' / ');
 }
 
 /**
- * Draw the machine.
+ * Draw the automation.
  *
  * @param {object} options
- * @param {object} options.game  At least `door`, `rungs` (or `rungCount`) and `timing`.
+ * @param {object} options.game  The automation: `steps`, `start`.
  * @param {object} [options.snapshot]  The runtime's snapshot, to light it up.
- *   Without one this is the static diagram of the game as configured.
- * @param {object} [options.names]  Per state, what it shows: a scene or trigger
- *   name, so the boxes describe *this* show rather than the abstract machine.
- * @param {object} [options.missing]  Per state, true when it has nothing to show.
- * @param {object} [options.words]  Per state, what it says on the wall. Shown in
- *   quotes in place of the scene's name: the words are what make the tree read
- *   as a game rather than a list of scenes.
- * @param {object} [options.notes]  Per state, a third line — "words first", say.
- * @param {string} [options.selected]  The state being edited, outlined.
+ * @param {object} [options.names]  Per step id, the name of the scene it shows.
+ * @param {string} [options.selected]  The step being edited, outlined.
  */
-export function renderGameGraph({ game = {}, snapshot = null, names = {}, missing = {}, words = {}, notes = {}, selected = null } = {}) {
+export function renderGameGraph({ game = {}, snapshot = null, names = {}, selected = null } = {}) {
+  const steps = game.steps || [];
   const live = snapshot && snapshot.enabled !== false ? snapshot : null;
-  const current = live?.state || null;
-  const level = live?.level || 1;
-  const rungCount = game.rungCount ?? game.rungs?.length ?? 0;
-  const shape = { ...game, rungs: { length: rungCount } };
-  const top = topLevel(shape);
+  const current = live?.step || null;
   const last = live?.last && live.last.ago < 12 ? live.last : null;
+  const start = startStep(game);
+  const cells = layoutSteps(game);
+
+  const cols = Math.max(1, ...Object.values(cells).map(([c]) => c + 1));
+  const rows = Math.max(1, ...Object.values(cells).map(([, r]) => r + 1));
+  const w = PAD_X * 2 + (cols - 1) * COL + NODE_W;
+  const h = PAD_TOP + (rows - 1) * ROW + NODE_H + PAD_BOTTOM;
 
   const out = [];
   out.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" class="gg" viewBox="0 0 ${GRAPH_SIZE.w} ${GRAPH_SIZE.h}" ` +
-      `role="img" aria-label="The dare game: states and the presses that move between them">`
+    // Never drawn bigger than it is: two steps should not fill the screen.
+    `<svg xmlns="http://www.w3.org/2000/svg" class="gg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" style="max-width:${w}px" ` +
+      `role="img" aria-label="The automation: its steps and the presses and timers that move between them">`
   );
-
-  // The way a group walks, which is the way to read it.
-  const headY = 22;
-  const pathLeft = center(LAYOUT.ask).x - NODE_W / 2;
-  const pathRight = center(LAYOUT.approach).x + NODE_W / 2;
-  out.push(`<g class="gg-zones">`);
-  out.push(`<text class="gg-zone" x="${center(LAYOUT.attract).x}" y="${headY}" text-anchor="middle">STREET</text>`);
-  out.push(
-    `<text class="gg-zone" x="${(pathLeft + pathRight) / 2}" y="${headY}" text-anchor="middle">PATH — far enough back to read</text>`
-  );
-  out.push(
-    `<text class="gg-zone gg-zone-door" x="${center(LAYOUT.finale).x}" y="${headY}" text-anchor="middle">DOOR — too close for words</text>`
-  );
-  out.push(
-    `<line class="gg-zone-rule" x1="${pathLeft}" x2="${pathRight}" y1="${headY + 10}" y2="${headY + 10}" />`
-  );
-  out.push(`</g>`);
+  if (!steps.length) {
+    out.push(`<text class="gg-legend" x="${PAD_X}" y="${PAD_TOP}">No steps yet.</text></svg>`);
+    return out.join('');
+  }
 
   // Arrows first, so the boxes sit on top of their ends.
   const labels = [];
   out.push(`<g class="gg-edges">`);
-  for (const edge of graphEdges()) {
-    const a = center(LAYOUT[edge.from]);
-    const b = center(LAYOUT[edge.to]);
-    // Could this arrow ever be taken in this game? Not "top rung, no door"
-    // while the door is on, and not "next rung" on a ladder of one.
-    const applicable = edge.rows.some((row) => guardPossible(row.when, shape));
+  for (const edge of graphEdges(game)) {
+    if (!cells[edge.from] || !cells[edge.to]) continue;
+    const a = center(cells[edge.from]);
+    const b = center(cells[edge.to]);
     const fromCurrent = current === edge.from;
-    const takeable = fromCurrent && edge.rows.some((row) => guardPasses(row.when, shape, level, live?.attempt || 0));
     const justTaken = last && last.from === edge.from && last.to === edge.to;
 
     const cls = ['gg-edge'];
-    if (!applicable) cls.push('gg-off');
     if (current && !fromCurrent) cls.push('gg-dim');
-    if (takeable) cls.push('gg-live');
+    if (fromCurrent) cls.push('gg-live');
     if (justTaken) cls.push('gg-last');
 
     let d;
-    let tipFrom;
     let tip;
+    let tipFrom;
     let mid;
-    const route = ROUTES[edge.key];
     if (edge.from === edge.to) {
-      // Back to itself — "ask again" — as a loop off the right-hand side.
+      // Back to itself, as a loop off the right-hand side.
       const right = a.x + NODE_W / 2;
-      const start = { x: right, y: a.y - 14 };
       tip = { x: right + 3, y: a.y + 14 };
       tipFrom = { x: right + 40, y: a.y + 30 };
-      d = `M${fixed(start.x)},${fixed(start.y)} C${fixed(right + 44)},${fixed(a.y - 40)} ${fixed(right + 44)},${fixed(a.y + 40)} ${fixed(tip.x)},${fixed(tip.y)}`;
-      mid = { x: right + 40, y: a.y };
-    } else if (route) {
-      const points = route.map(([col, row]) => ({
-        x: PAD_X + NODE_W / 2 + col * COL,
-        y: PAD_TOP + NODE_H / 2 + row * ROW,
-      }));
-      const start = boxExit(a, points[0]);
-      tip = boxExit(b, points[points.length - 1]);
-      tipFrom = points[points.length - 1];
-      const all = [start, ...points, tip];
-      d = `M${all.map((p) => `${fixed(p.x)},${fixed(p.y)}`).join(' L')}`;
-      const m0 = all[Math.floor((all.length - 1) / 2)];
-      const m1 = all[Math.floor((all.length - 1) / 2) + 1];
-      mid = { x: (m0.x + m1.x) / 2, y: (m0.y + m1.y) / 2 };
-    } else {
-      // Bend to the left of the direction of travel.
+      d = `M${fixed(right)},${fixed(a.y - 14)} C${fixed(right + 44)},${fixed(a.y - 40)} ${fixed(right + 44)},${fixed(a.y + 40)} ${fixed(tip.x)},${fixed(tip.y)}`;
+      mid = { x: right + 36, y: a.y };
+    } else if (cells[edge.to][0] > cells[edge.from][0]) {
+      // Onwards: a gentle curve, bent to its own left so a pair going both
+      // ways reads as two arrows.
       const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
       const nx = (b.y - a.y) / len;
       const ny = -(b.x - a.x) / len;
-      const bend = 16;
-      const control = { x: (a.x + b.x) / 2 + nx * bend * 2, y: (a.y + b.y) / 2 + ny * bend * 2 };
-      const start = boxExit(a, control);
+      const control = { x: (a.x + b.x) / 2 + nx * 24, y: (a.y + b.y) / 2 + ny * 24 };
+      const s = boxExit(a, control);
       tip = boxExit(b, control);
       tipFrom = control;
-      d = `M${fixed(start.x)},${fixed(start.y)} Q${fixed(control.x)},${fixed(control.y)} ${fixed(tip.x)},${fixed(tip.y)}`;
-      // The point halfway along a quadratic.
-      mid = {
-        x: 0.25 * start.x + 0.5 * control.x + 0.25 * tip.x,
-        y: 0.25 * start.y + 0.5 * control.y + 0.25 * tip.y,
-      };
+      d = `M${fixed(s.x)},${fixed(s.y)} Q${fixed(control.x)},${fixed(control.y)} ${fixed(tip.x)},${fixed(tip.y)}`;
+      mid = { x: 0.25 * s.x + 0.5 * control.x + 0.25 * tip.x, y: 0.25 * s.y + 0.5 * control.y + 0.25 * tip.y };
+    } else {
+      // Back along the line, or up or down the same column: over the top of
+      // the boxes, so it does not run through any of them.
+      const top = Math.min(a.y, b.y) - NODE_H / 2;
+      const lift = 26 + Math.abs(cells[edge.to][0] - cells[edge.from][0]) * 6;
+      const s = { x: a.x + (b.x < a.x ? -NODE_W / 4 : NODE_W / 4), y: a.y - NODE_H / 2 - 3 };
+      tip = { x: b.x + (b.x < a.x ? NODE_W / 4 : -NODE_W / 4), y: b.y - NODE_H / 2 - 4 };
+      const c1 = { x: s.x, y: top - lift };
+      const c2 = { x: tip.x, y: top - lift };
+      tipFrom = c2;
+      d = `M${fixed(s.x)},${fixed(s.y)} C${fixed(c1.x)},${fixed(c1.y)} ${fixed(c2.x)},${fixed(c2.y)} ${fixed(tip.x)},${fixed(tip.y)}`;
+      mid = { x: (s.x + tip.x) / 2, y: top - lift * 0.75 };
     }
 
     out.push(
-      `<g class="${cls.join(' ')}" data-from="${edge.from}" data-to="${edge.to}">` +
+      `<g class="${cls.join(' ')}" data-from="${esc(edge.from)}" data-to="${esc(edge.to)}">` +
         `<path d="${d}" />` +
         `<polygon points="${arrowHead(tip, tipFrom)}" />` +
         `</g>`
     );
-    labels.push({ text: edgeLabel(edge.rows, shape), mid, cls });
+    labels.push({ text: edgeLabel(game, edge), mid, cls });
   }
   out.push(`</g>`);
 
   // Labels after every line, so no arrow is drawn through somebody else's words.
   out.push(`<g class="gg-labels">`);
   for (const label of labels) {
-    const width = label.text.length * 6.2 + 10;
+    const width = label.text.length * 6.4 + 12;
     out.push(
       `<g class="${label.cls.join(' ').replace(/gg-edge/, 'gg-label')}">` +
         `<rect x="${fixed(label.mid.x - width / 2)}" y="${fixed(label.mid.y - 9)}" width="${fixed(width)}" height="17" rx="8" />` +
@@ -289,55 +236,45 @@ export function renderGameGraph({ game = {}, snapshot = null, names = {}, missin
   out.push(`</g>`);
 
   out.push(`<g class="gg-nodes">`);
-  for (const [state, cell] of Object.entries(LAYOUT)) {
-    const def = STATES[state];
+  for (const step of steps) {
+    const cell = cells[step.id];
+    if (!cell) continue;
     const c = center(cell);
     const x = c.x - NODE_W / 2;
     const y = c.y - NODE_H / 2;
-    const cls = ['gg-node', `gg-zone-${def.zone}`];
-    if (state === current) cls.push('gg-current');
+    const cls = ['gg-node'];
+    if (step === start) cls.push('gg-start');
+    if (step.alert) cls.push('gg-alert');
+    if (step.id === current) cls.push('gg-current');
     else if (current) cls.push('gg-dim');
-    if (last && last.to === state && state !== current) cls.push('gg-was');
-    if (missing[state]) cls.push('gg-missing');
-    if (state === 'approach' && !game.door) cls.push('gg-off');
-    if (state === selected) cls.push('gg-selected');
+    if (last && last.to === step.id && step.id !== current) cls.push('gg-was');
+    if (step.id === selected) cls.push('gg-selected');
 
-    let title = def.label;
-    if (def.levelled && !def.staged) title += state === current ? ` ${level}/${top}` : ` ×${top}`;
-    const said = words[state] ? `“${String(words[state]).replace(/\s*\n\s*/g, ' ')}”` : '';
-    const sub = said || describe(state, game, names);
+    const words = String(step.words || '').trim();
+    const sub = words ? `“${words.replace(/\s*\n\s*/g, ' ')}”` : names[step.id] || (step.sceneId ? 'a scene' : 'keeps the house as it is');
+
     let foot = '';
-    if (state === current && live?.saying) {
-      foot = `saying “${String(live.saying.text).replace(/\s*\n\s*/g, ' ')}”`;
-    } else if (state === current && live?.remaining !== null && live?.remaining !== undefined) {
+    const seconds = timerSeconds(step);
+    if (step.id === current && live?.remaining !== null && live?.remaining !== undefined) {
       foot = `${Math.ceil(live.remaining)} s left`;
-    } else if (missing[state]) {
-      foot = 'nothing set';
-    } else if (notes[state]) {
-      foot = notes[state];
+    } else if (seconds && start && step.after.to === start.id && step !== start) {
+      foot = `↺ to the start after ${formatSeconds(seconds)}`;
+    } else if (step === start) {
+      foot = 'start';
     }
 
     out.push(
-      `<g class="${cls.join(' ')}" data-state="${state}" tabindex="0">` +
-        `<title>${esc(`${def.label} — ${def.note}`)}</title>` +
+      `<g class="${cls.join(' ')}" data-step="${esc(step.id)}" tabindex="0">` +
+        `<title>${esc(step.name || 'Untitled')}</title>` +
         `<rect x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="10" />` +
         `<rect class="gg-stripe" x="${x}" y="${y}" width="5" height="${NODE_H}" rx="2" />` +
-        `<text class="gg-title" x="${x + 14}" y="${y + 22}">${esc(title)}</text>` +
-        `<text class="gg-sub${said ? ' gg-words' : ''}" x="${x + 14}" y="${y + 40}">${esc(clip(sub, 26))}</text>` +
-        (foot ? `<text class="gg-foot" x="${x + 14}" y="${y + 58}">${esc(clip(foot, 28))}</text>` : '') +
+        `<text class="gg-title" x="${x + 14}" y="${y + 21}">${esc(clip(step.name || 'Untitled', 22))}</text>` +
+        `<text class="gg-sub${words ? ' gg-words' : ''}" x="${x + 14}" y="${y + 38}">${esc(clip(sub, 26))}</text>` +
+        (foot ? `<text class="gg-foot" x="${x + 14}" y="${y + 55}">${esc(clip(foot, 30))}</text>` : '') +
         `</g>`
     );
   }
   out.push(`</g>`);
-
-  // The arrow not drawn — it would come from every box — said once.
-  const legendY = GRAPH_SIZE.h - 18;
-  out.push(
-    `<text class="gg-legend" x="${PAD_X}" y="${legendY}">` +
-      `Reset, indoors, goes back to Trick or treat? from anywhere. ` +
-      `Orange edge: on the path, words work. Blue: at the door, sound and light only. ` +
-      `</text>`
-  );
 
   out.push(`</svg>`);
   return out.join('');
@@ -346,38 +283,4 @@ export function renderGameGraph({ game = {}, snapshot = null, names = {}, missin
 function clip(text, max) {
   const s = String(text || '');
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
-}
-
-/**
- * A button that presses on the way down and holds after a while, like a
- * Matter button: `initial_press` at once, `long_press` if it is still down.
- *
- * The one piece of DOM in this file. It lives here because both pages that
- * draw the game also need a NO you can hold to stop a trick, and the remote does
- * not load the control tab's modules.
- */
-export function holdable(button, onPress, onHold, holdMs = 800) {
-  let timer = null;
-  const up = () => {
-    clearTimeout(timer);
-    timer = null;
-    button.classList.remove('held');
-  };
-  button.addEventListener('pointerdown', (ev) => {
-    ev.preventDefault();
-    onPress();
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      button.classList.add('held');
-      onHold();
-    }, holdMs);
-  });
-  for (const event of ['pointerup', 'pointercancel', 'pointerleave']) button.addEventListener(event, up);
-  // A keyboard press is a press; there is no holding a key down for long.
-  button.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' || ev.key === ' ') {
-      ev.preventDefault();
-      onPress();
-    }
-  });
 }
