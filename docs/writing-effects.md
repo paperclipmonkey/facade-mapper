@@ -1,8 +1,10 @@
 # Writing your own effects
 
-The **Code** panel compiles a real ES module. Export an object with a `params`
-schema and a `draw(ctx)` function — the inspector builds the controls from the
-schema, and every projector tab picks up the change without a reload.
+An effect is an ES module in [`js/effects/builtin/`](../js/effects/builtin/),
+listed in [`js/effects/registry.js`](../js/effects/registry.js). Export an
+object with an `id`, a `params` schema and a `draw(ctx)` function — the
+inspector builds the controls from the schema. Reload the control tab and
+every projector tab to pick up a change.
 
 ```js
 export default {
@@ -45,8 +47,8 @@ export default {
 | `shapes(tag, excludeId)` | Every other shape in the project, for collisions. Filter by tag, and pass `shape.id` so you don't collide with yourself. |
 | `depth` | The building's real surface, from an imported depth scan, or `null`. See below. |
 
-And `fx`, the helper namespace below — not on the context, but in scope in every
-module the Code panel compiles, as if you had imported it yourself.
+And `fx`, the helper namespace below — not on the context: import it with
+`import * as fx from '../lib.js'`.
 
 Parameter types: `range`, `number`, `color`, `bool`, `select` (with `options`),
 `text`, `media`, and `camera` — a picker over the attached cameras, which
@@ -104,9 +106,8 @@ on the effect object. The layer list will then say so instead of leaving somebod
 to work out why nothing is on the wall.
 ## The `fx` namespace
 
-In scope in any effect you write in the Code panel: the app binds it when it
-compiles the module, which is why the starter template can call `fx.glow` with
-no import. Source: [`js/effects/lib.js`](../js/effects/lib.js).
+Import it at the top of an effect: `import * as fx from '../lib.js'`. Source:
+[`js/effects/lib.js`](../js/effects/lib.js).
 
 **Maths and colour** — `clamp`, `lerp`, `smoothstep`, `frac`, `TAU`, `hexToRgb`,
 `rgba`, `mixHex`, `makeRng`, `hashString`, `boundingBox`, `polygonCentroid`,

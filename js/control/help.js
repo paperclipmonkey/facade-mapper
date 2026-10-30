@@ -79,9 +79,7 @@ export default {
  *
  * Five tabs, ordered by when you need them: setting a house up, making it look
  * like something, making it react, the keys, and — last, because most people
- * never open it — the API for writing your own effects. The Code panel's
- * reference button opens that one directly, which is the only reason it was
- * ever near the front.
+ * never open it — the API for writing your own effects.
  */
 export const HELP_SECTIONS = [
   {
@@ -533,9 +531,10 @@ export const HELP_SECTIONS = [
     html: `
 <h2>Writing your own effects</h2>
 <p>
-  The Code panel compiles a real ES module. Export an object with a
+  An effect is an ES module in <code>js/effects/builtin/</code>, listed in
+  <code>js/effects/registry.js</code>. Export an object with an <code>id</code>, a
   <code>params</code> schema and a <code>draw(ctx)</code> function; the inspector builds the controls
-  from the schema, and every projector tab picks up the change without a reload.
+  from the schema. Import the helpers with <code>import * as fx from '../lib.js'</code>.
 </p>
 <h3>What draw receives</h3>
 <table>

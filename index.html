@@ -61,7 +61,6 @@
           <button type="button" class="panel-tab" data-panel="game" role="tab">Automation</button>
           <button type="button" class="panel-tab" data-panel="look" role="tab">Look</button>
           <button type="button" class="panel-tab" data-panel="media" role="tab">Media</button>
-          <button type="button" class="panel-tab" data-panel="code" role="tab">Code</button>
           <button type="button" class="panel-tab" data-panel="settings" role="tab">Setup</button>
         </nav>
 
@@ -149,31 +148,6 @@
             </p>
             <div id="mediaList" class="list"></div>
             <div id="storageInfo" class="panel-note"></div>
-          </section>
-
-          <section class="panel-page" data-page="code">
-            <div class="panel-actions">
-              <button type="button" class="btn small primary" id="btnNewEffect">New effect</button>
-              <button type="button" class="btn small" id="btnDeleteEffect">Delete</button>
-              <button type="button" class="btn small" id="btnEffectDocs">API reference</button>
-            </div>
-            <select id="effectPicker" class="select-full" aria-label="Custom effect"></select>
-            <div class="code-wrap">
-              <div class="code-gutter" id="codeGutter" aria-hidden="true"></div>
-              <textarea
-                id="codeEditor"
-                class="code-editor"
-                spellcheck="false"
-                autocomplete="off"
-                autocapitalize="off"
-                aria-label="Effect source code"
-              ></textarea>
-            </div>
-            <div class="code-status" id="codeStatus"></div>
-            <div class="panel-actions">
-              <button type="button" class="btn small primary" id="btnApplyCode">Apply (Ctrl+Enter)</button>
-              <span class="panel-note inline" id="codeHint">Changes go live in every projector tab.</span>
-            </div>
           </section>
 
           <section class="panel-page" data-page="settings">
