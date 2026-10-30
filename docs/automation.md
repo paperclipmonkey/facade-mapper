@@ -225,9 +225,19 @@ timer it missed, in order.
 
 Matter buttons send several events for one press (`initial_press`,
 `short_release`, `long_press`, `multi_press_complete`…). **Use
-`initial_press`.** It is the earliest event, and it does not wait for the
-multi-press detection window that the others wait for. That window adds
-several hundred milliseconds, which a child notices.
+`initial_press` where the button has it.** It is the earliest event, and it
+does not wait for the multi-press detection window that the others wait for.
+That window adds several hundred milliseconds, which a child notices.
+
+Plenty of buttons do not have it. A common one reports `multi_press_1`,
+`multi_press_2`, `long_press` and `long_release` and nothing earlier, and a
+door or occupancy sensor has no event type at all. So the automation decides
+what counts as a press and says so in its own words, rather than passing the
+device's along: the kinds the bridge knows are `initial_press`, `press`,
+`long_press` and `long`, and a message carrying anything else is dropped with
+a line in the terminal. Read the button's `event_types` in **Developer tools →
+States** before writing the trigger, rather than assuming it has the Matter
+names.
 
 ## Getting a press to the show
 
@@ -253,8 +263,11 @@ The bridge turns each message on `facade/press` into the same link frame the
 remote sends: `{ type: 'action', payload: { action: 'press', button, kind, id,
 at } }`. Details, in [`mqtt.mjs`](../mqtt.mjs):
 
-- **Only `initial_press` counts.** The release and multi-press events describe
-  a press that has already been counted, so they are ignored.
+- **Only a press counts.** `initial_press` and `press` are one. `long_press`
+  and `long` are the same button still held down, and the press they belong to
+  has already been acted on, so they are ignored. Any other word is not a kind
+  the bridge knows, which is why the automation sends one of these four and not
+  whatever the device called it.
 - **Retained messages are never presses.** The terminal says so once if one
   turns up.
 - **A clean session**, so a reconnect is not handed a backlog of presses.
@@ -275,7 +288,8 @@ curl -X POST localhost:8000/link/press -d '{"button":"yes"}'
 
 ### The Home Assistant side
 
-The automation is the same for every button and never needs to change:
+One automation carries every button, and nothing in it changes when you
+redesign the steps. Only the entity ids and the list of event types are yours:
 
 ```yaml
 alias: Facade — button press to MQTT
@@ -287,9 +301,12 @@ triggers:
       - event.path_button_right_button
       - event.door_button_button
 actions:
+  # Whatever these buttons call the moment one goes down. Not every button
+  # has `initial_press`; look up `event_types` for yours.
   - condition: template
     value_template: >
-      {{ trigger.to_state.attributes.event_type == 'initial_press' }}
+      {{ trigger.to_state.attributes.event_type
+         in ['initial_press', 'multi_press_1', 'multi_press_2'] }}
   - action: mqtt.publish
     data:
       topic: facade/press
@@ -298,7 +315,7 @@ actions:
       payload: >
         {{ {
           "button": trigger.entity_id,
-          "kind": trigger.to_state.attributes.event_type,
+          "kind": "initial_press",
           "id": trigger.to_state.context.id,
           "at": (as_timestamp(trigger.to_state.last_changed) * 1000) | int
         } | tojson }}
@@ -311,6 +328,13 @@ the show in one place.
 
 For a button wired up by hand, `facade/press/<button>` works too, with the kind
 as a bare word or no payload at all.
+
+A press need not come from a button at all. A gate opening, an occupancy
+sensor and a doorbell are the same message with a different trigger on the
+front, and because `roleOf` honours a role published by name, an automation
+that sends `"button": "yes"` outright needs no mapping in the panel.
+[`home-assistant.yaml`](home-assistant.yaml) is a worked set of three, with
+the smoke machine running off the gate.
 
 ## Telling the rest of the house
 

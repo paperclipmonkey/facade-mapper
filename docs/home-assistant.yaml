@@ -1,0 +1,148 @@
+# The Home Assistant side of the show.
+#
+# Three things happen outside, and each one is a press on the link:
+#
+#   the gate opens      -> yes    and the smoke machine runs
+#   someone reaches     -> no
+#     the front door
+#   the doorbell        -> door   (bats out of the door)
+#
+# The names yes/no/door are the automation's three transitions, not a
+# question being answered: `roleOf` in js/core/game.js honours a role
+# published by name, so nothing has to be mapped in the Automation panel.
+#
+# Two things differ from the generic example in docs/automation.md:
+#
+#  - `kind` is always sent as `initial_press`. It is not passed through from
+#    the device. The dual button reports `multi_press_1`, which `parsePress`
+#    does not recognise, and a door sensor reports no kind at all.
+#  - Each automation is `mode: single` with a trailing delay, so a gate that
+#    swings twice, or a sensor that re-arms while the group is still standing
+#    there, is one press and not five.
+
+- id: facade_gate_opens
+  alias: Facade — gate opens, and the smoke
+  description: The gate opening starts the show and runs the smoke machine.
+  mode: single
+  max_exceeded: silent
+  triggers:
+    - trigger: state
+      entity_id: binary_sensor.myggbett_door_window_sensor_door
+      from: "off"
+      to: "on"
+  actions:
+    - action: mqtt.publish
+      data:
+        topic: facade/press
+        qos: 1
+        retain: false
+        payload: >-
+          {{ { "button": "yes",
+               "kind": "initial_press",
+               "id": trigger.to_state.context.id,
+               "at": (as_timestamp(trigger.to_state.last_changed) * 1000) | int
+             } | tojson }}
+    # The show must not wait on a smoke machine that is unplugged.
+    - if:
+        - condition: template
+          value_template: >-
+            {{ states('switch.shelly_1_mini_gen4') not in ['unavailable', 'unknown'] }}
+      then:
+        - action: switch.turn_on
+          target:
+            entity_id: switch.shelly_1_mini_gen4
+        - delay:
+            seconds: 4
+        - action: switch.turn_off
+          target:
+            entity_id: switch.shelly_1_mini_gen4
+    # One group through the gate is one start.
+    - delay:
+        seconds: 15
+
+- id: facade_front_presence
+  alias: Facade — someone reaches the front door
+  description: The front garden occupancy sensor moves the show on.
+  mode: single
+  max_exceeded: silent
+  triggers:
+    - trigger: state
+      entity_id: binary_sensor.myggspray_wrlss_mtn_sensor_occupancy_2
+      from: "off"
+      to: "on"
+  actions:
+    - action: mqtt.publish
+      data:
+        topic: facade/press
+        qos: 1
+        retain: false
+        payload: >-
+          {{ { "button": "no",
+               "kind": "initial_press",
+               "id": trigger.to_state.context.id,
+               "at": (as_timestamp(trigger.to_state.last_changed) * 1000) | int
+             } | tojson }}
+    - delay:
+        seconds: 10
+
+- id: facade_doorbell
+  alias: Facade — the doorbell, and the bats
+  description: The top button by the door, pressed, is the doorbell.
+  mode: single
+  max_exceeded: silent
+  triggers:
+    - trigger: state
+      entity_id: event.bilresa_dual_button_button_1
+  conditions:
+    # The device sends multi_press_1 for a press and multi_press_2 for two.
+    # Either is one ring. long_press and long_release are not.
+    - condition: template
+      value_template: >-
+        {{ trigger.to_state.attributes.event_type in ['multi_press_1', 'multi_press_2'] }}
+  actions:
+    - action: mqtt.publish
+      data:
+        topic: facade/press
+        qos: 1
+        retain: false
+        payload: >-
+          {{ { "button": "door",
+               "kind": "initial_press",
+               "id": trigger.to_state.context.id,
+               "at": (as_timestamp(trigger.to_state.last_changed) * 1000) | int
+             } | tojson }}
+    - delay:
+        seconds: 5
+
+# ------------------------------------------------------------------
+# The steps these drive
+# ------------------------------------------------------------------
+#
+# Build these in the control tab's Automation editor. The three arrows out of
+# a step are labelled YES / NO / DOOR, which here mean:
+#
+#   YES  = the gate opened
+#   NO   = they reached the front door
+#   DOOR = the doorbell
+#
+#   Waiting          something slow and quiet on the house. The start step.
+#                    YES -> Up the path
+#
+#   Up the path      the smoke is already running, from the gate.
+#                    NO  -> At the door
+#                    after 90 s -> Waiting
+#
+#   At the door      bigger, close to. No words: nobody can read the
+#                    facade from the doorstep.
+#                    DOOR -> Bats
+#                    after 90 s -> Waiting
+#
+#   Bats             the bats out of the door. Mark it as an alert, so the
+#                    remote rings indoors and you know to get up.
+#                    after 12 s -> Waiting
+#
+# Every step leads back to Waiting on a timer, so a group that turns round
+# and leaves does not strand the house mid-show.
+#
+# The extra effects for the remote are ordinary scenes: anything on the
+# Control tab is one tap, and does not need a step or Home Assistant.
