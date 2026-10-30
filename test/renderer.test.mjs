@@ -121,6 +121,7 @@ function openTab(project) {
   return {
     clock,
     renderer,
+    g,
     /** Render one frame at whatever the clock now says. */
     frame() {
       const time = clock.tick();
@@ -156,11 +157,13 @@ function watch(effectId, cost = 0) {
   const original = effect.step;
   const ages = new Map();
   const steps = new Map();
+  const states = new Map();
   let calls = 0;
   effect.step = function step(ctx) {
     calls += 1;
     const id = ctx.layer.id;
     ages.set(id, ctx.age);
+    states.set(id, ctx.state);
     steps.set(id, (steps.get(id) || 0) + 1);
     if (cost > 0) {
       const until = performance.now() + cost;
@@ -171,6 +174,7 @@ function watch(effectId, cost = 0) {
   return {
     ages,
     steps,
+    states,
     get calls() { return calls; },
     reset() { calls = 0; steps.clear(); },
     restore() { effect.step = original; },
@@ -369,14 +373,118 @@ console.log('\n— the transport —');
   const tab = openTab(project);
   tab.run(4, 60);
   const before = probe.ages.get('L0');
+  // Something the first run left behind, the way blood leaves drips down a door.
+  probe.states.get('L0').leftOver = true;
 
   project.layers[0].onAt = Date.now();   // pressed again
   tab.run(1, 60);
   const after = probe.ages.get('L0');
+  const fresh = !probe.states.get('L0').leftOver;
   probe.restore();
 
   ok('switching a layer on again does restart it',
     before > 3.5 && after < 1.5, `${before.toFixed(2)} s, then ${after.toFixed(2)} s`);
+  /**
+   * From scratch, not from where the last run got to. Restarting the clock
+   * but keeping the simulation replayed the blood over drips already at the
+   * bottom of the door: it started oddly, and never the same way twice.
+   */
+  ok('and starts its simulation afresh, not from where it had got to', fresh);
+}
+
+{
+  /**
+   * Moving between two scenes that both have a layer on must not restart it.
+   *
+   * Every layer a scene switched on used to restart whenever *any* scene was
+   * fired, including layers that were already on in the scene before — so a
+   * fog bank shared by two looks jumped back to its start at every change,
+   * and the dare game's house could not keep what it had shown: flowers that
+   * died in one scene came back to life in the next. Only the layers a scene
+   * brings *in* start from now; firing the same scene again still replays.
+   */
+  const probe = watch('shoal');
+  const project = makeShow(1);
+  const state = { L0: { enabled: true, opacity: 1, params: {} } };
+  project.scenes = [
+    { id: 'A', name: 'A', full: true, state },
+    { id: 'B', name: 'B', full: true, state },
+  ];
+  project.show.previousScene = null;
+  project.show.activeScene = 'A';
+  project.show.sceneChangeAt = Date.now();
+  const tab = openTab(project);
+  tab.run(4, 60);
+
+  project.show.previousScene = 'A';
+  project.show.activeScene = 'B';
+  project.show.sceneChangeAt = Date.now();
+  tab.run(1, 60);
+  const carried = probe.ages.get('L0');
+
+  project.show.previousScene = 'B';
+  project.show.sceneChangeAt = Date.now(); // B fired again over itself
+  tab.run(1, 60);
+  const refired = probe.ages.get('L0');
+  probe.restore();
+
+  ok('a layer on in both scenes carries on across the change',
+    carried > 4.5, `${carried.toFixed(2)} s old after the change`);
+  ok('but the same scene fired again still replays it',
+    refired < 1.5, `${refired.toFixed(2)} s old after the re-fire`);
+}
+
+{
+  /**
+   * A layer switched on while the show is stopped is shown a little way in.
+   *
+   * Show time stands still while stopped, so the layer had honestly been on
+   * for no time at all, and anything that has to happen first — smoke rising,
+   * blood running — had not: half a scene fired with the clock stopped was
+   * simply missing. It is a picture of the scene that is wanted, and a still
+   * one: the simulation runs to the preview and then stays put.
+   *
+   * Steps that cost something, so getting there takes more than one frame's
+   * allowance — which is what sends a layer through the catch-up fade.
+   */
+  const probe = watch('shoal', 1);
+  const project = makeShow(1);
+  const tab = openTab(project);
+  tab.run(1, 60);
+  tab.clock.pause();
+  tab.run(0.5, 60);
+  project.layers[0].onAt = Date.now();   // switched on with the clock stopped
+  tab.run(0.5, 60);
+  const shown = probe.ages.get('L0');
+  const steps = probe.steps.get('L0');
+  tab.run(2, 60);
+  const later = probe.ages.get('L0');
+  const stepsLater = probe.steps.get('L0');
+  probe.restore();
+  // What it is composited at, once it has caught up: a layer that had to
+  // catch up fades back in, and that fade used to run on show time — which,
+  // stopped, does not move, so it stayed faded out for good.
+  // The fade is a third of a second of *real* time, which the faked wall clock
+  // above does not move; so wait it out. A frame counts at most a quarter of a
+  // second however long it took, so it takes a few frames with real gaps
+  // between them — three, for room to spare on a slow machine.
+  for (let i = 0; i < 3; i++) {
+    const until = performance.now() + 300;
+    while (performance.now() < until);
+    tab.frame();
+  }
+  const alphas = [];
+  const blit = tab.g.drawImage;
+  tab.g.drawImage = function (...args) { alphas.push(this.globalAlpha); return blit.apply(this, args); };
+  tab.run(0.1, 60);
+  tab.g.drawImage = blit;
+
+  ok('switched on with the clock stopped, it is shown a couple of seconds in',
+    Math.abs(shown - 2) < 0.05, `${shown.toFixed(2)} s old`);
+  ok('and then holds still, like everything else while stopped',
+    later === shown && stepsLater === steps, `${later.toFixed(2)} s, ${stepsLater - steps} more steps`);
+  ok('fully faded in, not left invisible by a fade that runs on a stopped clock',
+    alphas.every((a) => a > 0.999), alphas.slice(-3).join(', '));
 }
 
 {

@@ -25,7 +25,7 @@
 
     <nav class="remote-tabs" id="tabs" hidden aria-label="What this device is doing">
       <button type="button" class="tab on" id="tabControl" aria-pressed="true">Control</button>
-      <button type="button" class="tab" id="tabGame" aria-pressed="false">Game</button>
+      <button type="button" class="tab" id="tabGame" aria-pressed="false">Automation</button>
       <button type="button" class="tab" id="tabDraw" aria-pressed="false">Draw</button>
     </nav>
 
@@ -40,11 +40,7 @@
       <section class="remote-section" id="scenesSection" hidden>
         <h2>Scenes</h2>
         <div class="grid" id="scenes"></div>
-      </section>
-
-      <section class="remote-section" id="triggersSection" hidden>
-        <h2>Triggers</h2>
-        <div class="grid" id="triggers"></div>
+        <button type="button" class="big" id="btnSceneBack"><span class="big-label">↩ Back</span><span class="big-sub">to the scene before</span></button>
       </section>
 
       <section class="remote-section">
@@ -87,22 +83,26 @@
     </main>
 
     <!--
-      The dare game, from the garden: the same YES / NO / DOOR / TREAT the real
-      buttons send, and the diagram lit up with where the game is. For testing
-      a ladder without walking to each button, and for the adult at the door
-      who has the TREAT button in their pocket.
+      The automation, from the garden: the same YES / NO / DOOR the real buttons
+      send, and the diagram lit up with the step it is on. For testing without
+      walking to each button, and for starting again from indoors.
     -->
     <main class="remote-main game-root" id="gameRoot" hidden>
-      <p class="game-state" id="gameState">The game is off.</p>
+      <p class="game-state" id="gameState">The automation is off.</p>
+      <div class="game-alerts" role="group" aria-label="Tell me when it moves on">
+        <span>Tell me when it moves on:</span>
+        <button type="button" class="chip" data-alert="sound" aria-pressed="false">🔔 Sound</button>
+        <button type="button" class="chip" data-alert="flash" aria-pressed="false">⚡ Flash</button>
+        <button type="button" class="chip" data-alert="buzz" aria-pressed="false">📳 Buzz</button>
+      </div>
       <div class="game-pad">
         <button type="button" class="big game-btn game-yes" data-role="yes"><span class="big-label">YES</span></button>
-        <button type="button" class="big game-btn game-no" data-role="no"><span class="big-label">NO</span><span class="big-sub">hold for mercy</span></button>
+        <button type="button" class="big game-btn game-no" data-role="no"><span class="big-label">NO</span></button>
         <button type="button" class="big game-btn game-door" data-role="door"><span class="big-label">DOOR</span></button>
-        <button type="button" class="big game-btn game-treat" data-role="treat"><span class="big-label">TREAT</span></button>
       </div>
       <div class="row">
-        <button type="button" class="big" id="btnGameReset"><span class="big-label">Reset</span><span class="big-sub">back to the start</span></button>
-        <button type="button" class="big" id="btnGameOn"><span class="big-label">Game on</span><span class="big-sub"></span></button>
+        <button type="button" class="big" id="btnGameReset"><span class="big-label">↺ Start again</span><span class="big-sub">back to the start step</span></button>
+        <button type="button" class="big" id="btnGameOn"><span class="big-label">On</span><span class="big-sub"></span></button>
       </div>
       <div class="game-graph-scroll"><div class="game-graph" id="gameGraph"></div></div>
       <section class="remote-section">
@@ -147,6 +147,11 @@
         </div>
       </footer>
     </section>
+
+    <!-- The flash, and the banner that says somebody is at the door. Over
+         everything, on every tab, because that is the moment to get up. -->
+    <div class="game-flash" id="gameFlash" hidden></div>
+    <div class="game-door-banner" id="gameDoor" hidden></div>
 
     <div class="toast" id="toast" hidden></div>
 

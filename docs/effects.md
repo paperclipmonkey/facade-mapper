@@ -15,7 +15,7 @@ house — and this file is for the ideas behind them.
 - [Drawing for a projector](#drawing-for-a-projector)
 - [The look](#the-look)
 - [Modulating parameters](#modulating-parameters)
-- [Triggers](#triggers)
+- [Automation](#automation)
 - [How the effects are built](#how-the-effects-are-built)
 
 ## Targeting
@@ -252,8 +252,8 @@ Three more settings are worth knowing:
 
 - **Wall heals after (s)** puts the wall back and lets it be broken somewhere
   else. Without it the effect spends its holes in the first minute and then has
-  nothing left to do for the rest of the evening. Set it to zero when firing a
-  short scene from a trigger, where permanence is the point.
+  nothing left to do for the rest of the evening. Set it to zero for a scare
+  that should stay broken, where permanence is the point.
 - **Holes at once** and **Bricks per hole** decide whether this is one enormous
   breach or a wall coming apart everywhere. Neighbouring gaps merge into a
   single opening, mortar and all.
@@ -380,8 +380,9 @@ on where the slider is — so a projector tab opened at ten o'clock shows the sa
 half-bare flower as the one that has been running since dusk, which a shedding
 *rate* could not do.
 
-For Halloween, bind it to an LFO at a couple of minutes a cycle, or to a motion
-trigger: the flowers are fine until somebody walks up the path.
+For Halloween, bind it to an LFO at a couple of minutes a cycle, or to `age`
+in a scene an automation step puts up: the flowers are fine until somebody
+says yes.
 
 ## Effects that happen once
 
@@ -403,15 +404,14 @@ They play once over their **Lasts** and then draw nothing. The origin is the
 middle of whatever shape you point them at, so aim one at the door and things
 come out of the door.
 
-**Setting one off.** A trigger fires a scene, the scene switches the layer on,
-and switching on is what restarts the clock. Firing the same trigger again
-replays it immediately, part-way through or after it has finished — a scene
-activation restarts everything that scene *enables*, whether or not it was
-already the active scene. Only layers it enables, so re-firing cannot wipe the
-ivy or the frost that something else has spent the evening accumulating. Build one as: a layer with the burst, **bypassed**; a scene whose only
-entry is that layer, enabled; a trigger on a key pointing at that scene, with a
-hold a little longer than the burst. After the hold the show goes back to
-whatever it was doing, by itself.
+**Setting one off.** A scene switches the layer on, and switching on is what
+restarts the clock — its simulation too, from scratch. Firing the same scene
+again replays it immediately, part-way through or after it has finished: a
+scene activation restarts everything that scene *enables*, whether or not it
+was already the active scene. Only layers it enables, so re-firing cannot wipe
+the ivy or the frost that something else has spent the evening accumulating.
+Build one as: a layer with the burst, **bypassed**; a scene whose only entry is
+that layer, enabled, on a key of its own. An automation step can show it too.
 
 Build the scene by hand rather than capturing it. A captured scene freezes the
 entire show as it happened to be at that instant, so firing a burst mid-evening
@@ -423,9 +423,8 @@ Each demo house ships with its own, on **X**, **G** and **F** — bats and a kno
 at the door on Halloween, a rocket and a confetti cannon on New Year's Eve, a
 wheel and a collapsing log on Bonfire Night. Those keys avoid the
 ones the editor already uses — the first draft used **B** for bats, which is
-Blackout, so pressing it blacked the show out and never reached the trigger at
-all. It looked configured and did nothing. The trigger inspector now says so if
-you pick one of those.
+Blackout, so pressing it blacked the show out and never reached the scene at
+all.
 
 Anything that can type can press a key, which includes a doorbell wired to a USB
 button.
@@ -744,6 +743,13 @@ neon tube. Text longer than its path is shrunk to fit rather than running off
 the end; turn **Shrink to fit path** off if you meant to scroll it along with
 **Position on path**.
 
+In a box, a new line in the text is a new line on the wall. Two short lines
+read from much further away than one long one, because it is the width of the
+wall that limits how big a line can be. Lines are stacked about the middle of
+the shape and shrunk together until the widest fits across it. The dare game's
+questions are written this way, and its panel's word boxes take new lines
+directly.
+
 ### Bees, and the line they leave
 
 **Bees** is about the path rather than the animal. Nobody at the end of a garden
@@ -848,7 +854,7 @@ else goes to a `<video>`, so progressive MP4 and WebM work everywhere and HLS
 works on Safari.
 
 Two caveats. The page must be served over **http** for it to reach an http
-stream on your own network — the same mixed-content rule as the trigger
+stream on your own network — the same mixed-content rule as any
 webhooks. And credentials in the URL are stored in the project file in clear,
 so think before putting a camera password in one and exporting it.
 
@@ -963,75 +969,17 @@ The scene you are in is marked *live*, and gains an **edited** chip and a
 can drift, because going to a scene loads it. Switching away discards unsaved
 changes; <kbd>Ctrl</kbd>+<kbd>Z</kbd> brings them back.
 
-Triggers and the playlist deliberately do *not* load, because an evening of
-scares must not slowly rewrite the show with whatever the last one looked like.
+The automation and the playlist deliberately do *not* load, because an evening
+of scares must not slowly rewrite the show with whatever the last one looked
+like.
 
-## Triggers
+## Automation
 
-A trigger jumps to a scene, optionally plays a sound, holds it for a few
-seconds, then puts back whatever was playing. That last part is what makes it a
-scare rather than a scene change: the ambient loop resumes on its own and the
-next group gets the same surprise.
-
-| Source | Fires when |
-| --- | --- |
-| **Motion** | Something moves in a region of the camera view. |
-| **Key** | You press a key. |
-| **Timer** | On an interval, with randomness so it doesn't become predictable. |
-| **Manual** | Only when you press the button. |
-
-### Getting motion triggers right
-
-The camera is pointed at a building you are actively projecting onto, so the
-fastest-moving thing in frame is your own show. Three things stop that firing
-the trigger constantly, and one of them is your choice:
-
-1. **Watch ground your projectors don't light** — the path, the drive, the gate.
-   Aimed at the house itself it will fire on your own effects.
-2. The background model adapts continuously, so anything that changes slowly or
-   repeats becomes "normal" within a few seconds. A parked car stops
-   registering.
-3. A change covering nearly the whole region is treated as a light switching on,
-   not a person, and re-baselines instead of firing.
-
-The Triggers panel shows a live reading of how much of the region is moving and
-the level it has to beat, which is the only sane way to aim one.
-
-### Driving the rest of the house
-
-Most houses that get projected on already have something else running — WLED on
-the gutter, a smart plug on the inflatable, a relay on the fog machine — and all
-of them speak HTTP. Every trigger can call two URLs: **before**, at the instant
-it fires, and **after**, when the hold expires and the show goes back to what it
-was doing. Wire the ambient state into *after* and the whole house resets itself
-for the next group without anyone touching anything.
-
-WLED's classic API is all GET, so a hook is usually just a URL:
-
-```
-http://wled.local/win&T=1&A=255&FX=45      before — everything red, strobing
-http://wled.local/win&PL=1                 after  — back to the ambient playlist
-```
-
-POST and a body are there for JSON APIs. There is a **Test** button beside each.
-
-**The thing that will catch you out:** a page served over **https** may not call
-**http**. Browsers block it as mixed content, silently, before the request
-leaves — and WLED and friends are all plain http on the local network. So a show
-driven from the GitHub Pages copy cannot talk to them at all. The fix is not a
-proxy or a certificate: serve the control page the same way as everything it is
-talking to, over http from the machine running the show. It is static files, so
-anything that serves a directory will do. The URL box says so if you are in that
-situation rather than leaving you to find out in the dark.
-
-Calls default to **no-cors**, which means the reply is discarded. That sounds
-like a loss and is not: these are commands, nobody is waiting on the answer, and
-the alternative is configuring CORS headers on every device you own. Tick *wait
-for a reply* when you want to know why one is failing.
-
-Only the control tab fires them. Projector tabs have no concept of triggers, and
-four copies of the same call arriving a few milliseconds apart is not what any
-of these devices expects.
+Buttons, timers and the steps they move between live in the **Automation**
+panel, and have [their own page](automation.md): a step shows a scene, puts
+words on the wall, plays a sound, and moves on when YES, NO or DOOR is pressed
+or its timer runs out. Home Assistant can press the buttons and hears every
+step the show moves to.
 
 **Sounds** are imported into the media library like anything else, and play from
 the control tab only — projector tabs usually drive displays with no speakers,

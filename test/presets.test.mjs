@@ -147,7 +147,11 @@ console.log('\n— tags that have to exist —');
     const unknown = [...wanted].filter((t) => !offered.has(t));
     ok(`${preset.id} targets only tags the picker offers`, unknown.length === 0, unknown.join(', '));
 
-    const untraced = [...wanted].filter((t) => !traced.has(t));
+    // A layer marked as needing a tag is left out where the tag is missing —
+    // the sign on a chimney, on a demo house that has none — so only the
+    // layers that will actually be added have to land on something.
+    const placed = new Set(preset.build().filter((l) => !l.__needsTag || traced.has(l.__needsTag)).flatMap((l) => l.targetTags || []));
+    const untraced = [...placed].filter((t) => !traced.has(t));
     ok(`${preset.id} targets only tags the demo house has`, untraced.length === 0, untraced.join(', '));
   }
 
@@ -306,24 +310,9 @@ for (const preset of PRESETS) {
   );
   ok(`${preset.id} builds scenes over its own layers`, orphaned.length === 0, orphaned[0] || '');
 
-  const dangling = (project.triggers || [])
-    .filter((t) => t.sceneId && !sceneIds.has(t.sceneId))
-    .map((t) => t.name);
-  ok(`${preset.id} builds triggers over its own scenes`, dangling.length === 0, dangling.join(', '));
-
-  /**
-   * A second trigger on a key another one already has is dead: `fireByKey`
-   * takes the first that matches and does not look further. Same for two
-   * scenes on one digit.
-   */
-  const keys = (project.triggers || []).filter((t) => t.source === 'hotkey').map((t) => t.key);
-  const sharedKeys = [...new Set(keys.filter((k, i) => keys.indexOf(k) !== i))];
-  ok(`${preset.id} gives every hotkey trigger a key of its own`, sharedKeys.length === 0,
-    sharedKeys.join(', '));
-
   const digits = project.scenes.map((s) => s.hotkey).filter(Boolean);
   const sharedDigits = [...new Set(digits.filter((k, i) => digits.indexOf(k) !== i))];
-  ok(`${preset.id} gives every scene a digit of its own`, sharedDigits.length === 0,
+  ok(`${preset.id} gives every scene a key of its own`, sharedDigits.length === 0,
     sharedDigits.join(', '));
 }
 

@@ -1,5 +1,5 @@
 /**
- * The MQTT bridge: Home Assistant's buttons in, the dare game's state out.
+ * The MQTT bridge: Home Assistant's buttons in, the automation's step out.
  *
  * The house already has a broker, and Home Assistant already turns a Matter
  * button into an event it can publish. What it cannot do is reach a browser
@@ -9,10 +9,11 @@
  *
  * It decides nothing, like the rest of the server. A press comes in on
  * `<prefix>/press` and goes out on the link as the same `press` action the
- * remote's Game tab sends; the control tab's game runtime is what knows whether
- * it means anything. The game's state comes back the other way inside the
- * digest the control tab already publishes for remotes, and is republished on
- * `<prefix>/game` for Home Assistant to light buttons and run the fog from.
+ * remote's Automation tab sends; the control tab's runtime is what knows
+ * whether it means anything. The step it is on comes back the other way inside
+ * the digest the control tab already publishes for remotes, and is
+ * republished on `<prefix>/game` for Home Assistant to light buttons and run
+ * the fog from — and on `<prefix>/game/cue` each time it moves.
  *
  * Hand-written MQTT 3.1.1, for the same reason the WebSocket in server.mjs is:
  * a projection mapper you have to `npm install` on the night is one you do not
@@ -23,7 +24,7 @@
  *   node server.mjs --mqtt mqtt://homeassistant.local:1883
  *   FACADE_MQTT_PASSWORD=… node server.mjs --mqtt mqtt://facade@homeassistant.local
  *
- * See docs/button-game.md for the Home Assistant side.
+ * See docs/automation.md for the Home Assistant side.
  */
 
 import net from 'node:net';
@@ -189,8 +190,9 @@ const CONNACK_REASONS = {
  *
  * `initial_press` is the moment the button goes down, and the only one that
  * does not wait for the multi-press window to close. `long_press` is the same
- * button still down — mercy, on NO. Everything else describes a press that has
- * already been counted, and passing it on would count it twice.
+ * button still down, which the automation ignores: the press already counted.
+ * Everything else describes a press that has already been counted, and
+ * passing it on would count it twice.
  */
 const KINDS = {
   initial_press: 'press',
@@ -277,43 +279,44 @@ export function createSkewEstimator({ window = 24 } = {}) {
 }
 
 /* ------------------------------------------------------------------ *
- * The game, for Home Assistant
+ * The automation, for Home Assistant
  * ------------------------------------------------------------------ */
 
 /**
  * Watch digests go by and say what changed.
  *
  * The control tab publishes a digest several times a second while anything is
- * happening, and Home Assistant wants to hear about the game twice: once as the
- * current state, retained, for dashboards and for button lights that connect
- * late; and once per move, not retained, for the fog machine. A digest that
- * changes nothing about the game produces neither.
+ * happening, and Home Assistant wants to hear about the automation twice: once
+ * as the current step, retained, for dashboards and for button lights that
+ * connect late; and once per move, not retained, for the fog machine. A digest
+ * that changes nothing about it produces neither.
  */
 export function createGameWatcher() {
   let lastState = '';
   return function watch(game) {
     if (!game || typeof game !== 'object') return null;
     const snap = game.snapshot || {};
+    // Named by what it is called, which is what an automation in Home
+    // Assistant matches on: "when the step is Lightning and smoke, start the
+    // smoke machine". The id comes too, for anybody who renames things.
     const state = {
       enabled: !!game.enabled,
-      state: String(snap.state || 'attract'),
-      level: Number(snap.level) || 0,
-      of: Number(snap.of) || 1,
-      zone: String(snap.zone || ''),
-      active: !!snap.active,
-      door: !!game.door,
+      step: String(snap.name || ''),
+      id: String(snap.step || ''),
+      alert: !!snap.alert,
+      atStart: !!snap.atStart,
     };
     const key = JSON.stringify(state);
     if (key === lastState) return null;
     const previous = lastState ? JSON.parse(lastState) : null;
     lastState = key;
-    const moved = previous && (previous.state !== state.state || previous.level !== state.level);
+    const moved = previous && previous.id !== state.id;
     const cue = moved
       ? {
-          cue: state.state,
-          level: state.level,
-          from: previous.state,
-          on: snap.last?.to === state.state ? String(snap.last.on || '') : '',
+          step: state.step,
+          id: state.id,
+          from: previous.step,
+          on: snap.last?.to === state.id ? String(snap.last.on || '') : '',
         }
       : null;
     return { state, cue };

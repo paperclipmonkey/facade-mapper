@@ -12,7 +12,7 @@
  * screen size. One authority over the project is the invariant the whole design
  * rests on: two editors would need conflict resolution, and a show running in
  * front of people has no appetite for a merge conflict. So the phone gets the
- * verbs you want out in the garden — scene, blackout, trigger, brightness — and
+ * verbs you want out in the garden — scene, blackout, brightness — and
  * none of the ones you want at a desk.
  *
  * Designed for the dark: big targets, no small text on anything you have to
@@ -25,8 +25,8 @@ import { createClock, formatTime } from '../core/clock.js';
 import { createLink } from '../core/link.js';
 import { now as linkNow } from '../core/time.js';
 import { createDrawPad } from '../draw/pad.js';
-import { renderGameGraph, holdable } from '../core/gameGraph.js';
-import { STATES, ROLE_LABELS } from '../core/game.js';
+import { renderGameGraph } from '../core/gameGraph.js';
+import { ROLE_LABELS } from '../core/game.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -66,7 +66,6 @@ let draggingMaster = false;
 
 /** Nodes built from the digest, kept so a repaint is a class change. */
 const sceneNodes = new Map();
-const triggerNodes = new Map();
 const layerNodes = new Map();
 const soundNodes = new Map();
 const projectorNodes = new Map();
@@ -105,7 +104,7 @@ function expect(change) {
 
 function structureOf(digest) {
   const ids = (list) => (list || []).map((x) => `${x.id}:${x.name}`).join(',');
-  return [ids(digest.scenes), ids(digest.triggers), ids(digest.layers), ids(digest.projectors)].join('|');
+  return [ids(digest.scenes), ids(digest.layers), ids(digest.projectors)].join('|');
 }
 
 function bigButton({ label, sub, onPress, extra = '' }) {
@@ -147,7 +146,6 @@ function toggleRow({ name, sub, onPress }) {
 
 function build(digest) {
   sceneNodes.clear();
-  triggerNodes.clear();
   layerNodes.clear();
   soundNodes.clear();
   projectorNodes.clear();
@@ -167,24 +165,6 @@ function build(digest) {
     scenes.appendChild(button);
   }
   $('scenesSection').hidden = !(digest.scenes || []).length;
-
-  const triggers = $('triggers');
-  triggers.replaceChildren();
-  for (const trigger of digest.triggers || []) {
-    const button = bigButton({
-      label: trigger.name,
-      sub: trigger.scene || trigger.source,
-      onPress: () => act('trigger', { id: trigger.id }),
-    });
-    const bar = document.createElement('span');
-    bar.className = 'cooldown';
-    bar.style.transform = 'scaleX(0)';
-    button.appendChild(bar);
-    button.bar = bar;
-    triggerNodes.set(trigger.id, button);
-    triggers.appendChild(button);
-  }
-  $('triggersSection').hidden = !(digest.triggers || []).length;
 
   const layers = $('layers');
   layers.replaceChildren();
@@ -456,7 +436,7 @@ $('tabGame').addEventListener('click', () => setMode('game'));
 $('tabDraw').addEventListener('click', () => setMode('draw'));
 
 /* ------------------------------------------------------------------ *
- * The dare game
+ * The automation
  * ------------------------------------------------------------------ */
 
 /**
@@ -471,44 +451,164 @@ function gamePress(button, kind = 'press') {
 }
 
 for (const button of document.querySelectorAll('.game-btn')) {
-  const role = button.dataset.role;
-  if (role === 'no') holdable(button, () => gamePress('no'), () => gamePress('no', 'long'));
-  else button.addEventListener('click', () => gamePress(role));
+  button.addEventListener('click', () => gamePress(button.dataset.role));
 }
 $('btnGameReset').addEventListener('click', () => act('game-reset'));
 $('btnGameOn').addEventListener('click', () => act('game-enabled'));
+
+/* --- Alerts: so the game can be run from indoors --- */
+
+/**
+ * What this phone does when the game moves on, chosen here and kept here: the
+ * phone in the kitchen wants the sound, the one in a pocket on the path wants
+ * the buzz and not the noise.
+ */
+const ALERTS_KEY = 'facade.remote.gameAlerts';
+const alerts = (() => {
+  try {
+    return { sound: false, flash: true, buzz: true, ...JSON.parse(localStorage.getItem(ALERTS_KEY) || '{}') };
+  } catch {
+    return { sound: false, flash: true, buzz: true };
+  }
+})();
+
+function paintAlertToggles() {
+  for (const button of document.querySelectorAll('[data-alert]')) {
+    const on = !!alerts[button.dataset.alert];
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-pressed', String(on));
+  }
+}
+for (const button of document.querySelectorAll('[data-alert]')) {
+  button.addEventListener('click', () => {
+    const key = button.dataset.alert;
+    alerts[key] = !alerts[key];
+    try {
+      localStorage.setItem(ALERTS_KEY, JSON.stringify(alerts));
+    } catch {
+      /* Private browsing: it lasts as long as the page, which is fine. */
+    }
+    // A browser will only make a sound after a tap, so the tap that turns the
+    // sound on is the one that unlocks it — and plays it, so you know.
+    if (key === 'sound' && alerts.sound) chime('step');
+    paintAlertToggles();
+  });
+}
+paintAlertToggles();
+
+/**
+ * How loudly to say it moved: a step marked as an alert rings the doorbell —
+ * somebody indoors should get up — every other step is a short chime, and
+ * going back to the start says nothing.
+ */
+function alertKind(snap) {
+  if (snap.atStart) return 'quiet';
+  return snap.alert ? 'door' : 'step';
+}
+
+let audio = null;
+/** A few notes, made rather than loaded: nothing to fetch, nothing to fail. */
+function chime(kind) {
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === 'suspended') audio.resume();
+  } catch {
+    return;
+  }
+  const notes = {
+    step: [[880, 0, 0.09]],
+    scare: [[196, 0, 0.25], [185, 0.12, 0.3]],
+    // Ding-dong, twice: a doorbell, because that is what it means.
+    door: [[659, 0, 0.4], [523, 0.38, 0.6], [659, 1.1, 0.4], [523, 1.48, 0.6]],
+    treat: [[523, 0, 0.12], [659, 0.1, 0.12], [784, 0.2, 0.12], [1047, 0.3, 0.3]],
+  }[kind] || [];
+  const t0 = audio.currentTime + 0.02;
+  for (const [freq, at, dur] of notes) {
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.type = kind === 'scare' ? 'sawtooth' : 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t0 + at);
+    gain.gain.exponentialRampToValueAtTime(0.25, t0 + at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + dur);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(t0 + at);
+    osc.stop(t0 + at + dur + 0.05);
+  }
+}
+
+const FLASH_COLOURS = { step: '#ff7a18', scare: '#ff4d6a', door: '#4cc2ff', treat: '#ffc14d' };
+function flash(kind) {
+  const node = $('gameFlash');
+  node.style.background = FLASH_COLOURS[kind] || '#ffffff';
+  node.hidden = false;
+  node.classList.remove('go');
+  void node.offsetWidth;
+  node.classList.add('go');
+  clearTimeout(flash.timer);
+  flash.timer = setTimeout(() => (node.hidden = true), kind === 'door' ? 1600 : 700);
+}
+
+let lastMoment = null;
+/** Called with every digest; acts only when the game has actually moved. */
+function alertOnMove(game) {
+  const snap = game?.snapshot;
+  if (!game?.enabled || !snap) {
+    lastMoment = null;
+    paintDoorBanner(null);
+    return;
+  }
+  const moment = String(snap.step);
+  paintDoorBanner(snap);
+  if (lastMoment === null || moment === lastMoment) {
+    lastMoment = moment;
+    return;
+  }
+  lastMoment = moment;
+  const kind = alertKind(snap);
+  if (kind === 'quiet') return;
+  if (alerts.flash) flash(kind);
+  if (alerts.sound) chime(kind);
+  if (alerts.buzz) navigator.vibrate?.(kind === 'door' ? [300, 150, 300, 150, 600] : kind === 'scare' ? [120, 60, 120] : 60);
+}
+
+/** The banner that stays up while an alert step is on: the moment to get up. */
+function paintDoorBanner(snap) {
+  const banner = $('gameDoor');
+  const text = snap?.alert ? String(snap.name || '').toUpperCase() : '';
+  banner.hidden = !text;
+  if (text) banner.textContent = text;
+}
 
 function paintGame() {
   const game = show?.game;
   $('tabGame').hidden = !game;
   if (!game || mode !== 'game') return;
   const snapshot = game.snapshot || {};
-  const def = STATES[snapshot.state] || STATES.attract;
 
   let text;
-  if (!game.enabled) text = 'The game is off. Switch it on to test it from here.';
-  else if (!snapshot.active) text = 'Waiting for somebody to press a button.';
+  if (!game.enabled) text = 'The automation is off. Switch it on to test it from here.';
+  else if (!snapshot.step) text = 'No steps yet.';
   else {
-    text = `${def.label}${def.levelled ? ` ${snapshot.level} of ${snapshot.of}` : ''}`;
+    text = snapshot.name || 'Untitled';
+    if (snapshot.atStart) text += ' · waiting for a press';
     if (snapshot.remaining !== null && snapshot.remaining !== undefined) text += ` · ${Math.ceil(snapshot.remaining)} s`;
-    if (snapshot.deciding) text += ` · listening for the other button`;
   }
   $('gameState').textContent = text;
-  $('gameState').classList.toggle('on', !!(game.enabled && snapshot.active));
+  $('gameState').classList.toggle('on', !!(game.enabled && !snapshot.atStart));
 
   $('btnGameOn').classList.toggle('on', game.enabled);
   $('btnGameOn').querySelector('.big-sub').textContent = game.enabled ? 'presses are live' : 'off — presses do nothing';
   for (const button of document.querySelectorAll('.game-btn')) button.disabled = !game.enabled;
-  document.querySelector('.game-door').hidden = !game.door;
 
-  $('gameGraph').innerHTML = renderGameGraph({ game, snapshot, names: game.names, missing: game.missing });
+  $('gameGraph').innerHTML = renderGameGraph({ game, snapshot, names: game.names });
 
   const log = $('gameLog');
   log.replaceChildren();
   for (const entry of snapshot.log || []) {
     const row = document.createElement('div');
     row.className = 'game-log-row';
-    const who = entry.role ? `${ROLE_LABELS[entry.role]}${entry.kind === 'long' ? ' held' : ''}` : entry.button;
+    const who = entry.role ? ROLE_LABELS[entry.role] : entry.button;
     row.textContent = `${who} — ${entry.result}`;
     log.appendChild(row);
   }
@@ -522,20 +622,6 @@ function tick() {
   requestAnimationFrame(tick);
   const time = clock.tick();
   $('showTime').textContent = formatTime(time.t);
-
-  // Cooldowns run off `armedAt`, an instant on the shared clock, so this is
-  // smooth between digests instead of stepping twice a second.
-  if (show?.triggers) {
-    const at = linkNow();
-    for (const trigger of show.triggers) {
-      const node = triggerNodes.get(trigger.id);
-      if (!node) continue;
-      const left = (trigger.armedAt || 0) - at;
-      const cooling = left > 200;
-      node.classList.toggle('cooling', cooling);
-      node.bar.style.transform = `scaleX(${cooling ? Math.min(1, left / 20000) : 0})`;
-    }
-  }
 
   refreshIfStale();
   updateNotice();
@@ -556,12 +642,16 @@ bus.on(MSG.SHOW, (digest) => {
   }
   paint();
   paintGame();
+  alertOnMove(digest.game);
   updateNotice();
 });
 
 bus.on(MSG.CLOCK, (transport) => {
   if (transport) clock.setTransport(transport);
 });
+
+// Back to the scene before: switch to one to look at it, then come back.
+$('btnSceneBack').addEventListener('click', () => act('back'));
 
 $('btnBlackout').addEventListener('click', () => {
   act('blackout');

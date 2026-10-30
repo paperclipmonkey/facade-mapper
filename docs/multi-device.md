@@ -40,8 +40,8 @@ Facade Mapper — serving this folder, link open.
   Second laptop            http://192.168.1.23:8000/projector.html
 ```
 
-For the [dare game](button-game.md), `--mqtt mqtt://homeassistant.local` also
-connects it to a broker, so buttons in Home Assistant can drive the game.
+For the [automation](automation.md), `--mqtt mqtt://homeassistant.local` also
+connects it to a broker, so buttons in Home Assistant can drive it.
 
 The **Devices** button in the control tab's top bar repeats those addresses,
 including the drawing page for a tablet.
@@ -65,13 +65,12 @@ carries the addresses to type into a phone.
 things you want in your hand out in the dark:
 
 - **Blackout**, big enough to hit without looking.
-- **Scenes** — one tap each, the live one lit.
-- **Triggers** — fire one by hand, with its cooldown counting down on the button.
+- **Scenes** — one tap each, the live one lit, and **↩ Back** to the one before.
 - **Play, pause, stop and the playlist.**
 - **Master brightness.**
-- **The dare game** — its own tab: YES, NO (hold for mercy), DOOR and TREAT,
-  the same presses the real buttons send, with the game's diagram lit up to
-  show where it is. See [dare buttons](button-game.md).
+- **The automation** — its own tab: YES, NO and DOOR, the same presses the
+  real buttons send, Start again, and the diagram lit up to show which step it
+  is on. See [automation](automation.md).
 - Behind a disclosure: effects on and off, and per-projector blackout with a
   **Flash** button that makes one projector identify itself, which is the only
   practical way to tell three of them apart from the garden.
@@ -197,9 +196,9 @@ clock is, which is the first thing to look at if two projectors disagree.
   too, or keep video on the projectors driven by the show machine.
 - **Drawing**, in the other direction, does cross — it is show state rather than
   show content, and small enough to send as it happens.
-- **The camera.** It belongs to the tab that opened it. Alignment, motion
-  triggers and camera-feed effects run on the show machine.
-- **Sound.** Trigger sounds play from the control tab only, as they always have.
+- **The camera.** It belongs to the tab that opened it. Alignment and
+  camera-feed effects run on the show machine.
+- **Sound.** Step sounds play from the control tab only, as they always have.
 - **Editing.** Only the control tab writes the project. There is no locking to
   get wrong because there is nothing to lock.
 
@@ -227,7 +226,7 @@ and anything without it is refused at the socket. The key is remembered by the
 device, so a phone that has joined once keeps working after a reload and the key
 does not have to stay in its address bar.
 
-A remote can only do the things on its list — go to a scene, fire a trigger,
+A remote can only do the things on its list — go to a scene, press a button,
 black out, set the master, switch an effect. It cannot edit the show, whatever
 it sends.
 

@@ -256,6 +256,30 @@ console.log('\n— text on a flat shape —');
   ok('text in a window is still measured by the window', Math.abs(inWindow - 135) < 1, `${inWindow.toFixed(1)}px in a 300x400 box`);
 }
 
+console.log('\n— text on more than one line —');
+{
+  const effect = getEffect('text');
+  // A wall-sized box, and a question on two lines: what the dare game puts up.
+  const wall = geo(
+    [{ x: 200, y: 200 }, { x: 1700, y: 200 }, { x: 1700, y: 900 }, { x: 200, y: 900 }],
+    { id: 'wall' }
+  );
+  const glyphs = drawAt(effect, wall, { content: 'DARE YOU?\nPRESS YES', mode: 'box', size: 0.5 }, 1)
+    .filter((c) => c.op === 'fillText');
+  const rows = [...new Set(glyphs.map((c) => Math.round(c.y)))].sort((a, b) => a - b);
+  ok('a line break makes two lines', rows.length === 2, rows.join(', '));
+  ok('stacked about the middle of the shape', Math.abs((rows[0] + rows[1]) / 2 - 550) < 2, `${rows.join(', ')} about 550`);
+  ok('the break itself is never drawn', !glyphs.some((c) => c.text === '\n'));
+  ok('every letter is drawn', glyphs.filter((c) => c.text.trim()).length === 'DARE YOU?PRESS YES'.replace(/ /g, '').length);
+  ok('and every letter is inside the shape', glyphs.every((c) => c.x >= 200 && c.x <= 1700));
+
+  // Too much to fit: it shrinks rather than running off the wall.
+  const long = drawAt(effect, wall, { content: 'SOMETHING LIVES IN THIS HOUSE\nAND IT IS AWAKE', mode: 'box', size: 2 }, 1)
+    .filter((c) => c.op === 'fillText');
+  const xs = long.map((c) => c.x);
+  ok('a long line shrinks to fit across the shape', Math.min(...xs) >= 200 && Math.max(...xs) <= 1700, `${Math.min(...xs).toFixed(0)}..${Math.max(...xs).toFixed(0)}`);
+}
+
 /* ------------------------------------------------------------------ *
  * Text on a path: it has to fit on the path
  * ------------------------------------------------------------------ */

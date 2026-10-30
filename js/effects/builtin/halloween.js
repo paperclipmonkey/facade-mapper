@@ -215,9 +215,15 @@ const bloodDrip = {
         // Jitter within the column so drips don't look like a comb.
         x: bbox.x + ((i + 0.5) / count + (rng() - 0.5) * 0.6 / count) * bbox.w,
         rate: 1 - p.variation * rng(),
-        /** How far down, 0..1. Integrated, never assigned — see below. */
-        pos: 0,
-        wait: rng() * 4,
+        /**
+         * How far down, 0..1. Integrated, never assigned — see below. Already
+         * out of the pool, so it is a drip from the first frame and not a bump
+         * on the pool's edge that takes a while to become one.
+         */
+        pos: 0.04,
+        // Every third runs at once and the rest within a second or so:
+        // switched on, the door should be bleeding, not thinking about it.
+        wait: i % 3 === 0 ? 0 : rng() * 1.5,
         alpha: 1,
         wobble: rng() * 10,
         thickness: 0.6 + rng() * 0.8,
