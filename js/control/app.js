@@ -78,7 +78,7 @@ import {
 } from '../core/scan.js';
 import { GRADE_PRESETS, DEFAULT_GRADE } from '../render/postfx.js';
 import { createMediaPool, importMediaFile, removeMedia } from '../core/media.js';
-import { loadUserEffects, listByCategory, defaultParams, getEffect, getCompileErrors } from '../effects/registry.js';
+import { loadUserEffects, listByCategory, defaultParams, getEffect } from '../effects/registry.js';
 import { captureScene, activateScene as applyScene, applySceneToLayers, unsavedChanges, restoreScene, tickPlaylist, transitionProgress, effectiveLayers } from '../core/scenes.js';
 import { createCamera } from './camera.js';
 import { feed as extraFeed, pruneFeeds } from './feeds.js';
@@ -109,7 +109,7 @@ import { buildExampleGame } from './gameStarter.js';
 import { openGameEditor, refreshGameEditor, paintGameEditor, isGameEditorOpen } from './gameEditor.js';
 import { scheduleWantsOn, describeSchedule } from './schedule.js';
 import { el, clear, toast, paramRow } from './ui.js';
-import { HELP_SECTIONS, EFFECT_TEMPLATE } from './help.js';
+import { HELP_SECTIONS } from './help.js';
 import { PRESETS, applyPreset, addDemoBursts } from './presets.js';
 import { demoShapes, demoWorldQuad, demoFacadeBlob, DEMO_ASPECT, DEMO_VERSION } from './demoHouse.js';
 
@@ -354,7 +354,8 @@ function restore(json) {
   scanSource.sync(app.project, worldSize(app.project), getBlob);
   worldRenderer.gc(app.project);
   stage.resize();
-  loadUserEffects(app.project.userEffects || []).then(refreshCodePanel);
+  // Custom effects written before the Code tab went still load and draw.
+  loadUserEffects(app.project.userEffects || []);
   markDirty();
   broadcast(true);
   refreshPanels();
@@ -2535,80 +2536,6 @@ app.startRealShow = () => {
 };
 
 /* ------------------------------------------------------------------ *
- * Code panel
- * ------------------------------------------------------------------ */
-
-let currentEffectId = null;
-
-function refreshCodePanel() {
-  const picker = $('effectPicker');
-  clear(picker);
-  const effects = app.project.userEffects || [];
-  if (!effects.length) {
-    picker.appendChild(el('option', { value: '', text: 'No custom effects yet' }));
-    $('codeEditor').value = '';
-    updateGutter();
-    currentEffectId = null;
-    return;
-  }
-  for (const effect of effects) {
-    picker.appendChild(el('option', { value: effect.id, text: effect.name || effect.id }));
-  }
-  if (!currentEffectId || !effects.some((e) => e.id === currentEffectId)) {
-    currentEffectId = effects[0].id;
-  }
-  picker.value = currentEffectId;
-  const record = effects.find((e) => e.id === currentEffectId);
-  $('codeEditor').value = record?.code ?? '';
-  updateGutter();
-  showCompileStatus();
-}
-
-function showCompileStatus() {
-  const errors = getCompileErrors();
-  const node = $('codeStatus');
-  if (currentEffectId && errors[currentEffectId]) {
-    node.textContent = errors[currentEffectId];
-    node.className = 'code-status bad';
-  } else if (currentEffectId) {
-    node.textContent = 'Compiled.';
-    node.className = 'code-status good';
-  } else {
-    node.textContent = '';
-    node.className = 'code-status';
-  }
-}
-
-function updateGutter() {
-  const lines = $('codeEditor').value.split('\n').length;
-  $('codeGutter').textContent = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
-}
-
-async function applyCode() {
-  if (!currentEffectId) return;
-  const record = app.project.userEffects.find((e) => e.id === currentEffectId);
-  if (!record) return;
-  app.pushUndo();
-  record.code = $('codeEditor').value;
-  record.updatedAt = Date.now();
-
-  // Pull the display name out of the source so the effect list matches what the
-  // module actually calls itself.
-  const nameMatch = record.code.match(/name\s*:\s*['"`]([^'"`]+)['"`]/);
-  if (nameMatch) record.name = nameMatch[1];
-
-  const errors = await loadUserEffects(app.project.userEffects);
-  showCompileStatus();
-  if (errors[currentEffectId]) {
-    toast(`"${record.name}" did not compile — see the Code panel.`, 'bad');
-  } else {
-    toast(`"${record.name}" is live in every projector tab.`, 'good');
-  }
-  app.commit();
-  refreshCodePanel();
-}
-
-/* ------------------------------------------------------------------ *
  * Transport
  * ------------------------------------------------------------------ */
 
@@ -3742,13 +3669,6 @@ function wire() {
     $('linkDialog').showModal();
   });
 
-  $('btnEffectDocs').addEventListener('click', () => {
-    // Straight to the API, because that is what the button beside the code
-    // editor is for. It used to open the same fourteen-heading scroll as the
-    // Help button and leave you to find the reference in it.
-    openHelp('api');
-  });
-
   $('btnShows').addEventListener('click', () => {
     renderShowsDialog();
     $('showsDialog').showModal();
@@ -4004,61 +3924,6 @@ function wire() {
     const files = [...(ev.target.files || [])];
     ev.target.value = '';
     if (files.length) await addMediaFiles(files);
-  });
-
-  /* --- Code --- */
-
-  $('btnNewEffect').addEventListener('click', async () => {
-    app.pushUndo();
-    const record = {
-      id: `custom_${Math.random().toString(36).slice(2, 8)}`,
-      name: 'My Effect',
-      code: EFFECT_TEMPLATE,
-      updatedAt: Date.now(),
-    };
-    app.project.userEffects = app.project.userEffects || [];
-    app.project.userEffects.push(record);
-    currentEffectId = record.id;
-    await loadUserEffects(app.project.userEffects);
-    app.commit();
-    refreshCodePanel();
-    switchPanel('code');
-  });
-
-  $('btnDeleteEffect').addEventListener('click', async () => {
-    if (!currentEffectId) return;
-    const record = app.project.userEffects.find((e) => e.id === currentEffectId);
-    if (!record || !confirm(`Delete "${record.name}"? Layers using it will stop drawing.`)) return;
-    app.pushUndo();
-    app.project.userEffects = app.project.userEffects.filter((e) => e.id !== currentEffectId);
-    currentEffectId = null;
-    await loadUserEffects(app.project.userEffects);
-    app.commit();
-    refreshCodePanel();
-  });
-
-  $('effectPicker').addEventListener('change', (ev) => {
-    currentEffectId = ev.target.value;
-    refreshCodePanel();
-  });
-
-  $('btnApplyCode').addEventListener('click', applyCode);
-  $('codeEditor').addEventListener('input', updateGutter);
-  $('codeEditor').addEventListener('scroll', () => {
-    $('codeGutter').scrollTop = $('codeEditor').scrollTop;
-  });
-  $('codeEditor').addEventListener('keydown', (ev) => {
-    if (ev.key === 'Tab') {
-      ev.preventDefault();
-      const area = ev.target;
-      const start = area.selectionStart;
-      area.value = `${area.value.slice(0, start)}  ${area.value.slice(area.selectionEnd)}`;
-      area.selectionStart = area.selectionEnd = start + 2;
-      updateGutter();
-    } else if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) {
-      ev.preventDefault();
-      applyCode();
-    }
   });
 
   /* --- Setup --- */
@@ -4655,7 +4520,6 @@ async function boot() {
   stage.resize();
   refreshPanels();
   refreshInspector();
-  refreshCodePanel();
   updateStageStatus();
   updateTransportUI();
 

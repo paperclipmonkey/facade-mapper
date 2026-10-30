@@ -34,7 +34,6 @@ export const PANELS = [
   ['game', 'Automation'],
   ['look', 'Look'],
   ['media', 'Media'],
-  ['code', 'Code'],
   ['settings', 'Setup'],
 ];
 

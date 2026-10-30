@@ -2,7 +2,7 @@
  * Small DOM helpers and the parameter-control factory.
  *
  * The inspector is generated entirely from each effect's `params` schema, so a
- * custom effect written in the Code panel gets the same controls, the same
+ * new effect gets the same controls, the same
  * modulation bindings and the same undo behaviour as a built-in. That's the
  * whole reason the schema exists rather than hand-written markup per effect.
  */

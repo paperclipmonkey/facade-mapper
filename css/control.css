@@ -509,57 +509,6 @@
 /* Code editor                                                         */
 /* ------------------------------------------------------------------ */
 
-.code-wrap {
-  display: flex;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--bg-input);
-  overflow: hidden;
-  height: clamp(240px, 42vh, 560px);
-  margin-bottom: 6px;
-}
-
-.code-gutter {
-  flex: 0 0 auto;
-  padding: 8px 6px 8px 8px;
-  background: #161a22;
-  border-right: 1px solid var(--line);
-  color: var(--text-faint);
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 1.55;
-  text-align: right;
-  user-select: none;
-  overflow: hidden;
-  white-space: pre;
-}
-
-.code-editor {
-  flex: 1 1 auto;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  padding: 8px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  line-height: 1.55;
-  resize: none;
-  white-space: pre;
-  overflow: auto;
-  tab-size: 2;
-}
-
-.code-status {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text-faint);
-  margin-bottom: 6px;
-  min-height: 16px;
-  white-space: pre-wrap;
-}
-
-.code-status.bad { color: var(--bad); }
-.code-status.good { color: var(--good); }
 
 /* ------------------------------------------------------------------ */
 /* Help                                                                */
