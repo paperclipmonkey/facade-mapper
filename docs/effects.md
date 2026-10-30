@@ -1161,9 +1161,10 @@ of them will cost tens of milliseconds a frame on their own. See
 ## The sound the house makes
 
 A projection show is silent, and silence is most of the reason a very good one
-still reads as a picture rather than as a place. Water lapping under a flooded
-window, legs skittering behind a web, thunder a field away: each is a few
-seconds of work and does more for the illusion than any amount of extra light.
+still reads as a picture rather than as a place. Bricks dropping out of a wall,
+something wet moving behind the hole they left, thunder on the beat of the
+flash: each is a few seconds of work and does more for the illusion than any
+amount of extra light.
 
 Turn it on under **Setup → The sound of the show**, or from the **Sound** button
 on the remote. It plays in the control tab only — that is the machine with the
@@ -1172,62 +1173,76 @@ sounds like a flanger rather than like thunder. Nothing starts until you press
 something, because no browser will make a noise before a gesture and a projector
 left running in a garage should not start talking.
 
-**Every layer that has a voice already has one.** Add the Halloween preset and
-the web skitters, the fire crackles and the lightning rumbles; flood the house
-and it laps. The mapping lives in one table in
-[`js/core/soundscape.js`](../js/core/soundscape.js) rather than a field on each
-effect, because the question you are actually answering is not "what does kelp
-sound like" but "what does this whole look sound like with eight layers on" —
-and you cannot answer that reading eight files. Most of the library is silent on
-purpose: five underwater effects share a single water voice instead of each
-adding its own lapping until the show is mush.
+**There are three voices, and that is on purpose.** Thunder, bricks falling and
+tentacles slithering. The app used to have thirteen, spread across sixty
+effects, and the result was a show where everything made a noise and none of it
+was any good. Three sounds done properly beat thirteen built out of filtered
+noise, and most effects are better off with nothing under them at all.
 
 | | |
 | --- | --- |
-| **Water lapping** | Waterline, caustics |
-| **Bubbles rising** | Bubbles |
-| **Tentacles writhing** | Breach, Portal, Serpent |
-| **Spiders crawling** | Web |
 | **Thunder** | Lightning |
-| **Fireworks** | Fireworks |
-| **Fire crackling** | Fire, Candle, Bonfire, Embers, Sparkler |
-| **Wind** | Fog, Smoke, Snow, Aurora, Ghost |
-| **Rain** | Rain |
-| **Dripping** | Blood drip, Icicles |
-| **Wings** | Bats, Bat burst |
-| **Neon hum** | Neon, Neon sign, Hologram, Scan lines, Static, Plasma |
-| **Glisten** | Stars, Fairy lights, Frost |
+| **Bricks falling** | Breach |
+| **Tentacles slithering** | Breach, Portal, Serpent |
+
+Breach is in that table twice, and it is the only effect that is: it draws a
+wall coming apart *and* something reaching out through the hole, and one of
+those being silent is the thing everybody notices first.
+
+The mapping lives in one table in
+[`js/core/soundscape.js`](../js/core/soundscape.js) rather than a field on each
+effect, because the question you are actually answering is not "what does a
+portal sound like" but "what does this whole look sound like with eight layers
+on" — and you cannot answer that reading eight files.
 
 **Volume is the only sound control on a layer**, in the inspector and on the
-remote, because whether the water is too loud is a question you can only answer
-standing in front of the house. There is no picker for *which* noise a layer
-makes: fire sounds like fire, and an evening spent choosing otherwise is an
-evening not spent pointing the projector. All the way down is how a layer is
-made silent.
+remote, because whether the wall is too loud is a question you can only answer
+standing in front of the house. All the way down is how a layer is made silent.
+A layer carrying two voices has one fader over both — they are two halves of
+one wall coming apart, not two things anybody wants to balance. To keep only
+one of them, point the layer at it by hand: `"sound": "writhe"` in the saved
+project gives you the tentacles and no bricks.
 
-Where several layers share a voice — three kinds of fire in one scene, four
-twinkling layers at Christmas — **one of them plays it and the rest are quiet
-under it**, and only the one playing it gets a fader. Three faders moving one
-crackle would mean two of them did nothing. It is the first such layer in the
-list that carries the voice, so the fader stays where you left it rather than
-hopping about as you mix; a layer faded to nothing hands the voice to the next,
-which is what keeps a crossfade between two fires crackling the whole way
-through.
+Where several layers share a voice — two breached walls, or a portal and a
+serpent — **one of them plays it and the rest are quiet under it**, and only the
+one playing it gets a fader. Two faders moving one pile of rubble would mean one
+of them did nothing. It is the first such layer in the list that carries the
+voice, so the fader stays where you left it rather than hopping about as you
+mix; a layer faded to nothing hands the voice to the next, which is what keeps a
+crossfade between two breaches crumbling the whole way through.
 
-**It is synthesised, not sampled.** Every voice is noise and filters built at
-run time, for three reasons in order of how much they matter. It never repeats,
-and a loop of rain is a loop that anybody standing there for ten minutes hears
-the seam in. It costs nothing to ship, where a sound library is tens of
-megabytes of binary in a repository of text files. And it can be *driven*: a
-voice is a graph with knobs on it.
+**It is recorded, not synthesised.** The clips in [`audio/`](../audio) are real
+recordings in the public domain; [`audio/CREDITS.md`](../audio/CREDITS.md) says
+where each one came from. This used to be a rack of noise generators and
+filters, and the argument for that was that it never repeated and cost nothing
+to ship. Both were true and neither mattered, because filtered noise does not
+sound like thunder — it sounds like filtered noise with a storm's shape, and
+somebody standing in a garden hears that at once even if they could not say
+what is wrong.
 
-A few of them are worth knowing about because the physics is the sound. A bubble
-is a resonance that rises in pitch as it leaves, because the cavity shrinks as
-it detaches — drawn as a click at a fixed pitch it is a click. Skittering is not
-a steady patter but *runs* of legs with stillness between them, which is what
-makes it sound like something deciding where to go rather than like a machine.
-And fire is its pops, not its roar: a real one two metres away has no swell in
-it, and a bed of noise breathing on a slow cycle is — acoustically — wind.
+The variety is in the playing rather than in the library. A clip is picked at
+random out of a handful, pitched a little either way, overlapped with the last
+one and rolled off by distance: six brick samples make a wall that comes apart
+differently every time, where a loop of a wall coming apart is a loop you hear
+the seam in. The whole folder is about 750 kB — less than one of the icons —
+and a better recording dropped in over any file in it needs no code change at
+all.
+
+Two of them are worth knowing about. **Every brick you hear is a brick you can
+see**: Breach reports each one as it leaves the wall and the clip goes out on
+that frame, so a hole giving way is a run of six or seven a fifth of a second
+apart and then a quiet wall for several seconds, exactly as drawn. It is worth
+being strict about — a brick sound on its own clock runs at roughly the right
+*rate* and at all the wrong *moments*, which is the only part anybody standing
+in the garden can hear. And a tentacle is three recordings at once: slime
+squeezed by hand is a small sound, and what makes it the size of an arm is
+dropping it half an octave, muffling the top, and never letting one finish
+before the next begins.
+
+One consequence worth knowing: the bricks are reported by the simulation
+running in the control tab, so turning **Show effects in preview** off silences
+them. That tab has then stopped working out where the bricks are and genuinely
+does not know. The projectors carry on drawing the wall either way.
 
 **Thunder is cued by the lightning, not run on a timer.** The flash is on the
 wall in front of you and the ear is extremely good at the gap between the two: a
@@ -1236,16 +1251,26 @@ is heard as a different storm somewhere else. So the lightning effect says when
 its return stroke fires and the crack is scheduled on the audio clock for that
 exact instant, at full level, with no distance delay — the bolt is on your house.
 
-Fireworks work the same way and say it twice per shell: once when it leaves the
-ground, which the sound follows up as a rush, and once when it breaks. The break
-is a click, a thump, a mid-crack and then a tail of tiny pops — the stars going
-out — which is the part that makes it a firework rather than a gunshot.
+Fireworks still says the same twice per shell — once when it leaves the ground
+and once when it breaks — even though no voice is mapped to it any more. Point
+a Fireworks layer at the thunder voice by hand and the shells crack rather than
+the sky rumbling; the rush on the way up is ignored, because a shell going up
+is not thunder.
 
 An effect of your own can do the same by exporting `cues(p, from, to)`, which
 returns `[{ at, level, distance }]` for the loud moments falling in a short
-window of show time just ahead of now. `distance` in seconds is the gap between
-the crack and the rumble, which is the only thing that makes a strike sound far
-away.
+window of show time just ahead of now. `level` chooses which of the voice's
+recordings it is and how loud, and `distance` rolls the top off it — air eats
+the top of a bang long before it eats the bottom, which is the whole of what
+makes one sound far away.
+
+**An effect that cannot see its own future says so afterwards instead.** Breach
+picks the next brick out of state it has been accumulating since the layer came
+on; it has no idea what it will do in half a second, and a prediction would
+drift away from the picture within a minute. So it calls `ctx.sound('bricks',
+{...})` as the brick goes and the clip is played on that frame. A tenth of a
+second is nothing for a brick and a fault for a thunderclap, which is why both
+exist. See [writing effects](writing-effects.md#making-a-noise-on-cue).
 
 **The sound follows the wall.** The plan is read off the same effective layers
 the renderer draws, so a scene decides what you hear, a crossfade fades the

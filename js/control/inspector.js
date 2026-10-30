@@ -11,7 +11,7 @@ import { SHAPE_TAGS } from '../core/state.js';
 import { getEffect, listByCategory, defaultParams, adoptParams } from '../effects/registry.js';
 import { openEffectPicker } from './effectPicker.js';
 import { layerIssues } from './diagnostics.js';
-import { voiceForLayer, soundFaders, VOICES } from '../core/soundscape.js';
+import { voicesForLayer, soundFaders, VOICES } from '../core/soundscape.js';
 import { effectiveLayers } from '../core/scenes.js';
 import { POINT_PAIRS_NEEDED } from './calibration.js';
 
@@ -494,16 +494,25 @@ function renderLayer(container, app, id) {
    * setting a level for later is exactly what you do with a layer that is off.
    */
   const sounding = getEffect(layer.effect);
-  const voice = voiceForLayer(layer, sounding);
+  const voices = voicesForLayer(layer, sounding);
   const faders = soundFaders(effectiveLayers(app.project), getEffect);
+  /**
+   * The voices this layer actually carries, and the ones another layer has
+   * taken off it. A Breach carries two — the bricks and what is behind them —
+   * and they get one fader between them, because they are two halves of one
+   * sound rather than two things anybody wants to balance against each other.
+   */
+  const mine = faders.get(layer.id) || [];
+  const elsewhere = voices.filter((v) => !mine.includes(v));
+  const nameOf = (v) => VOICES.get(v)?.name || v;
 
-  if (voice && faders.get(layer.id) === voice) {
+  if (mine.length) {
     container.appendChild(
       paramRow(
         {
           key: 'soundLevel',
           type: 'range',
-          label: `Volume — ${VOICES.get(voice)?.name}`,
+          label: `Volume — ${mine.map(nameOf).join(' and ')}`,
           min: 0,
           max: 1,
           step: 0.01,
@@ -519,15 +528,17 @@ function renderLayer(container, app, id) {
         }
       )
     );
-  } else if (voice) {
-    const holder = [...faders].find(([, v]) => v === voice)?.[0];
+  }
+
+  for (const voice of elsewhere) {
+    const holder = [...faders].find(([, list]) => list.includes(voice))?.[0];
     const owner = (app.project.layers || []).find((l) => l.id === holder);
     const row = el('div', { class: 'param-row' }, [el('label', { text: 'Sound' })]);
     row.append(
       el('div', { class: 'param-control' }, [
         el('span', {
           class: 'muted',
-          text: `${VOICES.get(voice)?.name} — played by ${owner?.name || getEffect(owner?.effect)?.name || 'another layer'}`,
+          text: `${nameOf(voice)} — played by ${owner?.name || getEffect(owner?.effect)?.name || 'another layer'}`,
         }),
       ]),
       el('span')

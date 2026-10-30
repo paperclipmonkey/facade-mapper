@@ -166,11 +166,12 @@ const sound = createSoundPlayer({ onError: (m) => toast(m, 'bad') });
 /**
  * The ambience, as opposed to the clips.
  *
- * `sound` above plays a file when a step starts — a scream, a door. This is
- * the other half: a continuous, synthesised bed that follows whatever layers
- * are on, so a flooded house laps and a web skitters without anybody cueing
- * anything. Sharing the clip player's audio context because a browser gives a
- * page a small number of them and there is no reason to spend two.
+ * `sound` above plays a file from the media library when a step starts. This
+ * is the other half: three voices of its own, built out of recordings in
+ * `audio/`, that follow whatever layers are on — so a breached wall drops
+ * bricks and lightning cracks without anybody cueing anything. Sharing the
+ * clip player's audio context because a browser gives a page a small number of
+ * them and there is no reason to spend two.
  */
 const soundscape = createSoundscape({
   createContext: () => {
@@ -248,6 +249,14 @@ const worldRenderer = createWorldRenderer({
     ? extraFeed(deviceId)
     : (camera.isRunning() ? camera.video : null)),
   onEffectError: ({ effectId, message }) => toast(`Effect "${effectId}" threw: ${message}`, 'bad'),
+  /**
+   * Something on the wall just made a noise. See `soundFromWall`.
+   *
+   * Only this tab passes it, which is what keeps the projectors silent: it is
+   * the same rule as the rest of the soundscape, enforced by not handing them
+   * the hook rather than by asking them not to use it.
+   */
+  onSound: (voice, detail, layerId) => soundFromWall(voice, detail, layerId),
 });
 
 const stage = createStage({ canvas: $('stage'), wrap: $('stageWrap'), app });
@@ -2616,21 +2625,23 @@ function showDigest() {
     /**
      * Layers, with what each one sounds like.
      *
-     * `voice` is null for the many layers that make no noise *and* for the ones
-     * whose voice another layer is already carrying — see `soundFaders`. The
-     * remote uses it to decide whether to draw a volume slider, and a fader
-     * that moves without changing anything is worse than no fader at all.
+     * `voices` is empty for the many layers that make no noise *and* for the
+     * ones whose voice another layer is already carrying — see `soundFaders`.
+     * The remote uses it to decide whether to draw a volume slider, and a
+     * fader that moves without changing anything is worse than no fader at
+     * all. A Breach carries two, and one fader sets both: they are the two
+     * halves of one wall coming apart, not two things to balance.
      */
     layers: (project.layers || []).map((l) => {
       const effect = getEffect(l.effect);
-      const voice = soundVoiceOwners.get(l.id) || null;
+      const voices = soundVoiceOwners.get(l.id) || [];
       return {
         id: l.id,
         name: l.name || effect?.name || l.effect,
         enabled: l.enabled !== false,
         solo: !!l.solo,
-        voice,
-        voiceName: voice ? VOICES.get(voice)?.name : '',
+        voices,
+        voiceName: voices.map((v) => VOICES.get(v)?.name).filter(Boolean).join(' and '),
         soundLevel: l.soundLevel ?? 1,
       };
     }),
@@ -3103,10 +3114,10 @@ window.__soundscape = () => ({
    */
   cued: cueCount,
   lastCue,
-  /** Layer id -> the voice whose fader it carries. The rest get no slider. */
-  faders: [...soundFaders(effectiveLayers(app.project), getEffect)].map(([id, voice]) => {
+  /** Layer id -> the voices whose fader it carries. The rest get no slider. */
+  faders: [...soundFaders(effectiveLayers(app.project), getEffect)].map(([id, voices]) => {
     const layer = app.project.layers.find((l) => l.id === id);
-    return { id, voice, name: layer?.name || layer?.effect };
+    return { id, voices, name: layer?.name || layer?.effect };
   }),
 });
 
@@ -3134,6 +3145,17 @@ const CUE_AHEAD = 0.4;
 let cuedTo = 0;
 let cueCount = 0;
 let lastCue = null;
+/**
+ * Layer id -> the voices it is carrying, as of this frame.
+ *
+ * Worked out once in `tickSoundscape` and kept, because both halves of the
+ * sound need it and one of them — the noises reported out of the renderer —
+ * arrives in the middle of the render, long after the frame's plan was made.
+ */
+const EMPTY_OWNERS = new Map();
+let soundOwned = EMPTY_OWNERS;
+/** Show time as of the last tick, for stamping a noise that has just happened. */
+let soundNow = 0;
 
 /**
  * Hand the soundscape the loud moments the wall is about to have.
@@ -3158,11 +3180,10 @@ function cueSoundscape(t, layers) {
   cuedTo = to;
   if (from >= to) return;
 
-  const owners = soundOwners(layers, getEffect);
   for (const layer of layers) {
     if (layer.enabled === false) continue;
-    const voice = owners.get(layer.id);
-    if (!voice) continue;
+    const voices = soundOwned.get(layer.id);
+    if (!voices?.length) continue;
     const effect = getEffect(layer.effect);
     if (typeof effect?.cues !== 'function') continue;
     let events;
@@ -3175,11 +3196,44 @@ function cueSoundscape(t, layers) {
       continue;
     }
     for (const event of events) {
-      if (!soundscape.cue(voice, { ...event, in: event.at - t })) continue;
-      cueCount++;
-      lastCue = { voice, effect: layer.effect, at: event.at, ahead: event.at - t };
+      for (const voice of voices) {
+        if (!soundscape.cue(voice, { ...event, in: event.at - t })) continue;
+        cueCount++;
+        lastCue = { voice, effect: layer.effect, at: event.at, ahead: event.at - t };
+      }
     }
   }
+}
+
+/**
+ * A noise an effect has *just* made, rather than one it saw coming.
+ *
+ * Breach reports every brick as it leaves the wall — see `sound` in
+ * render/worldRenderer.js for why it cannot say so in advance — and this is
+ * where those land. Played on the spot rather than scheduled, because the
+ * instant has already happened.
+ *
+ * Checked against the same ownership map the plan was built from, for the same
+ * reason `cues` is: two Breach layers on one wall must make one wall's worth
+ * of noise, not two. `soundOwned` is a frame old at worst, which is the frame
+ * the brick fell in.
+ *
+ * It arrives from the renderer, so it only arrives while this tab is actually
+ * rendering — turn the preview off and the wall is silent, because this tab
+ * has then stopped simulating and genuinely does not know. The projectors
+ * carry on drawing it.
+ */
+function soundFromWall(voice, detail, layerId) {
+  if (!soundscape.running) return;
+  if (!soundOwned.get(layerId)?.includes(voice)) return;
+  if (!soundscape.cue(voice, { ...detail, in: 0 })) return;
+  cueCount++;
+  lastCue = {
+    voice,
+    effect: app.project.layers.find((l) => l.id === layerId)?.effect,
+    at: soundNow,
+    ahead: 0,
+  };
 }
 
 /**
@@ -3190,8 +3244,13 @@ function cueSoundscape(t, layers) {
  * waste on the machine that is already doing the most work.
  */
 function tickSoundscape(t) {
-  if (!soundscape.running) return;
+  if (!soundscape.running) {
+    soundOwned = EMPTY_OWNERS;
+    return;
+  }
   const layers = effectiveLayers(app.project);
+  soundNow = t;
+  soundOwned = soundOwners(layers, getEffect);
   syncSoundscape(layers);
   cueSoundscape(t, layers);
 }

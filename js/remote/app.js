@@ -189,8 +189,12 @@ function build(digest) {
      * layer off. Only for layers with a voice — a fader that does nothing is
      * worse than no fader — and, where several layers share one voice, only for
      * the one actually playing it. See `soundOwners` in core/soundscape.js.
+     *
+     * One fader even where a layer carries two voices: a Breach is a wall
+     * coming apart and something coming through the hole, and those are one
+     * sound to anybody standing in front of it.
      */
-    if (!layer.voice) continue;
+    if (!layer.voices?.length) continue;
     const fader = document.createElement('label');
     fader.className = 'fader sound-fader';
     const label = document.createElement('span');
@@ -282,7 +286,8 @@ function paint() {
     // Lit while the voice is actually audible. Layers that share a voice have
     // already been resolved to one fader by the control tab, so every slider
     // here does something; this only says whether it is doing it right now.
-    fader.classList.toggle('playing', (show.sound?.playing || []).includes(layer.voice));
+    const audible = show.sound?.playing || [];
+    fader.classList.toggle('playing', (layer.voices || []).some((v) => audible.includes(v)));
   }
 
   const soundOn = !!show.sound?.on;

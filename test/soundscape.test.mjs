@@ -1,28 +1,37 @@
 /**
  * The sound the house makes.
  *
- * Two halves, and only one of them can be tested without ears. The synthesis is
- * a graph of Web Audio nodes and whether it sounds like water is a judgement
- * call made standing in a garden. What *can* be pinned down is everything
- * around it, and it is the half that fails silently:
+ * Two halves, and only one of them can be tested without ears. Whether a
+ * recording of somebody squeezing a ball of slime, pitched down and overlapped
+ * three deep, sounds like a tentacle is a judgement call made standing in a
+ * garden. What *can* be pinned down is everything around it, and it is the
+ * half that fails silently:
  *
- *   - every effect mapped to a voice is mapped to a voice that exists, so a
- *     typo in the table is not a layer that is quietly mute all evening;
+ *   - every clip a voice asks for is a file that exists, because a typo in a
+ *     filename is a voice that is mute all evening with one line in a console
+ *     nobody is looking at;
+ *   - every effect mapped to a voice is mapped to a voice that exists;
  *   - the plan follows what is on the wall — a disabled layer, a layer faded
  *     out by a crossfade, and a blacked-out show are all silent;
  *   - two layers asking for one voice play it once, because two copies of a
- *     noise bed is not twice the water, it is mud;
+ *     wall coming down is not twice the wall, it is mud;
  *   - the mixer builds, retunes and drops exactly what the plan says, which is
- *     checkable against a stub context that records what it was asked for.
+ *     checkable against a stub context that records what it was asked for;
+ *   - a clap lands on the sample it was given, codec padding and all.
  *
  *   node test/soundscape.test.mjs
  */
 
+import { readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import {
+  CLIPS,
   VOICES,
   VOICE_OPTIONS,
   VOICE_FOR_EFFECT,
-  voiceForLayer,
+  loadClips,
+  voicesForLayer,
   planSoundscape,
   soundOwners,
   soundFaders,
@@ -40,15 +49,33 @@ const ok = (name, cond, detail = '') => {
 };
 
 /* ------------------------------------------------------------------ *
- * The table
+ * The library on disk
  * ------------------------------------------------------------------ */
 
-console.log('— which effect sounds like what —');
+console.log('— the clips —');
+
+{
+  const dir = fileURLToPath(new URL('../audio/', import.meta.url));
+  const files = new Set(readdirSync(dir));
+  const missing = CLIPS.filter((name) => !files.has(`${name}.mp3`));
+  ok('every clip a voice asks for is on disk', missing.length === 0, missing.join(', '));
+
+  const spare = [...files].filter((f) => f.endsWith('.mp3') && !CLIPS.includes(f.replace(/\.mp3$/, '')));
+  ok('and nothing is shipped that nothing plays', spare.length === 0, spare.join(', '));
+
+  ok('the sources are written down', files.has('CREDITS.md'));
+}
+
+/* ------------------------------------------------------------------ *
+ * Which effect sounds like what
+ * ------------------------------------------------------------------ */
+
+console.log('\n— which effect sounds like what —');
 
 {
   const bad = Object.entries(VOICE_FOR_EFFECT)
-    .filter(([, voice]) => voice !== null && !VOICES.has(voice))
-    .map(([id, voice]) => `${id} -> ${voice}`);
+    .filter(([, v]) => v !== null && ![].concat(v).every((id) => VOICES.has(id)))
+    .map(([id, v]) => `${id} -> ${v}`);
   ok('every mapped voice exists', bad.length === 0, bad.join(', '));
 
   const known = new Set(listEffects().map((e) => e.id));
@@ -61,44 +88,59 @@ console.log('— which effect sounds like what —');
     VOICE_OPTIONS.every((v) => typeof v.name === 'string' && v.name.length > 2));
 
   /**
-   * The examples that started this off. Named individually rather than counted,
-   * because "twelve voices exist" would still pass with the wrong twelve.
+   * Named individually rather than counted, because "three voices exist" would
+   * still pass with the wrong three.
    */
   for (const [effect, expected] of [
-    ['waterline', 'water'],
-    ['web', 'crawl'],
-    ['breach', 'writhe'],
     ['lightning', 'thunder'],
-    ['bonfire', 'fire'],
-    ['rain', 'rain'],
-    ['bats', 'wings'],
-    ['neon', 'hum'],
+    // Both, and this is the one that needs a test of its own: Breach draws a
+    // wall coming apart *and* something reaching out through the hole, and
+    // giving it only the bricks left the tentacles silent on screen.
+    ['breach', 'bricks,writhe'],
+    ['portal', 'writhe'],
+    ['serpent', 'writhe'],
   ]) {
     ok(`${effect} sounds like ${expected}`,
-      voiceForLayer({}, getEffect(effect)) === expected,
-      String(voiceForLayer({}, getEffect(effect))));
+      voicesForLayer({}, getEffect(effect)).join(',') === expected,
+      voicesForLayer({}, getEffect(effect)).join(','));
   }
 
   /**
-   * And most of the library is silent, which is the part that needs saying.
-   * A show where every layer makes a noise is not atmospheric, it is a mess —
-   * five underwater effects share one water voice rather than each adding its
-   * own lapping.
+   * And nearly all of the library is silent, which is the part that needs
+   * saying. The app used to have thirteen synthesised voices spread over sixty
+   * effects, and the result was a show where everything made a noise and none
+   * of it was any good.
    */
-  const sounding = listEffects().filter((e) => voiceForLayer({}, e));
-  ok('most effects make no sound at all', sounding.length < listEffects().length * 0.5,
+  const sounding = listEffects().filter((e) => voicesForLayer({}, e).length);
+  ok('nearly every effect makes no sound at all', sounding.length <= 6,
     `${sounding.length} of ${listEffects().length} have a voice`);
+
+  for (const gone of ['water', 'crawl', 'fire', 'firework', 'rain', 'wind', 'chime', 'hum']) {
+    ok(`the synthesised ${gone} voice is gone`, !VOICES.has(gone));
+  }
 }
 
 {
-  ok('a layer can be silenced', voiceForLayer({ sound: 'none' }, getEffect('waterline')) === null);
+  const only = (layer, effect) => voicesForLayer(layer, effect).join(',');
+  ok('a layer can be silenced', only({ sound: 'none' }, getEffect('lightning')) === '');
   ok('and can be given a voice that is not its own',
-    voiceForLayer({ sound: 'thunder' }, getEffect('waterline')) === 'thunder');
+    only({ sound: 'writhe' }, getEffect('lightning')) === 'writhe');
+  // Which is also how you take half of a Breach away: one voice, not the pair.
+  ok('and pointing one at a single voice drops the rest',
+    only({ sound: 'writhe' }, getEffect('breach')) === 'writhe');
   ok('a voice that does not exist is silence, not a crash',
-    voiceForLayer({ sound: 'kazoo' }, getEffect('waterline')) === null);
+    only({ sound: 'kazoo' }, getEffect('lightning')) === '');
+  /**
+   * Including the ones that used to. A show saved when `fire` was a voice
+   * loads, draws and is simply quiet on that layer, rather than throwing on
+   * open or mapping itself onto whatever happens to be nearby.
+   */
+  ok('and neither is one that was retired',
+    only({ sound: 'water' }, getEffect('lightning')) === '');
   ok('an effect may declare its own, and it wins',
-    voiceForLayer({}, { id: 'waterline', sound: 'chime' }) === 'chime');
-  ok('an unknown effect is silent', voiceForLayer({}, undefined) === null);
+    only({}, { id: 'lightning', sound: 'writhe' }) === 'writhe');
+  ok('and may declare several', only({}, { id: 'x', sound: ['thunder', 'writhe'] }) === 'thunder,writhe');
+  ok('an unknown effect is silent', only({}, undefined) === '');
 }
 
 /* ------------------------------------------------------------------ *
@@ -111,46 +153,46 @@ const layer = (effect, extra = {}) => ({ ...createLayer(effect), ...extra });
 
 {
   const plan = planSoundscape(
-    [layer('waterline'), layer('web'), layer('kelp'), layer('shoal')],
+    [layer('lightning'), layer('breach'), layer('fog'), layer('bats')],
     getEffect
   );
   const voices = plan.map((p) => p.voice).sort();
   ok('the layers that have a voice play, and the rest do not',
-    voices.join(',') === 'crawl,water', voices.join(','));
+    voices.join(',') === 'bricks,thunder,writhe', voices.join(','));
 }
 
 {
   ok('a layer switched off is silent',
-    planSoundscape([layer('waterline', { enabled: false })], getEffect).length === 0);
+    planSoundscape([layer('lightning', { enabled: false })], getEffect).length === 0);
 
   /**
    * Faded out by a crossfade, too. The plan multiplies by opacity, so a scene
    * change fades what you hear along with what you see and nobody has to wire
    * that up per layer.
    */
-  const half = planSoundscape([layer('waterline', { opacity: 0.5 })], getEffect);
+  const half = planSoundscape([layer('lightning', { opacity: 0.5 })], getEffect);
   ok('and one faded half way is half as loud', Math.abs(half[0].level - 0.5) < 1e-9,
     half[0].level.toFixed(3));
   ok('and one faded to nothing is not playing at all',
-    planSoundscape([layer('waterline', { opacity: 0 })], getEffect).length === 0);
+    planSoundscape([layer('lightning', { opacity: 0 })], getEffect).length === 0);
   ok('its own level counts too',
-    Math.abs(planSoundscape([layer('waterline', { soundLevel: 0.25 })], getEffect)[0].level - 0.25) < 1e-9);
+    Math.abs(planSoundscape([layer('lightning', { soundLevel: 0.25 })], getEffect)[0].level - 0.25) < 1e-9);
   ok('and a blackout silences the lot',
-    planSoundscape([layer('waterline'), layer('web')], getEffect, { master: 0 }).length === 0);
+    planSoundscape([layer('lightning'), layer('breach')], getEffect, { master: 0 }).length === 0);
 }
 
 {
   /**
-   * Two layers, one voice, one instance. A show with a preset applied twice —
-   * or simply a waterline and the caustics that go with it — must not stack
-   * two beds of the same noise.
+   * Two layers, one voice, one instance. A wall breached in two places — which
+   * is what you get the moment somebody duplicates the layer to cover a second
+   * elevation — must not stack two copies of the same rubble.
    *
    * The *first* of them plays it, not the loudest. Ownership decided by level
    * moves from layer to layer as the faders do, which makes a volume slider
    * that changes which slider is live — see `soundOwners`.
    */
-  const first = layer('waterline', { soundLevel: 0.3 });
-  const second = layer('caustics', { soundLevel: 0.9 });
+  const first = layer('portal', { soundLevel: 0.3 });
+  const second = layer('serpent', { soundLevel: 0.9 });
   const plan = planSoundscape([first, second], getEffect);
   ok('two layers wanting the same voice play it once', plan.length === 1, `${plan.length}`);
   ok('and it is the first of them that plays it', plan[0].layerId === first.id);
@@ -158,15 +200,16 @@ const layer = (effect, extra = {}) => ({ ...createLayer(effect), ...extra });
     plan[0].level.toFixed(2));
 
   const owners = soundOwners([first, second], getEffect);
-  ok('so only one of the two gets a fader', owners.size === 1 && owners.get(first.id) === 'water',
+  ok('so only one of the two gets a fader',
+    owners.size === 1 && owners.get(first.id).join(',') === 'writhe',
     [...owners].map(([id, v]) => `${id}=${v}`).join(' '));
 
   /**
    * Unless the first is faded to nothing — then it hands the voice on rather
    * than taking the show silent with it, which is what keeps a crossfade
-   * between two scenes that both contain water lapping the whole way through.
+   * between two scenes that both writhe going the whole way through.
    */
-  const muted = layer('waterline', { soundLevel: 0 });
+  const muted = layer('portal', { soundLevel: 0 });
   const handed = planSoundscape([muted, second], getEffect);
   ok('a layer faded to nothing hands its voice to the next one',
     handed.length === 1 && handed[0].layerId === second.id,
@@ -178,10 +221,11 @@ const layer = (effect, extra = {}) => ({ ...createLayer(effect), ...extra });
    * whole point of the fader, and a control that disappears when you turn the
    * layer off is one you cannot set up in daylight.
    */
-  const off = layer('waterline', { enabled: false });
-  ok('a layer switched off keeps its fader', soundFaders([off], getEffect).get(off.id) === 'water');
+  const off = layer('portal', { enabled: false });
+  ok('a layer switched off keeps its fader',
+    soundFaders([off], getEffect).get(off.id)?.join(',') === 'writhe');
   ok('but not when another layer has the voice',
-    soundFaders([layer('caustics'), off], getEffect).get(off.id) === undefined);
+    soundFaders([layer('serpent'), off], getEffect).get(off.id) === undefined);
   ok('and it is not playing either way', planSoundscape([off], getEffect).length === 0);
 
   /**
@@ -202,7 +246,7 @@ const layer = (effect, extra = {}) => ({ ...createLayer(effect), ...extra });
   // A project loaded from before any of this existed must not be silent-by-
   // absence or crash on a missing field.
   const project = createProject('old');
-  project.layers = [{ id: 'l1', effect: 'waterline', enabled: true }];
+  project.layers = [{ id: 'l1', effect: 'lightning', enabled: true }];
   const loaded = migrateProject(JSON.parse(JSON.stringify(project)));
   ok('a show saved before sound existed still gets it',
     loaded.layers[0].sound === 'auto' && loaded.layers[0].soundLevel === 1,
@@ -212,21 +256,21 @@ const layer = (effect, extra = {}) => ({ ...createLayer(effect), ...extra });
 }
 
 /* ------------------------------------------------------------------ *
- * The mixer
+ * The stub, and a library to feed it
  * ------------------------------------------------------------------ */
-
-console.log('\n— building, retuning and dropping —');
 
 /**
  * Enough of a Web Audio context to build every voice against.
  *
  * Not a mock of a few methods the voices happen to use: a stub that answers
  * everything, so a voice added later is exercised by this file without anybody
- * remembering to come back. `started` and `stopped` are what the assertions
- * are made of.
+ * remembering to come back. `startedAt` and `offsets` are what most of the
+ * assertions below are made of — a sampled voice says everything it has to say
+ * in when it starts a buffer and how far into it.
  */
 function stubContext() {
-  const log = { built: [], started: 0, startedAt: [], stopped: 0 };
+  const log = { built: [], started: 0, startedAt: [], offsets: [], played: [], stopped: 0 };
+  let tag = 0;
   const param = () => ({
     value: 0,
     setValueAtTime() {},
@@ -237,10 +281,11 @@ function stubContext() {
   });
   const node = (kind) => {
     log.built.push(kind);
-    const self = {
+    return {
       kind,
       frequency: param(),
       detune: param(),
+      playbackRate: param(),
       Q: param(),
       gain: param(),
       type: '',
@@ -248,10 +293,16 @@ function stubContext() {
       loop: false,
       connect: (to) => to,
       disconnect() {},
-      start(when = 0) { log.started++; log.startedAt.push(when); },
+      start(when = 0, offset = 0) {
+        log.started++;
+        log.startedAt.push(when);
+        log.offsets.push(offset);
+        // Which recording it was. Tagged at decode, so an assertion can say
+        // "the near crack, not the long roll" rather than only "something".
+        log.played.push(this.buffer?.tag ?? null);
+      },
       stop() { log.stopped++; },
     };
-    return self;
   };
   return {
     log,
@@ -269,6 +320,21 @@ function stubContext() {
       length,
       getChannelData: () => new Float32Array(length),
     }),
+    /**
+     * A clip with a tenth of a second of nothing on the front, which is what a
+     * lossy decoder hands back and what `leadIn` exists to measure.
+     */
+    decodeAudioData: async () => ({
+      tag: tag++,
+      sampleRate: 44100,
+      length: 44100,
+      duration: 1,
+      getChannelData: () => {
+        const data = new Float32Array(44100);
+        for (let i = 4410; i < data.length; i++) data[i] = Math.sin(i * 0.01) * 0.5;
+        return data;
+      },
+    }),
     resume() {
       this.state = 'running';
       return Promise.resolve();
@@ -280,51 +346,124 @@ function stubContext() {
   };
 }
 
+/** Nothing reaches the network from a test. Every clip "downloads" instantly. */
+const served = [];
+globalThis.fetch = async (url) => {
+  served.push(String(url));
+  return { ok: true, arrayBuffer: async () => new ArrayBuffer(64) };
+};
+
+/* ------------------------------------------------------------------ *
+ * Loading
+ * ------------------------------------------------------------------ */
+
+console.log('\n— fetching and decoding —');
+
 {
-  // Every voice, built and scheduled, against the stub. A voice that throws on
-  // build is a layer that is silent for the whole evening with a line in a
-  // console nobody is looking at.
+  const ctx = stubContext();
+  const ready = await loadClips(ctx);
+  ok('every clip is fetched once', served.length === CLIPS.length, `${served.length} requests`);
+  ok('and they come from the audio folder beside the code',
+    served.every((u) => u.includes('/audio/')), served[0]);
+  ok('and every one of them decodes', ready.size === CLIPS.length, `${ready.size} ready`);
+
+  const before = served.length;
+  await loadClips(ctx);
+  ok('asking twice downloads nothing twice', served.length === before);
+
+  /**
+   * The silence a decoder pads onto the front, measured so it can be skipped.
+   * A tenth of a second of it, less the few samples of run-up `leadIn` leaves
+   * so a fast attack keeps its leading edge.
+   */
+  const lead = ready.get('thunder-crack').lead;
+  ok('and the codec padding on the front is measured', Math.abs(lead - 0.0985) < 0.003,
+    `${(lead * 1000).toFixed(1)} ms`);
+}
+
+{
+  const ctx = stubContext();
+  const good = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 404 });
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const ready = await loadClips(ctx);
+    ok('a missing file is a quieter show, not a broken one', ready.size === 0);
+  } finally {
+    console.warn = warn;
+    globalThis.fetch = good;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * The voices
+ * ------------------------------------------------------------------ */
+
+console.log('\n— building, retuning and dropping —');
+
+{
+  // Every voice, built and scheduled, against the stub — twice, because a voice
+  // that queues events has to cope with being asked again for a window it has
+  // already filled. Once with no clips at all, which is the first second of
+  // every evening while the library is still coming down the wire.
   let broke = '';
-  for (const [id, voice] of VOICES) {
-    const ctx = stubContext();
-    try {
-      const out = ctx.createGain();
-      const instance = voice.build(ctx, out);
-      // Twice, because a voice that queues events has to cope with being asked
-      // again for a window it has already filled.
-      instance.schedule?.(0.5);
-      instance.schedule?.(1.2);
-      instance.stop?.();
-    } catch (err) {
-      broke = `${id}: ${err.message}`;
-      break;
+  for (const withClips of [false, true]) {
+    for (const [id, voice] of VOICES) {
+      const ctx = stubContext();
+      if (withClips) await loadClips(ctx);
+      try {
+        const out = ctx.createGain();
+        const instance = voice.build(ctx, out);
+        instance.schedule?.(0.5);
+        instance.schedule?.(1.2);
+        instance.cue?.(0.8, { level: 1, distance: 0 });
+        instance.stop?.();
+      } catch (err) {
+        broke = `${id}${withClips ? '' : ' (no clips)'}: ${err.message}`;
+        break;
+      }
     }
   }
   ok('every voice builds, schedules and stops', !broke, broke || `${VOICES.size} voices`);
 }
 
 {
+  // And makes no noise at all until its clips have landed. A buffer source with
+  // no buffer is a click in some browsers and an exception in others.
+  const ctx = stubContext();
+  ctx.state = 'running';
+  const out = ctx.createGain();
+  for (const [, voice] of VOICES) {
+    const instance = voice.build(ctx, out);
+    for (ctx.currentTime = 0; ctx.currentTime < 60; ctx.currentTime += 0.3) instance.schedule?.(ctx.currentTime + 0.35);
+  }
+  ok('a voice with nothing loaded yet is simply silent', ctx.log.started === 0, `${ctx.log.started} started`);
+}
+
+{
   const ctx = stubContext();
   const scape = createSoundscape({ createContext: () => ctx });
   await scape.start();
+  await scape.ready;
 
-  scape.sync([{ voice: 'water', level: 0.8, name: 'The water' }]);
+  scape.sync([{ voice: 'thunder', level: 0.8, name: 'The storm' }]);
   ok('the mixer starts what the plan asks for',
-    scape.voices().map((v) => v.voice).join(',') === 'water',
+    scape.voices().map((v) => v.voice).join(',') === 'thunder',
     scape.voices().map((v) => v.voice).join(','));
 
   scape.sync([
-    { voice: 'water', level: 0.4, name: 'The water' },
-    { voice: 'crawl', level: 1, name: 'Web' },
+    { voice: 'thunder', level: 0.4, name: 'The storm' },
+    { voice: 'bricks', level: 1, name: 'Breach' },
   ]);
   const now = scape.voices();
   ok('adds one without rebuilding the other',
-    now.length === 2 && now.find((v) => v.voice === 'water')?.level === 0.4,
+    now.length === 2 && now.find((v) => v.voice === 'thunder')?.level === 0.4,
     now.map((v) => `${v.voice}@${v.level}`).join(' '));
 
-  scape.sync([{ voice: 'crawl', level: 1, name: 'Web' }]);
+  scape.sync([{ voice: 'bricks', level: 1, name: 'Breach' }]);
   ok('and drops what is no longer wanted',
-    scape.voices().map((v) => v.voice).join(',') === 'crawl',
+    scape.voices().map((v) => v.voice).join(',') === 'bricks',
     scape.voices().map((v) => v.voice).join(','));
 
   scape.sync([]);
@@ -340,23 +479,101 @@ function stubContext() {
   const ctx = stubContext();
   const scape = createSoundscape({ createContext: () => ctx });
   await scape.start();
-  const water = VOICES.get('water');
-  const build = water.build;
-  water.build = () => {
+  const bricks = VOICES.get('bricks');
+  const build = bricks.build;
+  bricks.build = () => {
     throw new Error('deliberate');
   };
+  const warn = console.warn;
+  console.warn = () => {};
   try {
     scape.sync([
-      { voice: 'water', level: 1, name: 'bad' },
-      { voice: 'crawl', level: 1, name: 'good' },
+      { voice: 'bricks', level: 1, name: 'bad' },
+      { voice: 'writhe', level: 1, name: 'good' },
     ]);
     ok('a voice that fails to build does not silence the others',
-      scape.voices().map((v) => v.voice).join(',') === 'crawl',
+      scape.voices().map((v) => v.voice).join(',') === 'writhe',
       scape.voices().map((v) => v.voice).join(','));
   } finally {
-    water.build = build;
+    console.warn = warn;
+    bricks.build = build;
     scape.stop();
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * What the sampled voices actually do
+ * ------------------------------------------------------------------ */
+
+console.log('\n— bricks and tentacles —');
+
+/** Which clip a start refers to, by name, using the tags planted at decode. */
+async function clipNames(ctx) {
+  const ready = await loadClips(ctx);
+  const byTag = new Map([...ready].map(([name, clip]) => [clip.buffer.tag, name]));
+  return () => ctx.log.played.map((t) => byTag.get(t));
+}
+
+{
+  /**
+   * The wall has no clock of its own any more. It used to invent a burst every
+   * few seconds, which is roughly the right *rate* and the wrong *moments* —
+   * and the wrong moments is the whole of what somebody standing in front of
+   * the house notices.
+   */
+  const ctx = stubContext();
+  ctx.state = 'running';
+  const named = await clipNames(ctx);
+  const out = ctx.createGain();
+  const wall = VOICES.get('bricks').build(ctx, out);
+
+  for (ctx.currentTime = 0; ctx.currentTime < 120; ctx.currentTime += 0.3) wall.schedule?.(ctx.currentTime + 0.35);
+  ok('a wall nobody is breaching is silent', ctx.log.started === 0, `${ctx.log.started} started`);
+
+  // Breach drops the bricks of one hole about a fifth of a second apart, then
+  // leaves the wall alone. One clip each, and the slide of rubble after.
+  ctx.currentTime = 10;
+  for (let i = 0; i < 5; i++) wall.cue(10 + i * 0.2, { level: 0.7 });
+  wall.cue(11, { kind: 'rubble' });
+  const names = named();
+  ok('every brick that leaves the wall is heard', names.length === 6, names.join(' '));
+  ok('each of them a brick', names.slice(0, 5).every((n) => n.startsWith('brick-')), names.join(' '));
+  ok('and the last of them followed by the rubble it loosened',
+    names[5].startsWith('rubble-'), names[5]);
+  ok('the rubble lands just after the brick, not on it',
+    ctx.log.startedAt[5] > 11, ctx.log.startedAt[5].toFixed(3));
+  ok('and every brick on the instant it was given',
+    ctx.log.startedAt.slice(0, 5).every((at, i) => Math.abs(at - (10 + i * 0.2)) < 1e-9),
+    ctx.log.startedAt.slice(0, 5).map((n) => n.toFixed(2)).join(' '));
+
+  /**
+   * A Breach pointed at eight windows can drop that many bricks inside one
+   * frame, and eight transients inside a twentieth of a second is not eight
+   * bricks, it is one thud with a flam on it.
+   */
+  ctx.log.played.length = 0;
+  for (let i = 0; i < 8; i++) wall.cue(20 + i * 0.004, {});
+  ok('bricks landing in the same instant are one brick', named().length === 1,
+    `${named().length}`);
+}
+
+{
+  const ctx = stubContext();
+  ctx.state = 'running';
+  await loadClips(ctx);
+  const out = ctx.createGain();
+  const arms = VOICES.get('writhe').build(ctx, out);
+
+  for (ctx.currentTime = 0; ctx.currentTime < 60; ctx.currentTime += 0.3) arms.schedule(ctx.currentTime + 0.35);
+  const at = ctx.log.startedAt;
+  ok('something is always moving', at.length > 25, `${at.length} in a minute`);
+  const gaps = at.slice(1).map((v, i) => v - at[i]);
+  ok('and it never stops for long', Math.max(...gaps) < 3.5, `longest gap ${Math.max(...gaps).toFixed(2)}s`);
+  // The clips are one to five seconds long, so a new one every second or two is
+  // two or three of them sounding at once. That overlap is the whole effect.
+  ok('closely enough that they lie over each other',
+    gaps.reduce((s, g) => s + g, 0) / gaps.length < 2.2,
+    `${(gaps.reduce((s, g) => s + g, 0) / gaps.length).toFixed(2)}s apart on average`);
 }
 
 /* ------------------------------------------------------------------ *
@@ -426,43 +643,32 @@ console.log('\n— sounds cued from the picture —');
 }
 
 {
-  /**
-   * A shell is two events, and the gap between them is the shell going up. If
-   * that drifts from the picture the bang belongs to a different firework.
-   */
-  const fireworks = getEffect('fireworks');
-  const p = baseParams(fireworks, createLayer('fireworks'));
-  const events = fireworks.cues(p, 0, 120);
-  const rises = events.filter((e) => e.kind === 'rise');
-  const bangs = events.filter((e) => e.kind === 'burst');
-  // One more launch than break, always: the last shell of the window is still
-  // in the air when the window ends, and its bang belongs to the next one.
-  ok('every shell that breaks was heard going up first',
-    bangs.every((b) => rises.some((r) => Math.abs(b.at - r.at - 0.9) < 1e-9)),
-    `${rises.length} up, ${bangs.length} down`);
-  ok('and none of them breaks twice', new Set(bangs.map((b) => b.at)).size === bangs.length);
-  ok('a shell with no visible trail is silent on the way up',
-    fireworks.cues({ ...p, trail: false }, 0, 120).every((e) => e.kind === 'burst'));
-}
-
-{
   const ctx = stubContext();
   const scape = createSoundscape({ createContext: () => ctx });
   await scape.start();
+  await scape.ready;
   scape.sync([{ voice: 'thunder', level: 1, name: 'Storm' }]);
 
   ctx.currentTime = 10;
   ctx.log.startedAt.length = 0;
+  ctx.log.offsets.length = 0;
   scape.cue('thunder', { in: 0.25, level: 1, distance: 0 });
   ok('a cued clap is scheduled, not fired on the spot', ctx.log.startedAt.length > 0);
   ok('and every part of it lands on the instant it was given, to the sample',
     ctx.log.startedAt.every((at) => Math.abs(at - 10.25) < 0.01),
     ctx.log.startedAt.map((n) => n.toFixed(3)).join(' '));
+  /**
+   * Which is the whole reason the padding is measured at load. Scheduling the
+   * buffer at 10.25 and letting it play from zero would put the crack a
+   * hundred milliseconds behind its own flash on every browser that pads.
+   */
+  ok('starting past the decoder\'s silence rather than at the front of the buffer',
+    ctx.log.offsets.every((o) => o > 0.09), ctx.log.offsets.map((n) => n.toFixed(4)).join(' '));
 
   ok('and it says so, so a caller can count sounds rather than intentions',
     scape.cue('thunder', { in: 0.1 }) === true);
   ok('cueing a voice that is not playing is a no-op, and says so',
-    scape.cue('water', { in: 0.1 }) === false);
+    scape.cue('bricks', { in: 0.1 }) === false);
   scape.stop();
   ok('as is cueing anything at all once the sound is off',
     scape.cue('thunder', { in: 0.1 }) === false);
@@ -470,29 +676,43 @@ console.log('\n— sounds cued from the picture —');
 
 {
   /**
-   * The firework voice has no timetable of its own at all — it exists only to
-   * be cued — so the thing to check is that a bang starts where it was put and
-   * the sizzle after it does not run on past the picture.
+   * How big the flash is, is how loud the clap is and which of the three
+   * recordings it comes from — and distance is a lowpass and nothing else,
+   * because air eats the top of a strike long before it eats the bottom.
    */
   const ctx = stubContext();
   ctx.state = 'running';
-  ctx.currentTime = 5;
+  const named = await clipNames(ctx);
   const out = ctx.createGain();
-  const shells = VOICES.get('firework').build(ctx, out);
-  ok('the firework voice runs on cues alone', typeof shells.schedule !== 'function');
+  const storm = VOICES.get('thunder').build(ctx, out);
 
-  ctx.log.startedAt.length = 0;
-  shells.cue(6, { kind: 'burst', level: 1 });
-  const at = ctx.log.startedAt;
-  ok('a break starts on its instant', Math.min(...at) >= 6 - 1e-9, `${Math.min(...at)}`);
-  // Bounded, so that at 240 shells a minute they do not pile into a hiss.
-  ok('and its sizzle has died inside a second and a bit', Math.max(...at) < 7.1,
-    `${(Math.max(...at) - 6).toFixed(2)}s tail`);
+  ctx.currentTime = 1;
+  ctx.log.built.length = 0;
+  storm.cue(1.2, { level: 1, distance: 0 });
+  ok('a strike on the house is heard dry', !ctx.log.built.includes('filter'),
+    ctx.log.built.join(','));
 
-  ctx.log.startedAt.length = 0;
-  shells.cue(9, { kind: 'rise', duration: 0.9, level: 1 });
-  ok('a launch is heard going up, not banging', ctx.log.startedAt.length > 0 &&
-    Math.min(...ctx.log.startedAt) >= 9 - 1e-9);
+  ctx.log.built.length = 0;
+  storm.cue(1.4, { level: 0.4, distance: 0.9 });
+  ok('and one across the valley is heard through the air between',
+    ctx.log.built.includes('filter'), ctx.log.built.join(','));
+
+  /**
+   * And a near strike is one of the two sharp recordings rather than always
+   * the same one. At six flashes a minute a single clap comes round every ten
+   * seconds, and by the third everybody has heard that it is a tape.
+   */
+  ctx.log.played.length = 0;
+  for (let i = 0; i < 40; i++) storm.cue(2 + i, { level: 0.9, distance: 0 });
+  const near = new Set(named());
+  ok('a strike on the house is one of the sharp ones',
+    [...near].every((n) => n === 'thunder-crack' || n === 'thunder-close'), [...near].join(' '));
+  ok('and not always the same one', near.size === 2, [...near].join(' '));
+
+  ctx.log.played.length = 0;
+  for (let i = 0; i < 10; i++) storm.cue(100 + i, { level: 0.3, distance: 0.8 });
+  ok('and a far one is the long roll', new Set(named()).size === 1 && named()[0] === 'thunder-roll',
+    [...new Set(named())].join(' '));
 }
 
 {
@@ -504,6 +724,7 @@ console.log('\n— sounds cued from the picture —');
    */
   const ctx = stubContext();
   ctx.state = 'running';
+  await loadClips(ctx);
   const out = ctx.createGain();
   const storm = VOICES.get('thunder').build(ctx, out);
 
@@ -515,13 +736,19 @@ console.log('\n— sounds cued from the picture —');
     return ctx.log.startedAt.length;
   };
 
-  ok('left to itself, thunder rumbles', run(0, 60) > 0);
+  ok('left to itself, thunder rumbles', run(0, 90) > 0);
   storm.cue(ctx.currentTime + 0.2, { level: 1, distance: 0 });
-  ok('once something is cueing it, it adds nothing of its own', run(ctx.currentTime, ctx.currentTime + 30) === 0);
+  ok('once something is cueing it, it adds nothing of its own',
+    run(ctx.currentTime, ctx.currentTime + 30) === 0);
   ok('and it picks up again when the lightning goes away',
-    run(ctx.currentTime + 60, ctx.currentTime + 180) > 0);
-}
+    run(ctx.currentTime + 60, ctx.currentTime + 240) > 0);
 
+  // A shell on its way up is not thunder, whatever a layer pointed by hand at
+  // this voice happens to send it.
+  ctx.log.startedAt.length = 0;
+  storm.cue(ctx.currentTime + 0.2, { kind: 'rise', level: 1 });
+  ok('and a firework going up is not a thunderclap', ctx.log.startedAt.length === 0);
+}
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');
 process.exit(failures ? 1 : 0);

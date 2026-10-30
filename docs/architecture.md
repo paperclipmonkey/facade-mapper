@@ -16,6 +16,7 @@ js/control/         camera, calibration, sound, automation, UI
 js/projector/       the output tab
 js/remote/          the remote
 js/draw/            the drawing surface
+audio/              the three voices, as public-domain recordings
 docs/               this
 test/               plain Node tests, no dependencies, plus a browser benchmark
 ```

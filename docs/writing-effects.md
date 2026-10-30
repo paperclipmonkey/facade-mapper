@@ -222,16 +222,20 @@ makes `drawImage` around thirty times slower. See
 
 ## Making a noise on cue
 
-Most effects that have a sound just get one: the mapping from effect to voice
-lives in one table in [`js/core/soundscape.js`](../js/core/soundscape.js), and
-an effect of your own can override it by exporting `sound: 'fire'` (or `null` to
-be silent).
+There are three voices — `thunder`, `bricks` and `writhe` — and the mapping
+from effect to voice lives in one table in
+[`js/core/soundscape.js`](../js/core/soundscape.js). An effect of your own can
+override it by exporting `sound: 'writhe'`, or `sound: ['bricks', 'writhe']`
+for an effect that is two things at once, or `null` to be silent. Nearly
+everything in the library is silent, and that is the right default: a show
+where every layer makes a noise is not atmospheric, it is a mess.
 
-That covers textures — a bed of crackle or lapping that is simply on while the
-layer is. What it does not cover is an effect with a *bang* in it, and thunder
-is the reason this hook exists: the flash is on the wall in front of somebody
-and the ear is extremely good at the gap between the two, so a clap fired from
-whichever animation frame noticed the strike is audibly late.
+That covers textures — a wall coming apart, or something writhing behind it,
+that is simply on while the layer is. What it does not cover is an effect with
+a *bang* in it, and thunder is the reason this hook exists: the flash is on the
+wall in front of somebody and the ear is extremely good at the gap between the
+two, so a clap fired from whichever animation frame noticed the strike is
+audibly late.
 
 Export `cues(p, from, to)` and say when instead. It is given the layer's base
 parameters and a short window of show time just ahead of now, and returns the
@@ -251,10 +255,12 @@ cues(p, from, to) {
 
 - `at` is show time, in seconds — the same `t` `draw` gets. Derive it from the
   same event index `draw` derives its animation from, or the two will drift.
-- `level` is 0–1, on top of the layer's own volume.
-- `distance` in seconds is the gap between the sharp part of the sound and its
-  low tail, which is the only thing that makes an event sound far away. Zero is
-  on the house.
+- `level` is 0–1, on top of the layer's own volume. It also chooses *which*
+  recording the voice reaches for: a big flash gets the sharp near strike, a
+  small one the long dying roll.
+- `distance` is 0–1, and it is a lowpass and nothing else. Air eats the top of
+  a sound long before it eats the bottom, which is the only thing that makes an
+  event sound far away. Zero is on the house, and is heard dry.
 
 Return each event exactly once: the windows are contiguous, so a cue emitted at
 both `from` and `to` is heard as a stutter and one missed at the boundary is a
@@ -269,6 +275,40 @@ four copies of one bang is one muddy bang.
 An event may carry anything else the voice understands. Thunder reads
 `distance`; fireworks pass `kind: 'rise' | 'burst'`, because a shell going up
 and a shell breaking are two different noises from the same layer.
+
+### When you cannot see it coming
+
+`cues` is a *prediction*, and it is the better of the two mechanisms whenever
+you can write it: the sound is handed to the audio clock a fraction of a second
+early and lands on the exact sample. Lightning can, because its strike times
+are a function of the strike index.
+
+Plenty of effects cannot. Breach chooses the next brick to drop out of state it
+has been accumulating since the layer came on — it has no idea what it will do
+in half a second, and a `cues` that guessed would drift away from the picture
+within a minute, which is exactly the failure [`share`](#talking-to-another-layer)
+exists to prevent. Those say what they have just done, from inside `step`:
+
+```js
+step({ state, t, rng, sound }) {
+  // ...
+  if (letGo) sound?.('bricks', { level: 0.8 });
+}
+```
+
+- **From `step`, never from `draw`.** `draw` runs at the frame rate and may run
+  several times for one simulation step, so a noise reported there is reported
+  again and again.
+- **Optional chaining, always.** `sound` is only present in the tab that is
+  playing the ambience. Everywhere else — every projector, every test — it is
+  `undefined`, and an effect that required it would take the show down on the
+  machine that matters most.
+- **Steps replayed to catch up are silent**, so a tab that has just joined a
+  show does not fire two hours of bricks into one frame. There is also a cap of
+  a couple of dozen noises per frame across all layers.
+- It is played on the frame it arrives rather than scheduled ahead. A tenth of
+  a second out is a brick landing; the same error on a thunderclap is heard as
+  a fault, which is why `cues` exists for the ones that can use it.
 
 ## Debugging
 

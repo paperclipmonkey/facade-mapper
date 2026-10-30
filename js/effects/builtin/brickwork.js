@@ -991,7 +991,7 @@ const breach = {
    * `age`, with a constant `dt`, and seeds `rng` from the step index. Nothing in
    * here may look at the frame rate, and there is no canvas to draw on.
    */
-  step({ p, shape, t, dt, rng, state, shapes, stable, share, i = 0 }) {
+  step({ p, shape, t, dt, rng, state, shapes, stable, share, sound, i = 0 }) {
     const { bbox } = shape;
     if (bbox.w <= 2 || bbox.h <= 2) return;
 
@@ -1117,6 +1117,19 @@ const breach = {
         hole.gone.push(brick);
         hole.nextDrop = t + 0.16 + rng() * 0.16;
         const tone = hole.tones?.get(brick) || p.brick;
+        /**
+         * Say so, on the frame it happens.
+         *
+         * Not through `cues`, which the lightning uses: that asks an effect
+         * what it is *going* to do, and the next brick to go is chosen here,
+         * now, out of state this function has been accumulating since the
+         * layer came on. A bigger hole is a heavier sound, and the last brick
+         * of one is followed by the slide of rubble it loosened. Does nothing
+         * except in the tab playing the sound — see `sound` in
+         * render/worldRenderer.js.
+         */
+        sound?.('bricks', { level: 0.6 + Math.min(1, hole.gone.length / 6) * 0.4 });
+        if (!hole.pending.length) sound?.('bricks', { kind: 'rubble' });
         // Positions are centres from here on, so a brick and a fragment of one
         // are the same kind of thing to the fall and to the paint.
         state.falling.push({

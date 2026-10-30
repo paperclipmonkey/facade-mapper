@@ -106,6 +106,8 @@ function run(effect, params, frames, { dt = 1 / 60 } = {}) {
   let g = null;
   let t = 0;
   const seen = [];
+  /** Noises the effect reported, as the control tab would collect them. */
+  const noises = [];
   for (let f = 0; f < frames; f++) {
     t += dt;
     g = recordingContext();
@@ -113,6 +115,7 @@ function run(effect, params, frames, { dt = 1 / 60 } = {}) {
       g, p: params, stable: params, shape: wall, shapes: shapesFor,
       t, dt, rng, state, i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120,
       audio: { level: 0, low: 0, mid: 0, high: 0 },
+      sound: (voice, detail) => noises.push({ voice, t, ...detail }),
     };
     // The renderer simulates at a fixed rate and then paints once. Anything
     // driving an effect by hand has to do the same or it is testing half of it.
@@ -127,7 +130,7 @@ function run(effect, params, frames, { dt = 1 / 60 } = {}) {
     }
     seen.push(g);
   }
-  return { g, state, seen };
+  return { g, state, seen, noises };
 }
 
 /* ------------------------------------------------------------------ *
@@ -201,9 +204,61 @@ const base = { ...defaultParams('breach'), obstacles: 'window, door' };
 const voidsIn = (g) => g.rects.filter((r) => r.style === base.void);
 
 {
-  const { seen } = run(breach, { ...base, rate: 0 }, 400);
+  const { seen, noises } = run(breach, { ...base, rate: 0 }, 400);
   ok('no bricks a minute means no holes, ever',
     seen.every((g) => voidsIn(g).length === 0));
+  // And nothing to hear either. The sound used to run on a clock of its own,
+  // so a wall set to drop nothing still rattled all evening.
+  ok('and nothing to hear', noises.length === 0, `${noises.length} noises`);
+}
+
+{
+  /**
+   * The wall says what it has just done, so the sound lands on the brick you
+   * can see rather than near it. Counted against the holes that actually
+   * opened: one report per brick, and one slide of rubble as each hole
+   * finishes emptying.
+   */
+  const p = { ...base, rate: 60, heal: 0, holes: 2, cluster: 3, arms: 0 };
+  const { noises, state } = run(breach, p, 600);
+  const bricks = noises.filter((n) => n.kind !== 'rubble');
+  const rubble = noises.filter((n) => n.kind === 'rubble');
+  const dropped = (state.holes || []).reduce((sum, h) => sum + h.gone.length, 0);
+
+  ok('every brick that leaves the wall says so', bricks.length === dropped,
+    `${bricks.length} reported, ${dropped} gone`);
+  ok('all of them on the brick voice', noises.every((n) => n.voice === 'bricks'));
+  ok('and a slide of rubble once each hole has emptied',
+    rubble.length === (state.holes || []).filter((h) => !h.pending.length).length,
+    `${rubble.length} slides, ${(state.holes || []).length} holes`);
+  ok('a bigger hole is a heavier sound',
+    bricks.every((n) => n.level > 0 && n.level <= 1)
+      && new Set(bricks.map((n) => n.level)).size > 1,
+    [...new Set(bricks.map((n) => n.level?.toFixed(2)))].join(' '));
+  // The one that matters for alignment: each report is on the frame the brick
+  // actually left, which is the frame the effect first draws it falling.
+  ok('and says it on the frame it happens',
+    bricks.every((n, i) => i === 0 || n.t >= bricks[i - 1].t));
+}
+
+{
+  // An effect must not require the channel. Projector tabs are handed no
+  // `sound` at all, and a wall that threw there would take the show with it.
+  const state = breach.init();
+  const rng = makeRng('mute');
+  let threw = '';
+  try {
+    for (let f = 1; f < 400; f++) {
+      breach.step({
+        g: null, p: { ...base, rate: 60, heal: 0 }, stable: base, shape: wall, shapes: shapesFor,
+        t: f / 60, dt: 1 / 60, rng, state, i: 0, n: 1, beat: 0, beatPhase: 0, bpm: 120,
+        audio: { level: 0, low: 0, mid: 0, high: 0 },
+      });
+    }
+  } catch (err) {
+    threw = err.message;
+  }
+  ok('a tab that is not playing sound is handed none, and does not mind', !threw, threw);
 }
 
 {

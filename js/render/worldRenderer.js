@@ -323,7 +323,18 @@ function showTimeOf(wallMs, time) {
  * Renderer
  * ------------------------------------------------------------------ */
 
-export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } = {}) {
+/**
+ * How many noises one frame may report, across every layer in it.
+ *
+ * A Breach pointed at eight windows drops eight bricks in the same frame often
+ * enough, and a bug in a user effect could ask for a thousand. The cap is well
+ * above anything that sounds like anything — past about four simultaneous
+ * transients you are hearing one louder transient — and it keeps a runaway
+ * effect from queueing a second of audio per frame until the tab gives up.
+ */
+const SOUNDS_PER_FRAME = 24;
+
+export function createWorldRenderer({ mediaPool, onEffectError, camera, depth, onSound } = {}) {
   const geometry = createGeometryCache();
   /**
    * Scratch buffer for layers that ask to be softened.
@@ -498,6 +509,8 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
     let queued = 0;
     let served = 0;
     let lastServed = -1;
+    /** This frame's remaining allowance of reported noises. See `SOUNDS_PER_FRAME`. */
+    let soundsLeft = SOUNDS_PER_FRAME;
 
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.globalAlpha = 1;
@@ -768,6 +781,18 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
         const shape = targets[i];
         const inst = getInstance(layer.id, shape.id, effect.id);
 
+        /**
+         * Whether the step running right now is this instant or history.
+         *
+         * Set true only for the last step or two of the catch-up loop below,
+         * and false again before anything draws. A tab that has just opened
+         * replays the whole evening's simulation inside one frame, and every
+         * brick that fell in the last two hours would otherwise be reported as
+         * having just fallen — which is a second of solid noise and the wrong
+         * second. See `sound` in the context.
+         */
+        let stepIsLive = false;
+
         // Stagger shifts each instance back in time, so a row of windows pulses
         // in sequence instead of together.
         const stagger = (layer.stagger || 0) * i;
@@ -831,6 +856,38 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
            * general-purpose global by accident.
            */
           share,
+          /**
+           * "That just made a noise."
+           *
+           * The other half of `cues`, for the effects that cannot use it.
+           * `cues(p, from, to)` is a *prediction* — lightning knows when its
+           * next return stroke is because the strike times are a function of
+           * the strike index — and it is the right mechanism whenever the
+           * answer can be computed, because the sound is then placed on the
+           * audio clock a fraction of a second early and lands on the exact
+           * sample of the flash.
+           *
+           * Plenty of effects cannot answer that question. Breach chooses the
+           * next brick from state it has been accumulating since the layer
+           * came on; it has no idea what it will do in half a second, and a
+           * `cues` that guessed would drift away from the picture within a
+           * minute — which is precisely the failure the shared notice board
+           * above exists to prevent. So it says what it has just done instead,
+           * and the clip is played on the frame it happened. A tenth of a
+           * second is nothing for a brick and a fault for a thunderclap, which
+           * is why both mechanisms exist rather than one.
+           *
+           * Only live steps are heard, and only in the tab that passed
+           * `onSound` — which is the control tab, the one with the speakers.
+           * Does nothing anywhere else, so an effect may call it freely.
+           */
+          sound: onSound
+            ? (voice, detail) => {
+              if (!stepIsLive || soundsLeft <= 0) return;
+              soundsLeft--;
+              onSound(voice, detail || {}, layer.id);
+            }
+            : undefined,
           preview,
           /**
            * Seconds since this layer was switched on.
@@ -1008,6 +1065,10 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
               metered++;
             }
             inst.step++;
+            // One step of slack: at sixty simulation steps to a frame drawn at
+            // fifty, the last step of a frame is routinely one short of the
+            // target and is still this instant.
+            stepIsLive = targetStep - inst.step <= 1;
             ctx.age = inst.step * stepDt;
             ctx.t = inst.enabledAt + ctx.age;
             ctx.beat = (ctx.t * (time.bpm || 120)) / 60;
@@ -1038,6 +1099,10 @@ export function createWorldRenderer({ mediaPool, onEffectError, camera, depth } 
               break;
             }
           }
+          // Nothing drawn is news. `draw` runs at the frame rate and may run
+          // several times for one simulation step, so an effect reporting a
+          // noise from there would report it again and again.
+          stepIsLive = false;
 
           /**
            * Losing ground, frame after frame.
